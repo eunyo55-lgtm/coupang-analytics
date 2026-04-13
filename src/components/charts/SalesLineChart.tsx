@@ -47,7 +47,7 @@ export default function SalesLineChart({ data, height = 230 }: Props) {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: ctx => ' ' + Math.round(ctx.parsed.y).toLocaleString('ko-KR'),
+              label: ctx => ' ' + Math.round(ctx.parsed.y ?? 0).toLocaleString('ko-KR'),
             },
           },
         },
