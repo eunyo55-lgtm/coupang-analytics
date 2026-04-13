@@ -41,7 +41,7 @@ export default function AdPage() {
       if (data) {
         dispatch({
           type: 'SET_AD_ENTRIES',
-          payload: data.map(r => ({
+          payload: (data as any[]).map((r: any) => ({
             id: r.id, productName: r.product_name,
             adCost: r.ad_cost, adRevenue: r.ad_revenue,
             clicks: r.clicks,  impressions: r.impressions,

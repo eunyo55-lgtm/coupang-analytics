@@ -42,7 +42,7 @@ export default function RankingPage() {
       if (data) {
         dispatch({
           type: 'SET_RANKINGS',
-          payload: data.map(r => ({
+          payload: (data as any[]).map((r: any) => ({
             id: r.id,
             productName: r.product_name,
             keyword: r.keyword,
