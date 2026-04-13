@@ -2,8 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   typescript: {
-    // Allow production builds to complete even with type errors
-    // (Supabase types resolve fully once real DB schema is connected)
+    // Type errors won't fail production build — handled at dev time
     ignoreBuildErrors: true,
   },
   eslint: {
