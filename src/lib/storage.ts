@@ -18,9 +18,9 @@ export async function loadData(): Promise<PersistedData | null> {
     const dateFrom = sixMonthsAgo.toISOString().slice(0, 10)
 
     const [dailySalesRes, productsRes, supplyRes, ordersRes] = await Promise.all([
-      // daily_sales: 실제 판매 데이터 (quantity > 0)
+      // daily_sales: 실제 판매 데이터 (quantity > 0), fc_quantity+vf_quantity = 출고수량
       supabase.from('daily_sales')
-        .select('date, barcode, quantity, revenue, stock, fc_stock, vf_stock')
+        .select('date, barcode, quantity, revenue, fc_quantity, vf_quantity, stock, fc_stock, vf_stock')
         .gte('date', dateFrom)
         .gt('quantity', 0)
         .order('date', { ascending: true })
@@ -59,12 +59,13 @@ export async function loadData(): Promise<PersistedData | null> {
       }
     })
 
-    // daily_sales → SalesRow (barcode로 상품명 + 원가 기반 매출 계산)
+    // daily_sales → SalesRow
+    // 매출 = 출고수량(fc_quantity + vf_quantity) × 원가
     const salesData: SalesRow[] = (dailySalesRes.data || []).map(r => {
-      const info    = barcodeMap.get(r.barcode) || { name: r.barcode, option: '', cost: 0 }
-      const qty     = Number(r.quantity || 0)
-      // revenue가 있으면 사용, 없으면 cost * qty (원가 기준)
-      const revenue = Number(r.revenue || 0) || (info.cost * qty)
+      const info       = barcodeMap.get(r.barcode) || { name: r.barcode, option: '', cost: 0 }
+      const qty        = Number(r.quantity    || 0)
+      const outQty     = Number(r.fc_quantity || 0) + Number(r.vf_quantity || 0)
+      const revenue    = info.cost * (outQty || qty) // 출고수량 기준, 없으면 판매수량
       return {
         date:        r.date,
         productName: info.name,
