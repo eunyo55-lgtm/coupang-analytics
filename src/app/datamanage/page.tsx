@@ -1,10 +1,10 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useApp } from '@/lib/store'
+import { useApp, saveToLS } from '@/lib/store'
 import { parseFile, normalizeSalesData } from '@/lib/fileParser'
 import { getPresetRange } from '@/lib/dateUtils'
-import type { ParseResult } from '@/types'
+import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
   { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터', sub: '상품코드 · 상품명 · 옵션 · 재고' },
@@ -13,12 +13,29 @@ const FILE_CONFIG = [
   { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',          sub: '입고 대기 수량 · 예정일' },
 ]
 
+// 페이지 내 merge 헬퍼 (store의 reducer와 동일 로직)
+function mergeSalesLocal(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
+  if (!prev.length) return next
+  const m = new Map<string, SalesRow>()
+  prev.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
+  next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
+  return Array.from(m.values()).sort((a, b) => a.date.localeCompare(b.date))
+}
+function mergeRawLocal(prev: Record<string,unknown>[], next: Record<string,unknown>[]): Record<string,unknown>[] {
+  if (!prev.length) return next
+  const k = (r: Record<string,unknown>) => `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
+  const m = new Map<string, Record<string,unknown>>()
+  prev.forEach(r => m.set(k(r), r))
+  next.forEach(r => m.set(k(r), r))
+  return Array.from(m.values())
+}
+
 export default function DataManagePage() {
   const { state, dispatch } = useApp()
-  const [uploading,  setUploading]  = useState<Record<string, boolean>>({})
-  const [fileNames,  setFileNames]  = useState<Record<string, string>>({})
-  const [done,       setDone]       = useState<Record<string, boolean>>({})
-  const [analyzing,  setAnalyzing]  = useState(false)
+  const [uploading, setUploading] = useState<Record<string, boolean>>({})
+  const [fileNames, setFileNames] = useState<Record<string, string>>({})
+  const [done,      setDone]      = useState<Record<string, boolean>>({})
+  const [analyzing, setAnalyzing] = useState(false)
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
@@ -31,19 +48,37 @@ export default function DataManagePage() {
       dispatch({ type: 'APPEND_LOG', payload: `❌ [${key}] ${result.error}` })
     } else {
       const cols = result.columns.slice(0, 5).join(' · ') + (result.columns.length > 5 ? '…' : '')
-      dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] 새 파일: ${result.rows.toLocaleString()}행 | ${cols}` })
 
-      // Normalize sales data immediately
+      // 1) normalize
       if (key === 'sales') {
         result.data = normalizeSalesData(result.data) as unknown as Record<string, unknown>[]
-        const prevCount = state.salesData.length
-        dispatch({ type: 'SET_PARSE_RESULT', payload: result })
-        if (prevCount > 0) {
-          dispatch({ type: 'APPEND_LOG', payload: `📊 [sales] 기존 ${prevCount.toLocaleString()}행 + 신규 병합 → 날짜별 중복 제거 완료` })
-        }
-      } else {
-        dispatch({ type: 'SET_PARSE_RESULT', payload: result })
       }
+
+      // 2) 새 state 직접 계산 (dispatch와 별도로)
+      const newSales  = key === 'sales'  ? mergeSalesLocal(state.salesData, result.data as unknown as SalesRow[]) : state.salesData
+      const newMaster = key === 'master' ? mergeRawLocal(state.masterData, result.data) : state.masterData
+      const newOrders = key === 'orders' ? mergeRawLocal(state.ordersData, result.data) : state.ordersData
+      const newSupply = key === 'supply' ? (result.data as Record<string,unknown>[])    : state.supplyData
+
+      // 3) 즉시 localStorage 저장 (React state 업데이트와 독립적으로)
+      saveToLS({
+        masterData: newMaster,
+        salesData:  newSales,
+        ordersData: newOrders,
+        supplyData: newSupply,
+        dateRangePreset: 'total', // 항상 전체로 저장
+      })
+
+      // 4) state 업데이트
+      dispatch({ type: 'SET_PARSE_RESULT', payload: result })
+
+      const prevCount = key === 'sales' ? state.salesData.length : 0
+      if (prevCount > 0) {
+        dispatch({ type: 'APPEND_LOG', payload: `📊 [sales] 기존 ${prevCount.toLocaleString()}행 + 신규 병합 완료 → 총 ${newSales.length.toLocaleString()}행` })
+      } else {
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 로드 | ${cols}` })
+      }
+
       setDone(d => ({ ...d, [key]: true }))
       setFileNames(f => ({ ...f, [key]: file.name }))
     }
@@ -54,14 +89,13 @@ export default function DataManagePage() {
     setAnalyzing(true)
     dispatch({ type: 'APPEND_LOG', payload: '→ 분석 시작...' })
 
-    // 날짜 필터를 전체로 변경
-    const today = new Date(); today.setHours(0,0,0,0)
+    // 날짜 필터 전체로
+    const today = new Date(); today.setHours(0, 0, 0, 0)
     dispatch({ type: 'SET_DATE_RANGE', payload: getPresetRange('total', today) })
 
     setTimeout(() => {
       dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료 🎉 대시보드로 이동합니다.' })
       setAnalyzing(false)
-      // hard navigation — localStorage에서 최신 데이터를 다시 복원
       window.location.href = '/'
     }, 600)
   }
@@ -76,16 +110,12 @@ export default function DataManagePage() {
   }
 
   const hasAny = state.masterData.length > 0 || state.salesData.length > 0
-
-  // 판매 데이터 날짜 범위 계산
   const salesDates = state.salesData.map(r => r.date).filter(Boolean).sort()
-  const salesDateRange = salesDates.length
-    ? `${salesDates[0]} ~ ${salesDates[salesDates.length - 1]}`
-    : '없음'
+  const salesDateRange = salesDates.length ? `${salesDates[0]} ~ ${salesDates[salesDates.length - 1]}` : '없음'
 
   return (
     <div>
-      {/* Status KPIs */}
+      {/* KPI */}
       <div className="krow">
         <div className="kpi kc-bl">
           <div className="kpi-top"><div className="kpi-ico">🗂️</div></div>
@@ -127,7 +157,7 @@ export default function DataManagePage() {
         </div>
       )}
 
-      {/* Upload */}
+      {/* 파일 업로드 */}
       <div className="card">
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📂</div><div>
@@ -175,7 +205,7 @@ export default function DataManagePage() {
         </div>
       </div>
 
-      {/* Parse log */}
+      {/* 파싱 로그 */}
       {state.parseLog.length > 0 && (
         <div className="card">
           <div className="ch"><div className="ch-l"><div className="ch-ico">🔍</div><div className="ch-title">파싱 로그</div></div></div>
@@ -191,7 +221,7 @@ export default function DataManagePage() {
         </div>
       )}
 
-      {/* 파일 포맷 가이드 */}
+      {/* 파일 컬럼 가이드 */}
       <div className="card">
         <div className="ch"><div className="ch-l"><div className="ch-ico">📖</div><div className="ch-title">파일 컬럼 가이드</div></div></div>
         <div className="cb">
