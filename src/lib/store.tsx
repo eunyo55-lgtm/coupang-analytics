@@ -1,93 +1,76 @@
 'use client'
 
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useState } from 'react'
-import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult, Product } from '@/types'
+import type { DateRange, InventoryItem, RankingEntry, AdEntry } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
-import { persistData, loadData, clearData, PersistedData } from '@/lib/storage'
+import { loadData, clearData, PersistedData } from '@/lib/storage'
 
-export { persistData }
-
-function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
-  if (!prev.length) return next
-  const m = new Map<string, SalesRow>()
-  prev.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
-  next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
-  return Array.from(m.values()).sort((a,b) => a.date.localeCompare(b.date))
-}
-function mergeRaw(prev: Record<string,unknown>[], next: Record<string,unknown>[]): Record<string,unknown>[] {
-  if (!prev.length) return next
-  const k = (r: Record<string,unknown>) => `${r['상품명']||r['name']||''}|${r['옵션']||r['option_value']||''}`
-  const m = new Map<string, Record<string,unknown>>()
-  prev.forEach(r => m.set(k(r), r)); next.forEach(r => m.set(k(r), r))
-  return Array.from(m.values())
-}
+export type { PersistedData }
 
 export interface AppState {
   dateRange:    DateRange
-  masterData:   Record<string,unknown>[]
-  salesData:    SalesRow[]
-  salesData24:  SalesRow[]
-  salesData25:  SalesRow[]
-  products:     Product[]
+  // RPC 집계 데이터
+  stockSummary: PersistedData['stockSummary']
+  daily26:      { date: string; qty: number }[]
+  daily25:      { date: string; qty: number }[]
+  daily24:      { date: string; qty: number }[]
+  latestSaleDate: string
+  // 부가 데이터
   ordersData:   Record<string,unknown>[]
   supplyData:   Record<string,unknown>[]
+  // 레거시 (다른 페이지 호환)
+  masterData:   Record<string,unknown>[]
+  salesData:    never[]
+  products:     never[]
+  // UI
   inventory:    InventoryItem[]
   rankings:     RankingEntry[]
   adEntries:    AdEntry[]
   parseLog:     string[]
   isAnalyzing:  boolean
   hasData:      boolean
-  daily24: {date:string,qty:number}[]
-  daily25: {date:string,qty:number}[]
-  daily26: {date:string,qty:number}[]
 }
 
 const today = new Date(); today.setHours(0,0,0,0)
+const emptyStock = { total_fc: 0, total_vf: 0, total_hq: 0, grand_total: 0, stock_value: 0 }
+
 export const initialState: AppState = {
-  dateRange:   getPresetRange('yesterday', today),
-  masterData:  [], salesData:   [], salesData24: [], salesData25: [],
-  products:    [], ordersData:  [], supplyData:  [],
-  inventory:   [], rankings:    [], adEntries:   [],
-  parseLog:    [], isAnalyzing: false, hasData: false,
-  daily24: [], daily25: [], daily26: [],
+  dateRange:      getPresetRange('yesterday', today),
+  stockSummary:   emptyStock,
+  daily26:        [], daily25:  [], daily24:       [],
+  latestSaleDate: '',
+  ordersData:     [], supplyData: [], masterData:   [],
+  salesData:      [] as never[], products: [] as never[],
+  inventory:      [], rankings:  [], adEntries:    [],
+  parseLog:       [], isAnalyzing: false, hasData:  false,
 }
 
 export type Action =
-  | { type: 'SET_DATE_RANGE';   payload: DateRange }
-  | { type: 'SET_PARSE_RESULT'; payload: ParseResult }
-  | { type: 'HYDRATE';          payload: Partial<AppState> }
-  | { type: 'SET_INVENTORY';    payload: InventoryItem[] }
-  | { type: 'ADD_RANKING';      payload: RankingEntry }
-  | { type: 'SET_RANKINGS';     payload: RankingEntry[] }
-  | { type: 'ADD_AD_ENTRY';     payload: AdEntry }
-  | { type: 'SET_AD_ENTRIES';   payload: AdEntry[] }
-  | { type: 'DELETE_AD_ENTRY';  payload: number }
-  | { type: 'APPEND_LOG';       payload: string }
-  | { type: 'SET_ANALYZING';    payload: boolean }
+  | { type: 'SET_DATE_RANGE';  payload: DateRange }
+  | { type: 'HYDRATE';         payload: Partial<AppState> }
+  | { type: 'ADD_RANKING';     payload: RankingEntry }
+  | { type: 'SET_RANKINGS';    payload: RankingEntry[] }
+  | { type: 'ADD_AD_ENTRY';    payload: AdEntry }
+  | { type: 'SET_AD_ENTRIES';  payload: AdEntry[] }
+  | { type: 'DELETE_AD_ENTRY'; payload: number }
+  | { type: 'APPEND_LOG';      payload: string }
+  | { type: 'SET_ANALYZING';   payload: boolean }
   | { type: 'RESET' }
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'SET_DATE_RANGE':   return { ...state, dateRange: action.payload }
     case 'HYDRATE':          return { ...state, ...action.payload }
-    case 'SET_PARSE_RESULT': {
-      const { key, data } = action.payload
-      if (key === 'sales')  return { ...state, salesData:  mergeSales(state.salesData, data as unknown as SalesRow[]), hasData: true }
-      if (key === 'master') return { ...state, masterData: mergeRaw(state.masterData, data), hasData: true }
-      if (key === 'orders') return { ...state, ordersData: mergeRaw(state.ordersData, data), hasData: true }
-      return { ...state, supplyData: data, hasData: true }
-    }
-    case 'SET_INVENTORY':   return { ...state, inventory:  action.payload }
-    case 'ADD_RANKING':     return { ...state, rankings:   [action.payload, ...state.rankings] }
-    case 'SET_RANKINGS':    return { ...state, rankings:   action.payload }
-    case 'ADD_AD_ENTRY':    return { ...state, adEntries:  [...state.adEntries, action.payload] }
-    case 'SET_AD_ENTRIES':  return { ...state, adEntries:  action.payload }
-    case 'DELETE_AD_ENTRY': return { ...state, adEntries:  state.adEntries.filter((_,i) => i !== action.payload) }
-    case 'APPEND_LOG':      return { ...state, parseLog:   [...state.parseLog, action.payload] }
-    case 'SET_ANALYZING':   return { ...state, isAnalyzing: action.payload }
+    case 'ADD_RANKING':      return { ...state, rankings:  [action.payload, ...state.rankings] }
+    case 'SET_RANKINGS':     return { ...state, rankings:  action.payload }
+    case 'ADD_AD_ENTRY':     return { ...state, adEntries: [...state.adEntries, action.payload] }
+    case 'SET_AD_ENTRIES':   return { ...state, adEntries: action.payload }
+    case 'DELETE_AD_ENTRY':  return { ...state, adEntries: state.adEntries.filter((_,i) => i !== action.payload) }
+    case 'APPEND_LOG':       return { ...state, parseLog:  [...state.parseLog, action.payload] }
+    case 'SET_ANALYZING':    return { ...state, isAnalyzing: action.payload }
     case 'RESET':
       clearData()
-      return { ...initialState, dateRange: state.dateRange }
+      return { ...initialState }
     default: return state
   }
 }
@@ -108,22 +91,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     hydrated.current = true
     loadData().then((saved: PersistedData | null) => {
       if (saved?.hasData) {
-        const t = new Date(); t.setHours(0,0,0,0)
         dispatch({
           type: 'HYDRATE',
           payload: {
-            masterData:  saved.masterData  || [],
-            salesData:   saved.salesData   || [],
-            salesData24: saved.salesData24 || [],
-            salesData25: saved.salesData25 || [],
-            products:    saved.products    || [],
-            ordersData:  saved.ordersData  || [],
-            supplyData:  saved.supplyData  || [],
-            hasData:     true,
-            daily24: (saved as Record<string,unknown>)._daily24 as {date:string,qty:number}[] || [],
-            daily25: (saved as Record<string,unknown>)._daily25 as {date:string,qty:number}[] || [],
-            daily26: (saved as Record<string,unknown>)._daily26 as {date:string,qty:number}[] || [],
-            dateRange:   getPresetRange(saved.dateRangePreset || 'yesterday', t),
+            stockSummary:   saved.stockSummary,
+            daily26:        saved.daily26,
+            daily25:        saved.daily25,
+            daily24:        saved.daily24,
+            latestSaleDate: saved.latestSaleDate,
+            ordersData:     saved.ordersData,
+            supplyData:     saved.supplyData,
+            hasData:        true,
           },
         })
       }
