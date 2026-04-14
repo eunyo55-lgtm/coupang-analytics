@@ -8,7 +8,7 @@ const KEY = 'ca_data' // 최종 고정 키
 const OLD_KEYS = ['ca_v1','ca_v2','ca_v3','ca_v4','ca_v5','ca_v6','ca_v7','coupang_analytics_data','coupang_analytics_v2']
 
 // ── 저장/로드 ──
-export function saveToLS(data: {
+export function persistData(data: {
   masterData: Record<string,unknown>[]
   salesData: SalesRow[]
   ordersData: Record<string,unknown>[]

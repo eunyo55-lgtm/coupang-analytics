@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useApp, saveToLS } from '@/lib/store'
+import { useApp, persistData } from '@/lib/store'
 import { parseFile, normalizeSalesData } from '@/lib/fileParser'
 import { getPresetRange } from '@/lib/dateUtils'
 import type { ParseResult, SalesRow } from '@/types'
@@ -61,7 +61,7 @@ export default function DataManagePage() {
       const newSupply = key === 'supply' ? (result.data as Record<string,unknown>[])    : state.supplyData
 
       // 3) 즉시 localStorage 저장 (React state 업데이트와 독립적으로)
-      saveToLS({
+      persistData({
         masterData: newMaster,
         salesData:  newSales,
         ordersData: newOrders,
