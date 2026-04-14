@@ -37,6 +37,9 @@ export interface AppState {
   parseLog:     string[]
   isAnalyzing:  boolean
   hasData:      boolean
+  daily24: {date:string,qty:number}[]
+  daily25: {date:string,qty:number}[]
+  daily26: {date:string,qty:number}[]
 }
 
 const today = new Date(); today.setHours(0,0,0,0)
@@ -46,6 +49,7 @@ export const initialState: AppState = {
   products:    [], ordersData:  [], supplyData:  [],
   inventory:   [], rankings:    [], adEntries:   [],
   parseLog:    [], isAnalyzing: false, hasData: false,
+  daily24: [], daily25: [], daily26: [],
 }
 
 export type Action =
@@ -116,6 +120,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ordersData:  saved.ordersData  || [],
             supplyData:  saved.supplyData  || [],
             hasData:     true,
+            daily24: (saved as Record<string,unknown>)._daily24 as {date:string,qty:number}[] || [],
+            daily25: (saved as Record<string,unknown>)._daily25 as {date:string,qty:number}[] || [],
+            daily26: (saved as Record<string,unknown>)._daily26 as {date:string,qty:number}[] || [],
             dateRange:   getPresetRange(saved.dateRangePreset || 'yesterday', t),
           },
         })

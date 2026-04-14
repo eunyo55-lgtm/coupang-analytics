@@ -88,55 +88,65 @@ export default function DashboardPage() {
   const weekQty25  = weekSales25.reduce((s,r)=>s+r.qty, 0)
   const weekQtyPct = weekQty25 ? Math.round((weekQty - weekQty25) / weekQty25 * 100) : 0
 
-  // 누적 26년
-  const cumSales = useMemo(() => state.salesData.filter(r=>!r.isReturn && r.date >= '2026-01-01'), [state.salesData])
-  const cumQty   = cumSales.reduce((s,r)=>s+r.qty, 0)
-  const cumRev   = cumSales.reduce((s,r)=>s+r.revenue, 0)
-  const cumSales25 = state.salesData25.filter(r=>!r.isReturn && r.date >= '2025-01-01')
-  const cumQty25   = cumSales25.reduce((s,r)=>s+r.qty, 0)
-  const cumQtyPct  = cumQty25 ? Math.round((cumQty - cumQty25) / cumQty25 * 100) : 0
+  // 누적 26년 — daily26 집계 사용 (더 정확)
+  const cumQty  = useMemo(() => state.daily26.reduce((s,r)=>s+r.qty, 0) || state.salesData.filter(r=>!r.isReturn && r.date>='2026-01-01').reduce((s,r)=>s+r.qty,0), [state.daily26, state.salesData])
+  const cumRev  = useMemo(() => state.salesData.filter(r=>!r.isReturn && r.date>='2026-01-01').reduce((s,r)=>s+r.revenue,0), [state.salesData])
+  const cumQty25 = useMemo(() => {
+    const todayMd = new Date().toISOString().slice(5,10)
+    return state.daily25.filter(r => r.date.slice(5) <= todayMd).reduce((s,r)=>s+r.qty, 0)
+  }, [state.daily25])
+  const cumQtyPct = cumQty25 ? Math.round((cumQty - cumQty25) / cumQty25 * 100) : 0
 
   // 전일 재고 (products 기반)
   const totalStock = state.products.reduce((s,p)=>s+(p.fcStock+p.vfStock+p.hqStock), 0)
   const dangerStock = state.products.filter(p => (p.fcStock+p.vfStock) <= p.safetyStock && p.safetyStock > 0).length
 
-  // ── 3개년 비교 차트 ──
+  // ── 3개년 비교 차트 (RPC 일별 집계 사용) ──
   const yoyChartData = useMemo(() => {
-    const filtered26 = filterByRange(state.salesData.filter(r=>!r.isReturn), chartRange)
     const from26 = chartRange.from; const to26 = chartRange.to
+    const fromStr = toYMD(from26); const toStr = toYMD(to26)
 
-    // 날짜별 qty 맵
+    // 26년 — state.daily26 (RPC) 또는 salesData fallback
     const map26 = new Map<string, number>()
-    const map25 = new Map<string, number>()
-    const map24 = new Map<string, number>()
-
-    filtered26.forEach(r => map26.set(r.date, (map26.get(r.date)||0) + r.qty))
-
-    const from25 = new Date(from26); from25.setFullYear(2025)
-    const to25   = new Date(to26);   to25.setFullYear(2025)
-    filterByRange(state.salesData25, { from:from25, to:to25, label:'', preset:'' })
-      .forEach(r => { const d = r.date.replace('2025','2026'); map25.set(d, (map25.get(d)||0) + r.qty) })
-
-    const from24 = new Date(from26); from24.setFullYear(2024)
-    const to24   = new Date(to26);   to24.setFullYear(2024)
-    filterByRange(state.salesData24, { from:from24, to:to24, label:'', preset:'' })
-      .forEach(r => { const d = r.date.replace('2024','2026'); map24.set(d, (map24.get(d)||0) + r.qty) })
-
-    // 날짜 목록 생성 (chartRange 기간)
-    const dates: string[] = []
-    const cur = new Date(from26)
-    while (cur <= to26) {
-      dates.push(toYMD(cur))
-      cur.setDate(cur.getDate() + 1)
+    if (state.daily26.length > 0) {
+      state.daily26.forEach(r => { if(r.date >= fromStr && r.date <= toStr) map26.set(r.date, r.qty) })
+    } else {
+      filterByRange(state.salesData.filter(r=>!r.isReturn), chartRange)
+        .forEach(r => map26.set(r.date, (map26.get(r.date)||0) + r.qty))
     }
 
+    // 25년 — 날짜를 2026으로 치환해서 비교
+    const map25 = new Map<string, number>()
+    const from25Str = fromStr.replace('2026','2025'); const to25Str = toStr.replace('2026','2025')
+    state.daily25.forEach(r => {
+      if (r.date >= from25Str && r.date <= to25Str) {
+        const d26 = r.date.replace('2025','2026')
+        map25.set(d26, r.qty)
+      }
+    })
+
+    // 24년
+    const map24 = new Map<string, number>()
+    const from24Str = fromStr.replace('2026','2024'); const to24Str = toStr.replace('2026','2024')
+    state.daily24.forEach(r => {
+      if (r.date >= from24Str && r.date <= to24Str) {
+        const d26 = r.date.replace('2024','2026')
+        map24.set(d26, r.qty)
+      }
+    })
+
+    // 날짜 목록
+    const dates: string[] = []
+    const cur = new Date(from26)
+    while (cur <= to26) { dates.push(toYMD(cur)); cur.setDate(cur.getDate()+1) }
+
     return dates.map(d => ({
-      date:  d.slice(5), // MM-DD
+      date:  d.slice(5),
       '26년': map26.get(d) || 0,
       '25년': map25.get(d) || 0,
       '24년': map24.get(d) || 0,
     })).filter(d => d['26년'] || d['25년'] || d['24년'])
-  }, [state.salesData, state.salesData25, state.salesData24, chartRange])
+  }, [state.daily26, state.daily25, state.daily24, state.salesData, chartRange])
 
   // ── TOP 10 ──
   const topSales = useMemo(() => {
