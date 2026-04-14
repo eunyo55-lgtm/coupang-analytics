@@ -35,7 +35,7 @@ export async function loadData(): Promise<PersistedData | null> {
         .lte('date', today.toISOString().slice(0, 10))
         .gt('quantity', 0)
         .order('date', { ascending: true })
-        .limit(200000),
+        .range(0, 199999),
       // 2025년 판매 (전년)
       supabase.from('daily_sales')
         .select('date, barcode, quantity, fc_quantity, vf_quantity')
@@ -43,7 +43,7 @@ export async function loadData(): Promise<PersistedData | null> {
         .lte('date', yearEnd25)
         .gt('quantity', 0)
         .order('date', { ascending: true })
-        .limit(200000),
+        .range(0, 199999),
       // 2024년 판매 (전전년)
       supabase.from('daily_sales')
         .select('date, barcode, quantity, fc_quantity, vf_quantity')
@@ -51,7 +51,7 @@ export async function loadData(): Promise<PersistedData | null> {
         .lte('date', yearEnd24)
         .gt('quantity', 0)
         .order('date', { ascending: true })
-        .limit(200000),
+        .range(0, 199999),
       // products (바코드-상품명-원가-재고)
       supabase.from('products')
         .select('barcode, name, option_value, cost, current_stock, safety_stock, season, hq_stock, fc_stock, vf_stock, incoming_stock, image_url')
