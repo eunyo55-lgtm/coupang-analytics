@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react'
+import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef } from 'react'
 import type {
   DateRange, SalesRow, InventoryItem,
   RankingEntry, AdEntry, ParseResult
@@ -8,7 +8,7 @@ import type {
 import { getPresetRange } from '@/lib/dateUtils'
 
 // ── localStorage 유틸 ──
-const STORAGE_KEY = 'coupang_analytics_data'
+const STORAGE_KEY = 'coupang_analytics_v2'
 
 function saveToStorage(state: AppState) {
   try {
@@ -23,47 +23,45 @@ function saveToStorage(state: AppState) {
     if (str.length < 4_500_000) {
       localStorage.setItem(STORAGE_KEY, str)
     } else {
-      // 용량 초과 시 판매 데이터를 절반으로 줄여서 저장 (최신 우선)
+      // 용량 초과 시 판매 데이터를 최신 절반만 유지
       toSave.salesData = state.salesData.slice(-Math.floor(state.salesData.length / 2))
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave))
     }
-  } catch {
-    console.warn('[store] localStorage save failed — data too large')
+    console.log('[store] saved to localStorage:', {
+      sales: toSave.salesData.length,
+      master: toSave.masterData.length,
+    })
+  } catch (e) {
+    console.warn('[store] localStorage save failed:', e)
   }
 }
 
-function loadFromStorage(): Partial<AppState> {
-  if (typeof window === 'undefined') return {}
+function loadFromStorage(): Partial<AppState> | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return {}
-    return JSON.parse(raw)
-  } catch { return {} }
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    console.log('[store] loaded from localStorage:', {
+      sales: parsed.salesData?.length,
+      master: parsed.masterData?.length,
+    })
+    return parsed
+  } catch { return null }
 }
 
 // ── 누적 merge 헬퍼 ──
-// 판매: date + productName + option 조합으로 중복 제거 후 합산
 function mergeSales(existing: SalesRow[], incoming: SalesRow[]): SalesRow[] {
   if (!existing.length) return incoming
-
-  // 기존 데이터를 key → row 맵으로 변환
   const map = new Map<string, SalesRow>()
   existing.forEach(r => {
-    const key = `${r.date}||${r.productName}||${r.option}`
-    map.set(key, r)
+    map.set(`${r.date}||${r.productName}||${r.option}`, r)
   })
-
-  // 새 데이터: 같은 key가 있으면 덮어쓰기 (새 파일이 더 정확한 값으로 간주)
   incoming.forEach(r => {
-    const key = `${r.date}||${r.productName}||${r.option}`
-    map.set(key, r)
+    map.set(`${r.date}||${r.productName}||${r.option}`, r)
   })
-
-  // 날짜 오름차순 정렬
   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
 }
 
-// 마스터/발주/공급: 상품명+옵션 기준 중복 제거 (새 데이터 우선)
 function mergeByName(
   existing: Record<string, unknown>[],
   incoming: Record<string, unknown>[]
@@ -71,28 +69,28 @@ function mergeByName(
   if (!existing.length) return incoming
   const nameKey = (r: Record<string, unknown>) => {
     const name   = r['상품명'] || r['productName'] || r['item'] || r['노출상품명'] || ''
-    const option = r['옵션']  || r['option']     || r['옵션명'] || ''
+    const option = r['옵션']  || r['option']      || r['옵션명'] || ''
     return `${name}||${option}`
   }
   const map = new Map<string, Record<string, unknown>>()
   existing.forEach(r => map.set(nameKey(r), r))
-  incoming.forEach(r => map.set(nameKey(r), r)) // 새 데이터가 덮어씀
+  incoming.forEach(r => map.set(nameKey(r), r))
   return Array.from(map.values())
 }
 
 // ── State ──
 interface AppState {
-  dateRange: DateRange
-  masterData: Record<string, unknown>[]
-  salesData: SalesRow[]
-  ordersData: Record<string, unknown>[]
-  supplyData: Record<string, unknown>[]
-  inventory: InventoryItem[]
-  rankings: RankingEntry[]
-  adEntries: AdEntry[]
-  parseLog: string[]
+  dateRange:   DateRange
+  masterData:  Record<string, unknown>[]
+  salesData:   SalesRow[]
+  ordersData:  Record<string, unknown>[]
+  supplyData:  Record<string, unknown>[]
+  inventory:   InventoryItem[]
+  rankings:    RankingEntry[]
+  adEntries:   AdEntry[]
+  parseLog:    string[]
   isAnalyzing: boolean
-  hasData: boolean
+  hasData:     boolean
 }
 
 const today = new Date()
@@ -114,16 +112,17 @@ const initialState: AppState = {
 
 // ── Actions ──
 type Action =
-  | { type: 'SET_DATE_RANGE'; payload: DateRange }
+  | { type: 'SET_DATE_RANGE';  payload: DateRange }
   | { type: 'SET_PARSE_RESULT'; payload: ParseResult }
-  | { type: 'SET_INVENTORY'; payload: InventoryItem[] }
-  | { type: 'ADD_RANKING'; payload: RankingEntry }
-  | { type: 'SET_RANKINGS'; payload: RankingEntry[] }
-  | { type: 'ADD_AD_ENTRY'; payload: AdEntry }
-  | { type: 'SET_AD_ENTRIES'; payload: AdEntry[] }
+  | { type: 'LOAD_FROM_STORAGE'; payload: Partial<AppState> }
+  | { type: 'SET_INVENTORY';   payload: InventoryItem[] }
+  | { type: 'ADD_RANKING';     payload: RankingEntry }
+  | { type: 'SET_RANKINGS';    payload: RankingEntry[] }
+  | { type: 'ADD_AD_ENTRY';    payload: AdEntry }
+  | { type: 'SET_AD_ENTRIES';  payload: AdEntry[] }
   | { type: 'DELETE_AD_ENTRY'; payload: number }
-  | { type: 'APPEND_LOG'; payload: string }
-  | { type: 'SET_ANALYZING'; payload: boolean }
+  | { type: 'APPEND_LOG';      payload: string }
+  | { type: 'SET_ANALYZING';   payload: boolean }
   | { type: 'RESET' }
 
 function reducer(state: AppState, action: Action): AppState {
@@ -131,30 +130,25 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_DATE_RANGE':
       return { ...state, dateRange: action.payload }
 
+    case 'LOAD_FROM_STORAGE':
+      return { ...state, ...action.payload }
+
     case 'SET_PARSE_RESULT': {
       const { key, data } = action.payload
-
       if (key === 'sales') {
         const incoming = data as unknown as SalesRow[]
-        const merged   = mergeSales(state.salesData, incoming)
-        return { ...state, salesData: merged, hasData: true }
+        return { ...state, salesData: mergeSales(state.salesData, incoming), hasData: true }
       }
-
       if (key === 'master') {
-        const merged = mergeByName(state.masterData, data)
-        return { ...state, masterData: merged, hasData: true }
+        return { ...state, masterData: mergeByName(state.masterData, data), hasData: true }
       }
-
       if (key === 'orders') {
-        const merged = mergeByName(state.ordersData, data)
-        return { ...state, ordersData: merged, hasData: true }
+        return { ...state, ordersData: mergeByName(state.ordersData, data), hasData: true }
       }
-
       if (key === 'supply') {
-        // 공급 중 수량은 항상 최신 파일로 교체 (재고 현황이 변하므로)
+        // 공급 중 수량은 항상 교체
         return { ...state, supplyData: data, hasData: true }
       }
-
       return { ...state, hasData: true }
     }
 
@@ -183,7 +177,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, isAnalyzing: action.payload }
 
     case 'RESET': {
-      if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(STORAGE_KEY)
       return { ...initialState, dateRange: state.dateRange }
     }
 
@@ -199,14 +193,26 @@ const AppContext = createContext<{
 } | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState, (base) => {
-    const saved = loadFromStorage()
-    return { ...base, ...saved }
-  })
+  const [state, dispatch] = useReducer(reducer, initialState)
+  const isFirstRender = useRef(true)
 
-  // 데이터 변경 시 localStorage에 자동 저장
+  // 마운트 시 localStorage에서 데이터 복원 (클라이언트 전용)
   useEffect(() => {
-    if (state.hasData) saveToStorage(state)
+    const saved = loadFromStorage()
+    if (saved && saved.hasData) {
+      dispatch({ type: 'LOAD_FROM_STORAGE', payload: saved })
+    }
+  }, [])
+
+  // 데이터 변경 시 localStorage에 저장 (첫 렌더 이후부터)
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
+    if (state.hasData) {
+      saveToStorage(state)
+    }
   }, [state.masterData, state.salesData, state.ordersData, state.supplyData, state.hasData]) // eslint-disable-line
 
   return (
