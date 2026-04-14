@@ -1,25 +1,58 @@
 'use client'
 
-import React, { createContext, useContext, useReducer, ReactNode } from 'react'
+import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react'
 import type {
   DateRange, SalesRow, InventoryItem,
   RankingEntry, AdEntry, ParseResult
 } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 
+// ── localStorage 유틸 ──
+const STORAGE_KEY = 'coupang_analytics_data'
+
+function saveToStorage(state: AppState) {
+  try {
+    const toSave = {
+      masterData: state.masterData,
+      salesData:  state.salesData,
+      ordersData: state.ordersData,
+      supplyData: state.supplyData,
+      hasData:    state.hasData,
+    }
+    // 5MB 초과 방지: 용량 측정 후 잘라내기
+    const str = JSON.stringify(toSave)
+    if (str.length < 4_500_000) {
+      localStorage.setItem(STORAGE_KEY, str)
+    } else {
+      // 판매 데이터가 제일 크므로 절반만 저장
+      toSave.salesData = state.salesData.slice(0, Math.floor(state.salesData.length / 2))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave))
+    }
+  } catch {
+    // 용량 초과 시 무시
+    console.warn('[store] localStorage save failed')
+  }
+}
+
+function loadFromStorage(): Partial<AppState> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return {}
+    return JSON.parse(raw)
+  } catch { return {} }
+}
+
 // ── State ──
 interface AppState {
   dateRange: DateRange
-  // raw parsed data
   masterData: Record<string, unknown>[]
   salesData: SalesRow[]
   ordersData: Record<string, unknown>[]
   supplyData: Record<string, unknown>[]
-  // computed
   inventory: InventoryItem[]
   rankings: RankingEntry[]
   adEntries: AdEntry[]
-  // status
   parseLog: string[]
   isAnalyzing: boolean
   hasData: boolean
@@ -29,17 +62,17 @@ const today = new Date()
 today.setHours(0, 0, 0, 0)
 
 const initialState: AppState = {
-  dateRange: getPresetRange('yesterday', today),
-  masterData: [],
-  salesData: [],
-  ordersData: [],
-  supplyData: [],
-  inventory: [],
-  rankings: [],
-  adEntries: [],
-  parseLog: [],
+  dateRange:   getPresetRange('yesterday', today),
+  masterData:  [],
+  salesData:   [],
+  ordersData:  [],
+  supplyData:  [],
+  inventory:   [],
+  rankings:    [],
+  adEntries:   [],
+  parseLog:    [],
   isAnalyzing: false,
-  hasData: false,
+  hasData:     false,
 }
 
 // ── Actions ──
@@ -69,11 +102,7 @@ function reducer(state: AppState, action: Action): AppState {
         orders: 'ordersData',
         supply: 'supplyData',
       }
-      return {
-        ...state,
-        [keyMap[key]]: data,
-        hasData: true,
-      }
+      return { ...state, [keyMap[key]]: data, hasData: true }
     }
 
     case 'SET_INVENTORY':
@@ -92,10 +121,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, adEntries: action.payload }
 
     case 'DELETE_AD_ENTRY':
-      return {
-        ...state,
-        adEntries: state.adEntries.filter((_, i) => i !== action.payload),
-      }
+      return { ...state, adEntries: state.adEntries.filter((_, i) => i !== action.payload) }
 
     case 'APPEND_LOG':
       return { ...state, parseLog: [...state.parseLog, action.payload] }
@@ -103,8 +129,10 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_ANALYZING':
       return { ...state, isAnalyzing: action.payload }
 
-    case 'RESET':
+    case 'RESET': {
+      if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
       return { ...initialState, dateRange: state.dateRange }
+    }
 
     default:
       return state
@@ -118,7 +146,16 @@ const AppContext = createContext<{
 } | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState)
+  const [state, dispatch] = useReducer(reducer, initialState, (base) => {
+    const saved = loadFromStorage()
+    return { ...base, ...saved }
+  })
+
+  // 데이터가 바뀔 때마다 localStorage에 저장
+  useEffect(() => {
+    if (state.hasData) saveToStorage(state)
+  }, [state.masterData, state.salesData, state.ordersData, state.supplyData, state.hasData]) // eslint-disable-line
+
   return (
     <AppContext.Provider value={{ state, dispatch }}>
       {children}
