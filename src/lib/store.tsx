@@ -19,18 +19,16 @@ function saveToStorage(state: AppState) {
       supplyData: state.supplyData,
       hasData:    state.hasData,
     }
-    // 5MB 초과 방지: 용량 측정 후 잘라내기
     const str = JSON.stringify(toSave)
     if (str.length < 4_500_000) {
       localStorage.setItem(STORAGE_KEY, str)
     } else {
-      // 판매 데이터가 제일 크므로 절반만 저장
-      toSave.salesData = state.salesData.slice(0, Math.floor(state.salesData.length / 2))
+      // 용량 초과 시 판매 데이터를 절반으로 줄여서 저장 (최신 우선)
+      toSave.salesData = state.salesData.slice(-Math.floor(state.salesData.length / 2))
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave))
     }
   } catch {
-    // 용량 초과 시 무시
-    console.warn('[store] localStorage save failed')
+    console.warn('[store] localStorage save failed — data too large')
   }
 }
 
@@ -41,6 +39,45 @@ function loadFromStorage(): Partial<AppState> {
     if (!raw) return {}
     return JSON.parse(raw)
   } catch { return {} }
+}
+
+// ── 누적 merge 헬퍼 ──
+// 판매: date + productName + option 조합으로 중복 제거 후 합산
+function mergeSales(existing: SalesRow[], incoming: SalesRow[]): SalesRow[] {
+  if (!existing.length) return incoming
+
+  // 기존 데이터를 key → row 맵으로 변환
+  const map = new Map<string, SalesRow>()
+  existing.forEach(r => {
+    const key = `${r.date}||${r.productName}||${r.option}`
+    map.set(key, r)
+  })
+
+  // 새 데이터: 같은 key가 있으면 덮어쓰기 (새 파일이 더 정확한 값으로 간주)
+  incoming.forEach(r => {
+    const key = `${r.date}||${r.productName}||${r.option}`
+    map.set(key, r)
+  })
+
+  // 날짜 오름차순 정렬
+  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
+}
+
+// 마스터/발주/공급: 상품명+옵션 기준 중복 제거 (새 데이터 우선)
+function mergeByName(
+  existing: Record<string, unknown>[],
+  incoming: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  if (!existing.length) return incoming
+  const nameKey = (r: Record<string, unknown>) => {
+    const name   = r['상품명'] || r['productName'] || r['item'] || r['노출상품명'] || ''
+    const option = r['옵션']  || r['option']     || r['옵션명'] || ''
+    return `${name}||${option}`
+  }
+  const map = new Map<string, Record<string, unknown>>()
+  existing.forEach(r => map.set(nameKey(r), r))
+  incoming.forEach(r => map.set(nameKey(r), r)) // 새 데이터가 덮어씀
+  return Array.from(map.values())
 }
 
 // ── State ──
@@ -96,13 +133,29 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_PARSE_RESULT': {
       const { key, data } = action.payload
-      const keyMap: Record<string, keyof AppState> = {
-        master: 'masterData',
-        sales:  'salesData',
-        orders: 'ordersData',
-        supply: 'supplyData',
+
+      if (key === 'sales') {
+        const incoming = data as unknown as SalesRow[]
+        const merged   = mergeSales(state.salesData, incoming)
+        return { ...state, salesData: merged, hasData: true }
       }
-      return { ...state, [keyMap[key]]: data, hasData: true }
+
+      if (key === 'master') {
+        const merged = mergeByName(state.masterData, data)
+        return { ...state, masterData: merged, hasData: true }
+      }
+
+      if (key === 'orders') {
+        const merged = mergeByName(state.ordersData, data)
+        return { ...state, ordersData: merged, hasData: true }
+      }
+
+      if (key === 'supply') {
+        // 공급 중 수량은 항상 최신 파일로 교체 (재고 현황이 변하므로)
+        return { ...state, supplyData: data, hasData: true }
+      }
+
+      return { ...state, hasData: true }
     }
 
     case 'SET_INVENTORY':
@@ -151,7 +204,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return { ...base, ...saved }
   })
 
-  // 데이터가 바뀔 때마다 localStorage에 저장
+  // 데이터 변경 시 localStorage에 자동 저장
   useEffect(() => {
     if (state.hasData) saveToStorage(state)
   }, [state.masterData, state.salesData, state.ordersData, state.supplyData, state.hasData]) // eslint-disable-line

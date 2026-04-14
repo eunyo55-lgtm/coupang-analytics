@@ -30,13 +30,19 @@ export default function DataManagePage() {
       dispatch({ type: 'APPEND_LOG', payload: `❌ [${key}] ${result.error}` })
     } else {
       const cols = result.columns.slice(0, 5).join(' · ') + (result.columns.length > 5 ? '…' : '')
-      dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows}행 로드 | ${cols}` })
+      dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] 새 파일: ${result.rows.toLocaleString()}행 | ${cols}` })
 
       // Normalize sales data immediately
       if (key === 'sales') {
         result.data = normalizeSalesData(result.data) as unknown as Record<string, unknown>[]
+        const prevCount = state.salesData.length
+        dispatch({ type: 'SET_PARSE_RESULT', payload: result })
+        if (prevCount > 0) {
+          dispatch({ type: 'APPEND_LOG', payload: `📊 [sales] 기존 ${prevCount.toLocaleString()}행 + 신규 병합 → 날짜별 중복 제거 완료` })
+        }
+      } else {
+        dispatch({ type: 'SET_PARSE_RESULT', payload: result })
       }
-      dispatch({ type: 'SET_PARSE_RESULT', payload: result })
       setDone(d => ({ ...d, [key]: true }))
       setFileNames(f => ({ ...f, [key]: file.name }))
     }
@@ -63,6 +69,12 @@ export default function DataManagePage() {
 
   const hasAny = state.masterData.length > 0 || state.salesData.length > 0
 
+  // 판매 데이터 날짜 범위 계산
+  const salesDates = state.salesData.map(r => r.date).filter(Boolean).sort()
+  const salesDateRange = salesDates.length
+    ? `${salesDates[0]} ~ ${salesDates[salesDates.length - 1]}`
+    : '없음'
+
   return (
     <div>
       {/* Status KPIs */}
@@ -83,9 +95,9 @@ export default function DataManagePage() {
         </div>
         <div className="kpi kc-gr">
           <div className="kpi-top"><div className="kpi-ico">🛒</div></div>
-          <div className="kpi-lbl">판매 행</div>
+          <div className="kpi-lbl">판매 행 (누적)</div>
           <div className="kpi-val">{state.salesData.length ? fmt(state.salesData.length) : '—'}</div>
-          <div className="kpi-foot">로드 건수</div>
+          <div className="kpi-foot" style={{ fontSize: 9 }}>{salesDates.length ? salesDateRange : '로드 건수'}</div>
         </div>
         <div className="kpi kc-am">
           <div className="kpi-top"><div className="kpi-ico">📋</div></div>
@@ -94,6 +106,18 @@ export default function DataManagePage() {
           <div className="kpi-foot">발주서 기준</div>
         </div>
       </div>
+
+      {/* 누적 안내 배너 */}
+      {hasAny && (
+        <div className="card" style={{ marginBottom: 12, background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+          <div className="cb" style={{ padding: '10px 16px' }}>
+            <p style={{ fontSize: 12, fontWeight: 700, color: '#1D4ED8', margin: 0 }}>
+              📌 누적 저장 모드 — 새 파일 업로드 시 기존 데이터에 <strong>자동 병합</strong>됩니다.
+              같은 날짜+상품 데이터는 새 파일로 덮어씁니다. 전체 초기화는 🔄 초기화 버튼을 이용하세요.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Upload */}
       <div className="card">
