@@ -92,8 +92,9 @@ export default function DataManagePage() {
     FILE_CONFIG.forEach(({ key }) => { if (inputRefs.current[key]) inputRefs.current[key]!.value = '' })
   }
 
-  const hasAny = state.masterData.length > 0 || state.salesData.length > 0
-  const salesDates = state.salesData.map(r=>r.date).filter(Boolean).sort()
+  // 파일이 하나라도 업로드되면 분석 시작 활성화 (Supabase 연동 후 state.salesData 비어있음)
+  const hasAny = Object.keys(done).length > 0
+  const salesDates = (state.salesData as {date?:string}[]).map(r=>r?.date).filter(Boolean).sort()
 
   return (
     <div>
@@ -102,7 +103,7 @@ export default function DataManagePage() {
           <div className="kpi-top"><div className="kpi-ico">🗂️</div></div>
           <div className="kpi-lbl">분석 상태</div>
           <div className="kpi-val" style={{ fontSize:14, fontWeight:800, color: hasAny ? 'var(--green)' : 'var(--t3)' }}>
-            {analyzing ? '분석 중...' : hasAny ? '완료' : '대기'}
+            {analyzing ? '분석 중...' : hasAny ? '업로드 완료' : '대기'}
           </div>
           <div className="kpi-foot">파일 업로드 후</div>
         </div>
