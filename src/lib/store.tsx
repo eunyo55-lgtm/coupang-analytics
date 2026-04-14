@@ -4,7 +4,8 @@ import React, { createContext, useContext, useReducer, ReactNode, useEffect, use
 import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 
-const KEY = 'ca_v7'
+const KEY = 'ca_data' // 최종 고정 키
+const OLD_KEYS = ['ca_v1','ca_v2','ca_v3','ca_v4','ca_v5','ca_v6','ca_v7','coupang_analytics_data','coupang_analytics_v2']
 
 // ── 저장/로드 ──
 export function saveToLS(data: {
@@ -24,6 +25,8 @@ export function saveToLS(data: {
       const half = { ...data, salesData: data.salesData.slice(-Math.floor(data.salesData.length / 2)), hasData: true }
       localStorage.setItem(KEY, JSON.stringify(half))
     }
+    // 구버전 키 일괄 삭제
+    OLD_KEYS.forEach(k => localStorage.removeItem(k))
     console.log('[CA] ✅ saved to localStorage:', {
       sales: data.salesData.length,
       master: data.masterData.length,
@@ -37,7 +40,20 @@ export function saveToLS(data: {
 function loadFromLS() {
   if (typeof window === 'undefined') return null
   try {
-    const raw = localStorage.getItem(KEY)
+    // 현재 키에서 먼저 로드 시도
+    let raw = localStorage.getItem(KEY)
+    // 없으면 구버전 키에서 마이그레이션
+    if (!raw) {
+      for (const oldKey of OLD_KEYS) {
+        raw = localStorage.getItem(oldKey)
+        if (raw) {
+          console.log('[CA] 🔄 migrating from old key:', oldKey)
+          localStorage.setItem(KEY, raw)   // 새 키로 복사
+          localStorage.removeItem(oldKey)   // 구버전 삭제
+          break
+        }
+      }
+    }
     if (!raw) return null
     const d = JSON.parse(raw)
     console.log('[CA] ✅ loaded from localStorage:', { sales: d.salesData?.length, master: d.masterData?.length, preset: d.dateRangePreset })
