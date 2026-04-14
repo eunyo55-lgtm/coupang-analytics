@@ -191,3 +191,6 @@ export function useApp() {
   return ctx
 }
 // cache bust Tue Apr 14 04:57:16 UTC 2026
+
+// cache bust 1776144167
+export const storeVersion = 'ca_data_v1'
