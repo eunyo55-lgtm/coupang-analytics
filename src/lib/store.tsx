@@ -1,66 +1,65 @@
 'use client'
 
-import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef } from 'react'
+import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useCallback } from 'react'
 import type {
   DateRange, SalesRow, InventoryItem,
   RankingEntry, AdEntry, ParseResult
 } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 
-const STORAGE_KEY = 'ca_data_v3'
+// ── localStorage ──
+const KEY = 'ca_v4'
 
-// ── 즉시 저장 (dispatch 후 바로 호출) ──
-export function persistState(state: AppState) {
-  if (typeof window === 'undefined') return
+function save(state: AppState) {
   try {
-    const payload = {
+    const s = JSON.stringify({
       masterData: state.masterData,
       salesData:  state.salesData,
       ordersData: state.ordersData,
       supplyData: state.supplyData,
-      hasData:    state.hasData,
+      hasData:    true,
+    })
+    if (s.length < 4_500_000) localStorage.setItem(KEY, s)
+    else {
+      const half = Math.floor(state.salesData.length / 2)
+      localStorage.setItem(KEY, JSON.stringify({
+        masterData: state.masterData,
+        salesData:  state.salesData.slice(-half),
+        ordersData: state.ordersData,
+        supplyData: state.supplyData,
+        hasData:    true,
+      }))
     }
-    const str = JSON.stringify(payload)
-    if (str.length < 4_500_000) {
-      localStorage.setItem(STORAGE_KEY, str)
-    } else {
-      payload.salesData = state.salesData.slice(-Math.floor(state.salesData.length / 2))
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-    }
-  } catch (e) {
-    console.warn('[store] save failed', e)
-  }
+    console.log('[CA] saved', { sales: state.salesData.length, master: state.masterData.length })
+  } catch (e) { console.warn('[CA] save error', e) }
 }
 
-export function loadPersistedState(): Partial<AppState> | null {
-  if (typeof window === 'undefined') return null
+function load(): Partial<AppState> | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(KEY)
     if (!raw) return null
-    return JSON.parse(raw)
+    const d = JSON.parse(raw)
+    console.log('[CA] loaded', { sales: d.salesData?.length, master: d.masterData?.length })
+    return d
   } catch { return null }
 }
 
-// ── merge 헬퍼 ──
-function mergeSales(existing: SalesRow[], incoming: SalesRow[]): SalesRow[] {
-  if (!existing.length) return incoming
-  const map = new Map<string, SalesRow>()
-  existing.forEach(r => map.set(`${r.date}||${r.productName}||${r.option}`, r))
-  incoming.forEach(r => map.set(`${r.date}||${r.productName}||${r.option}`, r))
-  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
+// ── merge ──
+function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
+  if (!prev.length) return next
+  const m = new Map<string, SalesRow>()
+  prev.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
+  next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
+  return Array.from(m.values()).sort((a, b) => a.date.localeCompare(b.date))
 }
-
-function mergeByName(
-  existing: Record<string, unknown>[],
-  incoming: Record<string, unknown>[]
-): Record<string, unknown>[] {
-  if (!existing.length) return incoming
+function mergeRaw(prev: Record<string, unknown>[], next: Record<string, unknown>[]) {
+  if (!prev.length) return next
   const key = (r: Record<string, unknown>) =>
-    `${r['상품명'] || r['productName'] || r['item'] || ''}||${r['옵션'] || r['option'] || ''}`
-  const map = new Map<string, Record<string, unknown>>()
-  existing.forEach(r => map.set(key(r), r))
-  incoming.forEach(r => map.set(key(r), r))
-  return Array.from(map.values())
+    `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
+  const m = new Map<string, Record<string, unknown>>()
+  prev.forEach(r => m.set(key(r), r))
+  next.forEach(r => m.set(key(r), r))
+  return Array.from(m.values())
 }
 
 // ── State ──
@@ -78,95 +77,52 @@ export interface AppState {
   hasData:     boolean
 }
 
-const today = new Date()
-today.setHours(0, 0, 0, 0)
-
-export const initialState: AppState = {
-  dateRange:   getPresetRange('yesterday', today),
-  masterData:  [],
-  salesData:   [],
-  ordersData:  [],
-  supplyData:  [],
-  inventory:   [],
-  rankings:    [],
-  adEntries:   [],
-  parseLog:    [],
-  isAnalyzing: false,
-  hasData:     false,
+const today = new Date(); today.setHours(0,0,0,0)
+const initialState: AppState = {
+  dateRange: getPresetRange('yesterday', today),
+  masterData: [], salesData: [], ordersData: [], supplyData: [],
+  inventory: [], rankings: [], adEntries: [],
+  parseLog: [], isAnalyzing: false, hasData: false,
 }
 
 // ── Actions ──
 export type Action =
-  | { type: 'SET_DATE_RANGE';     payload: DateRange }
-  | { type: 'SET_PARSE_RESULT';   payload: ParseResult }
-  | { type: 'HYDRATE';            payload: Partial<AppState> }
-  | { type: 'SET_INVENTORY';      payload: InventoryItem[] }
-  | { type: 'ADD_RANKING';        payload: RankingEntry }
-  | { type: 'SET_RANKINGS';       payload: RankingEntry[] }
-  | { type: 'ADD_AD_ENTRY';       payload: AdEntry }
-  | { type: 'SET_AD_ENTRIES';     payload: AdEntry[] }
-  | { type: 'DELETE_AD_ENTRY';    payload: number }
-  | { type: 'APPEND_LOG';         payload: string }
-  | { type: 'SET_ANALYZING';      payload: boolean }
+  | { type: 'SET_DATE_RANGE';   payload: DateRange }
+  | { type: 'SET_PARSE_RESULT'; payload: ParseResult }
+  | { type: 'HYDRATE';          payload: Partial<AppState> }
+  | { type: 'SET_INVENTORY';    payload: InventoryItem[] }
+  | { type: 'ADD_RANKING';      payload: RankingEntry }
+  | { type: 'SET_RANKINGS';     payload: RankingEntry[] }
+  | { type: 'ADD_AD_ENTRY';     payload: AdEntry }
+  | { type: 'SET_AD_ENTRIES';   payload: AdEntry[] }
+  | { type: 'DELETE_AD_ENTRY';  payload: number }
+  | { type: 'APPEND_LOG';       payload: string }
+  | { type: 'SET_ANALYZING';    payload: boolean }
   | { type: 'RESET' }
 
-export function reducer(state: AppState, action: Action): AppState {
+function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case 'SET_DATE_RANGE':
-      return { ...state, dateRange: action.payload }
-
-    case 'HYDRATE':
-      return { ...state, ...action.payload }
-
+    case 'SET_DATE_RANGE':   return { ...state, dateRange: action.payload }
+    case 'HYDRATE':          return { ...state, ...action.payload }
     case 'SET_PARSE_RESULT': {
       const { key, data } = action.payload
-      let next: AppState
-      if (key === 'sales') {
-        const incoming = data as unknown as SalesRow[]
-        next = { ...state, salesData: mergeSales(state.salesData, incoming), hasData: true }
-      } else if (key === 'master') {
-        next = { ...state, masterData: mergeByName(state.masterData, data), hasData: true }
-      } else if (key === 'orders') {
-        next = { ...state, ordersData: mergeByName(state.ordersData, data), hasData: true }
-      } else {
-        next = { ...state, supplyData: data, hasData: true }
-      }
-      // 즉시 저장
-      persistState(next)
-      return next
+      if (key === 'sales')  return { ...state, salesData:  mergeSales(state.salesData, data as unknown as SalesRow[]), hasData: true }
+      if (key === 'master') return { ...state, masterData: mergeRaw(state.masterData, data), hasData: true }
+      if (key === 'orders') return { ...state, ordersData: mergeRaw(state.ordersData, data), hasData: true }
+      return { ...state, supplyData: data, hasData: true }
     }
-
-    case 'SET_INVENTORY':
-      return { ...state, inventory: action.payload }
-
-    case 'ADD_RANKING':
-      return { ...state, rankings: [action.payload, ...state.rankings] }
-
-    case 'SET_RANKINGS':
-      return { ...state, rankings: action.payload }
-
-    case 'ADD_AD_ENTRY':
-      return { ...state, adEntries: [...state.adEntries, action.payload] }
-
-    case 'SET_AD_ENTRIES':
-      return { ...state, adEntries: action.payload }
-
-    case 'DELETE_AD_ENTRY':
-      return { ...state, adEntries: state.adEntries.filter((_, i) => i !== action.payload) }
-
-    case 'APPEND_LOG':
-      return { ...state, parseLog: [...state.parseLog, action.payload] }
-
-    case 'SET_ANALYZING':
-      return { ...state, isAnalyzing: action.payload }
-
-    case 'RESET': {
-      if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
+    case 'SET_INVENTORY':    return { ...state, inventory: action.payload }
+    case 'ADD_RANKING':      return { ...state, rankings: [action.payload, ...state.rankings] }
+    case 'SET_RANKINGS':     return { ...state, rankings: action.payload }
+    case 'ADD_AD_ENTRY':     return { ...state, adEntries: [...state.adEntries, action.payload] }
+    case 'SET_AD_ENTRIES':   return { ...state, adEntries: action.payload }
+    case 'DELETE_AD_ENTRY':  return { ...state, adEntries: state.adEntries.filter((_, i) => i !== action.payload) }
+    case 'APPEND_LOG':       return { ...state, parseLog: [...state.parseLog, action.payload] }
+    case 'SET_ANALYZING':    return { ...state, isAnalyzing: action.payload }
+    case 'RESET':
+      localStorage.removeItem(KEY)
       return { ...initialState, dateRange: state.dateRange }
-    }
-
-    default:
-      return state
+    default: return state
   }
 }
 
@@ -177,16 +133,30 @@ const AppContext = createContext<{
 } | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState)
+  const [state, rawDispatch] = useReducer(reducer, initialState)
+  const stateRef = useRef(state)
   const hydrated = useRef(false)
 
-  // 클라이언트 마운트 후 1회만 복원
+  // 항상 최신 state를 ref에 동기화
+  useEffect(() => { stateRef.current = state }, [state])
+
+  // 마운트 시 복원
   useEffect(() => {
     if (hydrated.current) return
     hydrated.current = true
-    const saved = loadPersistedState()
-    if (saved?.hasData) {
-      dispatch({ type: 'HYDRATE', payload: saved })
+    const saved = load()
+    if (saved?.hasData) rawDispatch({ type: 'HYDRATE', payload: saved })
+  }, [])
+
+  // dispatch 래퍼: SET_PARSE_RESULT 시 실행 후 localStorage 저장
+  const dispatch = useCallback((action: Action) => {
+    rawDispatch(action)
+    if (action.type === 'SET_PARSE_RESULT') {
+      // 다음 렌더 후 저장 (state 업데이트 반영 후)
+      setTimeout(() => save(stateRef.current), 100)
+    }
+    if (action.type === 'RESET') {
+      localStorage.removeItem(KEY)
     }
   }, [])
 
