@@ -9,15 +9,33 @@ const KEY = 'ca_v5'
 function save(s: AppState) {
   if (typeof window === 'undefined') return
   try {
-    const p = { masterData:s.masterData, salesData:s.salesData, ordersData:s.ordersData, supplyData:s.supplyData, hasData:true }
+    const p: Record<string, unknown> = {
+      masterData: s.masterData, salesData: s.salesData,
+      ordersData: s.ordersData, supplyData: s.supplyData,
+      hasData: true,
+      dateRangePreset: s.dateRange.preset || 'total', // 날짜 필터 저장
+    }
     const str = JSON.stringify(p)
-    localStorage.setItem(KEY, str.length < 4_500_000 ? str : (() => { p.salesData = s.salesData.slice(-Math.floor(s.salesData.length/2)); return JSON.stringify(p) })())
-    console.log('[CA] saved', s.salesData.length, 'sales rows')
+    if (str.length >= 4_500_000) {
+      p.salesData = s.salesData.slice(-Math.floor(s.salesData.length/2))
+    }
+    localStorage.setItem(KEY, JSON.stringify(p))
+    console.log('[CA] saved', s.salesData.length, 'sales rows, preset:', p.dateRangePreset)
   } catch(e) { console.warn('[CA] save failed', e) }
 }
 
 function load() {
-  try { const r = localStorage.getItem(KEY); return r ? JSON.parse(r) as Partial<AppState> : null } catch { return null }
+  try {
+    const r = localStorage.getItem(KEY)
+    if (!r) return null
+    const d = JSON.parse(r) as Partial<AppState> & { dateRangePreset?: string }
+    // dateRange 복원
+    if (d.dateRangePreset && !(d as AppState).dateRange) {
+      const today = new Date(); today.setHours(0,0,0,0)
+      ;(d as AppState).dateRange = getPresetRange(d.dateRangePreset, today)
+    }
+    return d as Partial<AppState>
+  } catch { return null }
 }
 
 function mergeSales(prev: SalesRow[], next: SalesRow[]) {

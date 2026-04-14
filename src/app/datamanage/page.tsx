@@ -1,9 +1,9 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useApp } from '@/lib/store'
 import { parseFile, normalizeSalesData } from '@/lib/fileParser'
+import { getPresetRange } from '@/lib/dateUtils'
 import type { ParseResult } from '@/types'
 
 const FILE_CONFIG = [
@@ -15,7 +15,6 @@ const FILE_CONFIG = [
 
 export default function DataManagePage() {
   const { state, dispatch } = useApp()
-  const router = useRouter()
   const [uploading,  setUploading]  = useState<Record<string, boolean>>({})
   const [fileNames,  setFileNames]  = useState<Record<string, string>>({})
   const [done,       setDone]       = useState<Record<string, boolean>>({})
@@ -54,12 +53,17 @@ export default function DataManagePage() {
   function runAnalysis() {
     setAnalyzing(true)
     dispatch({ type: 'APPEND_LOG', payload: '→ 분석 시작...' })
+
+    // 날짜 필터를 전체로 변경
+    const today = new Date(); today.setHours(0,0,0,0)
+    dispatch({ type: 'SET_DATE_RANGE', payload: getPresetRange('total', today) })
+
     setTimeout(() => {
       dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료 🎉 대시보드로 이동합니다.' })
       setAnalyzing(false)
-      // 대시보드로 자동 이동
-      router.push('/')
-    }, 500)
+      // hard navigation — localStorage에서 최신 데이터를 다시 복원
+      window.location.href = '/'
+    }, 600)
   }
 
   function reset() {
