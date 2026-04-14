@@ -1,11 +1,11 @@
 'use client'
 
-import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef } from 'react'
+import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useState } from 'react'
 import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 import { persistData, loadData, clearData } from '@/lib/storage'
 
-export { persistData } // datamanage/page.tsx에서 import용
+export { persistData }
 
 // ── merge ──
 function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
@@ -90,34 +90,48 @@ function reducer(state: AppState, action: Action): AppState {
 }
 
 // ── Context ──
-const AppContext = createContext<{ state: AppState; dispatch: React.Dispatch<Action> } | null>(null)
+const AppContext = createContext<{
+  state: AppState
+  dispatch: React.Dispatch<Action>
+  isReady: boolean  // IndexedDB 복원 완료 여부
+} | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const [isReady, setIsReady] = useState(false)
   const hydrated = useRef(false)
 
-  // 마운트 시 IndexedDB에서 복원
+  // 마운트 시 IndexedDB에서 복원 — 완료 후 isReady = true
   useEffect(() => {
     if (hydrated.current) return
     hydrated.current = true
+
     loadData().then(saved => {
-      if (!saved?.hasData) return
-      const t = new Date(); t.setHours(0,0,0,0)
-      dispatch({
-        type: 'HYDRATE',
-        payload: {
-          masterData: saved.masterData || [],
-          salesData:  saved.salesData  || [],
-          ordersData: saved.ordersData || [],
-          supplyData: saved.supplyData || [],
-          hasData:    true,
-          dateRange:  getPresetRange(saved.dateRangePreset || 'total', t),
-        },
-      })
+      if (saved?.hasData) {
+        const t = new Date(); t.setHours(0,0,0,0)
+        dispatch({
+          type: 'HYDRATE',
+          payload: {
+            masterData: saved.masterData || [],
+            salesData:  saved.salesData  || [],
+            ordersData: saved.ordersData || [],
+            supplyData: saved.supplyData || [],
+            hasData:    true,
+            dateRange:  getPresetRange(saved.dateRangePreset || 'total', t),
+          },
+        })
+      }
+      setIsReady(true)  // 복원 완료 (데이터 없어도 true)
+    }).catch(() => {
+      setIsReady(true)  // 에러여도 렌더링은 진행
     })
   }, [])
 
-  return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>
+  return (
+    <AppContext.Provider value={{ state, dispatch, isReady }}>
+      {children}
+    </AppContext.Provider>
+  )
 }
 
 export function useApp() {
