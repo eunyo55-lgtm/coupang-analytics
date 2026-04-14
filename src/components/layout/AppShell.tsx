@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { useApp } from '@/lib/store'
 import Sidebar from '@/components/layout/Sidebar'
-import DateFilterBar from '@/components/layout/DateFilterBar'
 
 // 각 탭 컴포넌트 import
 import DashboardPage from '@/app/_pages/DashboardPage'
@@ -65,7 +64,6 @@ export default function AppShell() {
     <div className="layout">
       <Sidebar currentTab={tab} />
       <div className="main">
-        <DateFilterBar />
         <div className="content">
           <PageComponent />
         </div>

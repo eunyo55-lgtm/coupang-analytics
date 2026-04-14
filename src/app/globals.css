@@ -45,10 +45,10 @@ body {
 
 /* ── Sidebar ── */
 .sb { width: var(--nav); background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; min-height: 100vh; }
-.sb-top { padding: 18px 16px 15px; border-bottom: 1px solid var(--border); }
+.sb-top { padding: 24px 16px 20px; border-bottom: 1px solid var(--border); }
 .sb-logo { display: flex; align-items: center; gap: 10px; }
-.sb-mark { width: 38px; height: 38px; background: var(--blue-bg); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; border: 1.5px solid var(--blue-light); }
-.sb-name { font-size: 14px; font-weight: 800; color: var(--text); letter-spacing: -.3px; line-height: 1.2; }
+.sb-mark { width: 48px; height: 48px; background: var(--blue-bg); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 26px; flex-shrink: 0; border: 1.5px solid var(--blue-light); }
+.sb-name { font-size: 20px; font-weight: 900; color: var(--text); letter-spacing: -.5px; line-height: 1.2; }
 .sb-sec  { padding: 18px 14px 5px; font-size: 10px; font-weight: 700; color: var(--t3); letter-spacing: 1.1px; text-transform: uppercase; }
 .ni { display: flex; align-items: center; gap: 9px; padding: 8px 11px; border-radius: var(--r10); cursor: pointer; color: var(--t2); font-size: 13px; font-weight: 500; margin: 1px 8px; transition: all .12s; text-decoration: none; }
 .ni:hover  { background: var(--bg); color: var(--text); }

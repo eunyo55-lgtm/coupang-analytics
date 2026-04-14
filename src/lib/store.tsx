@@ -1,54 +1,53 @@
 'use client'
 
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useState } from 'react'
-import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult } from '@/types'
+import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult, Product } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
-import { persistData, loadData, clearData } from '@/lib/storage'
+import { persistData, loadData, clearData, PersistedData } from '@/lib/storage'
 
 export { persistData }
 
-// ── merge ──
 function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
   if (!prev.length) return next
   const m = new Map<string, SalesRow>()
   prev.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
   next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
-  return Array.from(m.values()).sort((a, b) => a.date.localeCompare(b.date))
+  return Array.from(m.values()).sort((a,b) => a.date.localeCompare(b.date))
 }
 function mergeRaw(prev: Record<string,unknown>[], next: Record<string,unknown>[]): Record<string,unknown>[] {
   if (!prev.length) return next
-  const k = (r: Record<string,unknown>) =>
-    `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
+  const k = (r: Record<string,unknown>) => `${r['상품명']||r['name']||''}|${r['옵션']||r['option_value']||''}`
   const m = new Map<string, Record<string,unknown>>()
-  prev.forEach(r => m.set(k(r), r))
-  next.forEach(r => m.set(k(r), r))
+  prev.forEach(r => m.set(k(r), r)); next.forEach(r => m.set(k(r), r))
   return Array.from(m.values())
 }
 
-// ── State ──
 export interface AppState {
-  dateRange:   DateRange
-  masterData:  Record<string,unknown>[]
-  salesData:   SalesRow[]
-  ordersData:  Record<string,unknown>[]
-  supplyData:  Record<string,unknown>[]
-  inventory:   InventoryItem[]
-  rankings:    RankingEntry[]
-  adEntries:   AdEntry[]
-  parseLog:    string[]
-  isAnalyzing: boolean
-  hasData:     boolean
+  dateRange:    DateRange
+  masterData:   Record<string,unknown>[]
+  salesData:    SalesRow[]
+  salesData24:  SalesRow[]
+  salesData25:  SalesRow[]
+  products:     Product[]
+  ordersData:   Record<string,unknown>[]
+  supplyData:   Record<string,unknown>[]
+  inventory:    InventoryItem[]
+  rankings:     RankingEntry[]
+  adEntries:    AdEntry[]
+  parseLog:     string[]
+  isAnalyzing:  boolean
+  hasData:      boolean
 }
 
 const today = new Date(); today.setHours(0,0,0,0)
 export const initialState: AppState = {
   dateRange:   getPresetRange('yesterday', today),
-  masterData:  [], salesData:   [], ordersData:  [], supplyData:  [],
+  masterData:  [], salesData:   [], salesData24: [], salesData25: [],
+  products:    [], ordersData:  [], supplyData:  [],
   inventory:   [], rankings:    [], adEntries:   [],
   parseLog:    [], isAnalyzing: false, hasData: false,
 }
 
-// ── Actions ──
 export type Action =
   | { type: 'SET_DATE_RANGE';   payload: DateRange }
   | { type: 'SET_PARSE_RESULT'; payload: ParseResult }
@@ -79,7 +78,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_RANKINGS':    return { ...state, rankings:   action.payload }
     case 'ADD_AD_ENTRY':    return { ...state, adEntries:  [...state.adEntries, action.payload] }
     case 'SET_AD_ENTRIES':  return { ...state, adEntries:  action.payload }
-    case 'DELETE_AD_ENTRY': return { ...state, adEntries:  state.adEntries.filter((_, i) => i !== action.payload) }
+    case 'DELETE_AD_ENTRY': return { ...state, adEntries:  state.adEntries.filter((_,i) => i !== action.payload) }
     case 'APPEND_LOG':      return { ...state, parseLog:   [...state.parseLog, action.payload] }
     case 'SET_ANALYZING':   return { ...state, isAnalyzing: action.payload }
     case 'RESET':
@@ -89,11 +88,10 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-// ── Context ──
 const AppContext = createContext<{
   state: AppState
   dispatch: React.Dispatch<Action>
-  isReady: boolean  // IndexedDB 복원 완료 여부
+  isReady: boolean
 } | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -101,37 +99,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isReady, setIsReady] = useState(false)
   const hydrated = useRef(false)
 
-  // 마운트 시 IndexedDB에서 복원 — 완료 후 isReady = true
   useEffect(() => {
     if (hydrated.current) return
     hydrated.current = true
-
-    loadData().then(saved => {
+    loadData().then((saved: PersistedData | null) => {
       if (saved?.hasData) {
         const t = new Date(); t.setHours(0,0,0,0)
         dispatch({
           type: 'HYDRATE',
           payload: {
-            masterData: saved.masterData || [],
-            salesData:  saved.salesData  || [],
-            ordersData: saved.ordersData || [],
-            supplyData: saved.supplyData || [],
-            hasData:    true,
-            dateRange:  getPresetRange(saved.dateRangePreset || 'total', t),
+            masterData:  saved.masterData  || [],
+            salesData:   saved.salesData   || [],
+            salesData24: saved.salesData24 || [],
+            salesData25: saved.salesData25 || [],
+            products:    saved.products    || [],
+            ordersData:  saved.ordersData  || [],
+            supplyData:  saved.supplyData  || [],
+            hasData:     true,
+            dateRange:   getPresetRange(saved.dateRangePreset || 'yesterday', t),
           },
         })
       }
-      setIsReady(true)  // 복원 완료 (데이터 없어도 true)
-    }).catch(() => {
-      setIsReady(true)  // 에러여도 렌더링은 진행
-    })
+      setIsReady(true)
+    }).catch(() => setIsReady(true))
   }, [])
 
-  return (
-    <AppContext.Provider value={{ state, dispatch, isReady }}>
-      {children}
-    </AppContext.Provider>
-  )
+  return <AppContext.Provider value={{ state, dispatch, isReady }}>{children}</AppContext.Provider>
 }
 
 export function useApp() {

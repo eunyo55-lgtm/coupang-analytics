@@ -114,3 +114,27 @@ export interface Database {
     }
   }
 }
+
+// ── Product (from Supabase products table) ──
+export interface Product {
+  barcode: string
+  name: string
+  optionValue: string
+  cost: number
+  currentStock: number
+  fcStock: number
+  vfStock: number
+  hqStock: number
+  safetyStock: number
+  incomingStock: number
+  season: string
+  imageUrl: string
+}
+
+// ── YoY comparison ──
+export interface YoYData {
+  date: string   // MM-DD
+  qty2024: number
+  qty2025: number
+  qty2026: number
+}
