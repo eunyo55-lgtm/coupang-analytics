@@ -4,7 +4,7 @@ import React, { createContext, useContext, useReducer, ReactNode, useEffect, use
 import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 
-const KEY = 'ca_v6'
+const KEY = 'ca_v7'
 
 // ── 저장/로드 ──
 export function saveToLS(data: {
