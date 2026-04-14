@@ -1,174 +1,112 @@
 'use client'
 
-import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useCallback } from 'react'
-import type {
-  DateRange, SalesRow, InventoryItem,
-  RankingEntry, AdEntry, ParseResult
-} from '@/types'
+import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef } from 'react'
+import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry, ParseResult } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 
-// ── localStorage ──
-const KEY = 'ca_v4'
+const KEY = 'ca_v5'
 
-function save(state: AppState) {
+function save(s: AppState) {
+  if (typeof window === 'undefined') return
   try {
-    const s = JSON.stringify({
-      masterData: state.masterData,
-      salesData:  state.salesData,
-      ordersData: state.ordersData,
-      supplyData: state.supplyData,
-      hasData:    true,
-    })
-    if (s.length < 4_500_000) localStorage.setItem(KEY, s)
-    else {
-      const half = Math.floor(state.salesData.length / 2)
-      localStorage.setItem(KEY, JSON.stringify({
-        masterData: state.masterData,
-        salesData:  state.salesData.slice(-half),
-        ordersData: state.ordersData,
-        supplyData: state.supplyData,
-        hasData:    true,
-      }))
-    }
-    console.log('[CA] saved', { sales: state.salesData.length, master: state.masterData.length })
-  } catch (e) { console.warn('[CA] save error', e) }
+    const p = { masterData:s.masterData, salesData:s.salesData, ordersData:s.ordersData, supplyData:s.supplyData, hasData:true }
+    const str = JSON.stringify(p)
+    localStorage.setItem(KEY, str.length < 4_500_000 ? str : (() => { p.salesData = s.salesData.slice(-Math.floor(s.salesData.length/2)); return JSON.stringify(p) })())
+    console.log('[CA] saved', s.salesData.length, 'sales rows')
+  } catch(e) { console.warn('[CA] save failed', e) }
 }
 
-function load(): Partial<AppState> | null {
-  try {
-    const raw = localStorage.getItem(KEY)
-    if (!raw) return null
-    const d = JSON.parse(raw)
-    console.log('[CA] loaded', { sales: d.salesData?.length, master: d.masterData?.length })
-    return d
-  } catch { return null }
+function load() {
+  try { const r = localStorage.getItem(KEY); return r ? JSON.parse(r) as Partial<AppState> : null } catch { return null }
 }
 
-// ── merge ──
-function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
+function mergeSales(prev: SalesRow[], next: SalesRow[]) {
   if (!prev.length) return next
-  const m = new Map<string, SalesRow>()
+  const m = new Map<string,SalesRow>()
   prev.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
   next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
-  return Array.from(m.values()).sort((a, b) => a.date.localeCompare(b.date))
+  return Array.from(m.values()).sort((a,b) => a.date.localeCompare(b.date))
 }
-function mergeRaw(prev: Record<string, unknown>[], next: Record<string, unknown>[]) {
+function mergeRaw(prev: Record<string,unknown>[], next: Record<string,unknown>[]) {
   if (!prev.length) return next
-  const key = (r: Record<string, unknown>) =>
-    `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
-  const m = new Map<string, Record<string, unknown>>()
-  prev.forEach(r => m.set(key(r), r))
-  next.forEach(r => m.set(key(r), r))
+  const k = (r: Record<string,unknown>) => `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
+  const m = new Map<string,Record<string,unknown>>()
+  prev.forEach(r => m.set(k(r),r)); next.forEach(r => m.set(k(r),r))
   return Array.from(m.values())
 }
 
-// ── State ──
 export interface AppState {
-  dateRange:   DateRange
-  masterData:  Record<string, unknown>[]
-  salesData:   SalesRow[]
-  ordersData:  Record<string, unknown>[]
-  supplyData:  Record<string, unknown>[]
-  inventory:   InventoryItem[]
-  rankings:    RankingEntry[]
-  adEntries:   AdEntry[]
-  parseLog:    string[]
-  isAnalyzing: boolean
-  hasData:     boolean
+  dateRange:DateRange; masterData:Record<string,unknown>[]; salesData:SalesRow[]
+  ordersData:Record<string,unknown>[]; supplyData:Record<string,unknown>[]
+  inventory:InventoryItem[]; rankings:RankingEntry[]; adEntries:AdEntry[]
+  parseLog:string[]; isAnalyzing:boolean; hasData:boolean
 }
 
 const today = new Date(); today.setHours(0,0,0,0)
-const initialState: AppState = {
-  dateRange: getPresetRange('yesterday', today),
-  masterData: [], salesData: [], ordersData: [], supplyData: [],
-  inventory: [], rankings: [], adEntries: [],
-  parseLog: [], isAnalyzing: false, hasData: false,
+const init: AppState = {
+  dateRange:getPresetRange('yesterday',today), masterData:[], salesData:[], ordersData:[], supplyData:[],
+  inventory:[], rankings:[], adEntries:[], parseLog:[], isAnalyzing:false, hasData:false,
 }
 
-// ── Actions ──
 export type Action =
-  | { type: 'SET_DATE_RANGE';   payload: DateRange }
-  | { type: 'SET_PARSE_RESULT'; payload: ParseResult }
-  | { type: 'HYDRATE';          payload: Partial<AppState> }
-  | { type: 'SET_INVENTORY';    payload: InventoryItem[] }
-  | { type: 'ADD_RANKING';      payload: RankingEntry }
-  | { type: 'SET_RANKINGS';     payload: RankingEntry[] }
-  | { type: 'ADD_AD_ENTRY';     payload: AdEntry }
-  | { type: 'SET_AD_ENTRIES';   payload: AdEntry[] }
-  | { type: 'DELETE_AD_ENTRY';  payload: number }
-  | { type: 'APPEND_LOG';       payload: string }
-  | { type: 'SET_ANALYZING';    payload: boolean }
-  | { type: 'RESET' }
+  | {type:'SET_DATE_RANGE';payload:DateRange} | {type:'SET_PARSE_RESULT';payload:ParseResult}
+  | {type:'HYDRATE';payload:Partial<AppState>} | {type:'SET_INVENTORY';payload:InventoryItem[]}
+  | {type:'ADD_RANKING';payload:RankingEntry} | {type:'SET_RANKINGS';payload:RankingEntry[]}
+  | {type:'ADD_AD_ENTRY';payload:AdEntry} | {type:'SET_AD_ENTRIES';payload:AdEntry[]}
+  | {type:'DELETE_AD_ENTRY';payload:number} | {type:'APPEND_LOG';payload:string}
+  | {type:'SET_ANALYZING';payload:boolean} | {type:'RESET'}
 
-function reducer(state: AppState, action: Action): AppState {
-  switch (action.type) {
-    case 'SET_DATE_RANGE':   return { ...state, dateRange: action.payload }
-    case 'HYDRATE':          return { ...state, ...action.payload }
-    case 'SET_PARSE_RESULT': {
-      const { key, data } = action.payload
-      if (key === 'sales')  return { ...state, salesData:  mergeSales(state.salesData, data as unknown as SalesRow[]), hasData: true }
-      if (key === 'master') return { ...state, masterData: mergeRaw(state.masterData, data), hasData: true }
-      if (key === 'orders') return { ...state, ordersData: mergeRaw(state.ordersData, data), hasData: true }
-      return { ...state, supplyData: data, hasData: true }
+function reducer(s: AppState, a: Action): AppState {
+  switch(a.type) {
+    case 'SET_DATE_RANGE':  return {...s,dateRange:a.payload}
+    case 'HYDRATE':         return {...s,...a.payload}
+    case 'SET_PARSE_RESULT':{
+      const {key,data}=a.payload
+      if(key==='sales')  return {...s,salesData:mergeSales(s.salesData,data as unknown as SalesRow[]),hasData:true}
+      if(key==='master') return {...s,masterData:mergeRaw(s.masterData,data),hasData:true}
+      if(key==='orders') return {...s,ordersData:mergeRaw(s.ordersData,data),hasData:true}
+      return {...s,supplyData:data,hasData:true}
     }
-    case 'SET_INVENTORY':    return { ...state, inventory: action.payload }
-    case 'ADD_RANKING':      return { ...state, rankings: [action.payload, ...state.rankings] }
-    case 'SET_RANKINGS':     return { ...state, rankings: action.payload }
-    case 'ADD_AD_ENTRY':     return { ...state, adEntries: [...state.adEntries, action.payload] }
-    case 'SET_AD_ENTRIES':   return { ...state, adEntries: action.payload }
-    case 'DELETE_AD_ENTRY':  return { ...state, adEntries: state.adEntries.filter((_, i) => i !== action.payload) }
-    case 'APPEND_LOG':       return { ...state, parseLog: [...state.parseLog, action.payload] }
-    case 'SET_ANALYZING':    return { ...state, isAnalyzing: action.payload }
-    case 'RESET':
-      localStorage.removeItem(KEY)
-      return { ...initialState, dateRange: state.dateRange }
-    default: return state
+    case 'SET_INVENTORY':  return {...s,inventory:a.payload}
+    case 'ADD_RANKING':    return {...s,rankings:[a.payload,...s.rankings]}
+    case 'SET_RANKINGS':   return {...s,rankings:a.payload}
+    case 'ADD_AD_ENTRY':   return {...s,adEntries:[...s.adEntries,a.payload]}
+    case 'SET_AD_ENTRIES': return {...s,adEntries:a.payload}
+    case 'DELETE_AD_ENTRY':return {...s,adEntries:s.adEntries.filter((_,i)=>i!==a.payload)}
+    case 'APPEND_LOG':     return {...s,parseLog:[...s.parseLog,a.payload]}
+    case 'SET_ANALYZING':  return {...s,isAnalyzing:a.payload}
+    case 'RESET':          return {...init,dateRange:s.dateRange}
+    default: return s
   }
 }
 
-// ── Context ──
-const AppContext = createContext<{
-  state: AppState
-  dispatch: React.Dispatch<Action>
-} | null>(null)
+const Ctx = createContext<{state:AppState;dispatch:React.Dispatch<Action>}|null>(null)
 
-export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(reducer, initialState)
-  const stateRef = useRef(state)
-  const hydrated = useRef(false)
-
-  // 항상 최신 state를 ref에 동기화
-  useEffect(() => { stateRef.current = state }, [state])
+export function AppProvider({children}:{children:ReactNode}) {
+  const [state, dispatch] = useReducer(reducer, init)
+  const savedCount = useRef(0) // 복원으로 인한 첫 save 스킵용
 
   // 마운트 시 복원
   useEffect(() => {
-    if (hydrated.current) return
-    hydrated.current = true
-    const saved = load()
-    if (saved?.hasData) rawDispatch({ type: 'HYDRATE', payload: saved })
-  }, [])
-
-  // dispatch 래퍼: SET_PARSE_RESULT 시 실행 후 localStorage 저장
-  const dispatch = useCallback((action: Action) => {
-    rawDispatch(action)
-    if (action.type === 'SET_PARSE_RESULT') {
-      // 다음 렌더 후 저장 (state 업데이트 반영 후)
-      setTimeout(() => save(stateRef.current), 100)
-    }
-    if (action.type === 'RESET') {
-      localStorage.removeItem(KEY)
+    const d = load()
+    if (d?.hasData) {
+      savedCount.current = 1 // 복원 직후 save 1회 스킵
+      dispatch({type:'HYDRATE', payload:d})
     }
   }, [])
 
-  return (
-    <AppContext.Provider value={{ state, dispatch }}>
-      {children}
-    </AppContext.Provider>
-  )
+  // state 변경마다 저장 (복원 직후 1회 스킵)
+  useEffect(() => {
+    if (!state.hasData) return
+    if (savedCount.current === 1) { savedCount.current = 0; return }
+    save(state)
+  }, [state]) // eslint-disable-line
+
+  return <Ctx.Provider value={{state,dispatch}}>{children}</Ctx.Provider>
 }
 
 export function useApp() {
-  const ctx = useContext(AppContext)
-  if (!ctx) throw new Error('useApp must be used within AppProvider')
-  return ctx
+  const c = useContext(Ctx)
+  if(!c) throw new Error('useApp must be within AppProvider')
+  return c
 }
