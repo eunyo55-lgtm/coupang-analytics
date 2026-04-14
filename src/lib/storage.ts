@@ -12,7 +12,7 @@ export interface PersistedData {
   dateRangePreset?: string
   hasData: boolean
   // RPC 집계 결과
-  stockSummary: { total_fc: number; total_vf: number; total_hq: number; grand_total: number; stock_value: number }
+  stockSummary: { total_stock: number; stock_value: number }
   daily26: { date: string; qty: number }[]
   daily25: { date: string; qty: number }[]
   daily24: { date: string; qty: number }[]
@@ -41,7 +41,7 @@ export async function loadData(): Promise<PersistedData | null> {
     if (daily25Res.error) console.warn('[storage] daily25:', daily25Res.error.message)
     if (daily24Res.error) console.warn('[storage] daily24:', daily24Res.error.message)
 
-    const stockSummary = stockRes.data?.[0] ?? { total_fc: 0, total_vf: 0, total_hq: 0, grand_total: 0, stock_value: 0 }
+    const stockSummary = stockRes.data?.[0] ?? { total_stock: 0, stock_value: 0 }
 
     const daily26 = (daily26Res.data || []).map((r: Record<string,unknown>) => ({
       date: String(r['sale_date']), qty: Number(r['total_qty'])

@@ -83,7 +83,7 @@ export default function DashboardPage() {
   const [topTo, setTopTo] = useState(latestDate || toYMD(new Date()))
 
   const [topProducts,  setTopProducts]  = useState<{product_name:string,image_url:string,total_qty:number,total_revenue:number}[]>([])
-  const [topStock,     setTopStock]     = useState<{product_name:string,image_url:string,total_fc:number,total_vf:number,total_hq:number,grand_total:number,stock_value:number}[]>([])
+  const [topStock,     setTopStock]     = useState<{product_name:string,image_url:string,total_stock:number,stock_value:number}[]>([])
   const [loadingTop,   setLoadingTop]   = useState(false)
 
   // ── latestDate 확정되면 날짜 동기화 ──
@@ -191,8 +191,8 @@ export default function DashboardPage() {
       color: 'var(--green)',
     },
     {
-      label: '전일 재고', sub: `FC+VF+HQ (${latestDate})`,
-      qty: s.grand_total || null, rev: s.stock_value || null,
+      label: '전일 재고', sub: `쿠팡 재고 (${latestDate})`,
+      qty: s.total_stock || null, rev: s.stock_value || null,
       yoy: null, color: 'var(--amber)',
       isStock: true,
     },
@@ -279,18 +279,17 @@ export default function DashboardPage() {
         <div className="card">
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">🥇</div><div><div className="ch-title">판매 TOP 10</div><div className="ch-sub">상품명 기준 바코드 합산</div></div></div>
-          </div>
-          {/* 달력 필터만 */}
-          <div style={{ padding:'4px 14px 4px', display:'flex', alignItems:'center', gap:6 }}>
-            <input type="date" value={topFrom}
-              onChange={e => setTopFrom(e.target.value)}
-              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }}
-            />
-            <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
-            <input type="date" value={topTo}
-              onChange={e => setTopTo(e.target.value)}
-              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }}
-            />
+            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+              <input type="date" value={topFrom}
+                onChange={e => setTopFrom(e.target.value)}
+                style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }}
+              />
+              <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
+              <input type="date" value={topTo}
+                onChange={e => setTopTo(e.target.value)}
+                style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }}
+              />
+            </div>
           </div>
           <div className="cb" style={{ padding:'4px 14px 10px' }}>
             {loadingTop ? (
@@ -329,7 +328,7 @@ export default function DashboardPage() {
           <div className="cb" style={{ padding:'8px 14px 10px' }}>
             {topStock.length > 0 ? (
               <div className="tw"><table>
-                <thead><tr><th>#</th><th colSpan={2}>상품명</th><th>FC</th><th>VF</th><th>합계</th><th>재고액</th></tr></thead>
+                <thead><tr><th>#</th><th colSpan={2}>상품명</th><th>재고량</th><th>재고액</th></tr></thead>
                 <tbody>
                   {topStock.map((p, i) => (
                     <tr key={i}>
@@ -341,10 +340,8 @@ export default function DashboardPage() {
                         }
                       </td>
                       <td style={{ fontWeight:700, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.product_name}</td>
-                      <td style={{ fontSize:11 }}>{fmt(p.total_fc)}</td>
-                      <td style={{ fontSize:11 }}>{fmt(p.total_vf)}</td>
-                      <td style={{ fontWeight:800, color:'var(--green)' }}>{fmt(p.grand_total)}</td>
-                      <td style={{ fontSize:10, color:'var(--blue)' }}>{fmt(p.stock_value)}</td>
+                      <td style={{ fontWeight:800, color:'var(--green)' }}>{fmt(p.total_stock)}</td>
+                      <td style={{ fontWeight:800, color:'var(--blue)', fontSize:11 }}>{fmt(p.stock_value)}</td>
                     </tr>
                   ))}
                 </tbody>

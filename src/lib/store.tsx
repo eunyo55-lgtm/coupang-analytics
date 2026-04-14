@@ -32,7 +32,7 @@ export interface AppState {
 }
 
 const today = new Date(); today.setHours(0,0,0,0)
-const emptyStock = { total_fc: 0, total_vf: 0, total_hq: 0, grand_total: 0, stock_value: 0 }
+const emptyStock = { total_stock: 0, stock_value: 0 }
 
 export const initialState: AppState = {
   dateRange:      getPresetRange('yesterday', today),
