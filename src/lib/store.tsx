@@ -7,58 +7,46 @@ import type {
 } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 
-// ── localStorage 유틸 ──
-const STORAGE_KEY = 'coupang_analytics_v2'
+const STORAGE_KEY = 'ca_data_v3'
 
-function saveToStorage(state: AppState) {
+// ── 즉시 저장 (dispatch 후 바로 호출) ──
+export function persistState(state: AppState) {
+  if (typeof window === 'undefined') return
   try {
-    const toSave = {
+    const payload = {
       masterData: state.masterData,
       salesData:  state.salesData,
       ordersData: state.ordersData,
       supplyData: state.supplyData,
       hasData:    state.hasData,
     }
-    const str = JSON.stringify(toSave)
+    const str = JSON.stringify(payload)
     if (str.length < 4_500_000) {
       localStorage.setItem(STORAGE_KEY, str)
     } else {
-      // 용량 초과 시 판매 데이터를 최신 절반만 유지
-      toSave.salesData = state.salesData.slice(-Math.floor(state.salesData.length / 2))
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave))
+      payload.salesData = state.salesData.slice(-Math.floor(state.salesData.length / 2))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     }
-    console.log('[store] saved to localStorage:', {
-      sales: toSave.salesData.length,
-      master: toSave.masterData.length,
-    })
   } catch (e) {
-    console.warn('[store] localStorage save failed:', e)
+    console.warn('[store] save failed', e)
   }
 }
 
-function loadFromStorage(): Partial<AppState> | null {
+export function loadPersistedState(): Partial<AppState> | null {
+  if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw)
-    console.log('[store] loaded from localStorage:', {
-      sales: parsed.salesData?.length,
-      master: parsed.masterData?.length,
-    })
-    return parsed
+    return JSON.parse(raw)
   } catch { return null }
 }
 
-// ── 누적 merge 헬퍼 ──
+// ── merge 헬퍼 ──
 function mergeSales(existing: SalesRow[], incoming: SalesRow[]): SalesRow[] {
   if (!existing.length) return incoming
   const map = new Map<string, SalesRow>()
-  existing.forEach(r => {
-    map.set(`${r.date}||${r.productName}||${r.option}`, r)
-  })
-  incoming.forEach(r => {
-    map.set(`${r.date}||${r.productName}||${r.option}`, r)
-  })
+  existing.forEach(r => map.set(`${r.date}||${r.productName}||${r.option}`, r))
+  incoming.forEach(r => map.set(`${r.date}||${r.productName}||${r.option}`, r))
   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
 }
 
@@ -67,19 +55,16 @@ function mergeByName(
   incoming: Record<string, unknown>[]
 ): Record<string, unknown>[] {
   if (!existing.length) return incoming
-  const nameKey = (r: Record<string, unknown>) => {
-    const name   = r['상품명'] || r['productName'] || r['item'] || r['노출상품명'] || ''
-    const option = r['옵션']  || r['option']      || r['옵션명'] || ''
-    return `${name}||${option}`
-  }
+  const key = (r: Record<string, unknown>) =>
+    `${r['상품명'] || r['productName'] || r['item'] || ''}||${r['옵션'] || r['option'] || ''}`
   const map = new Map<string, Record<string, unknown>>()
-  existing.forEach(r => map.set(nameKey(r), r))
-  incoming.forEach(r => map.set(nameKey(r), r))
+  existing.forEach(r => map.set(key(r), r))
+  incoming.forEach(r => map.set(key(r), r))
   return Array.from(map.values())
 }
 
 // ── State ──
-interface AppState {
+export interface AppState {
   dateRange:   DateRange
   masterData:  Record<string, unknown>[]
   salesData:   SalesRow[]
@@ -96,7 +81,7 @@ interface AppState {
 const today = new Date()
 today.setHours(0, 0, 0, 0)
 
-const initialState: AppState = {
+export const initialState: AppState = {
   dateRange:   getPresetRange('yesterday', today),
   masterData:  [],
   salesData:   [],
@@ -111,45 +96,44 @@ const initialState: AppState = {
 }
 
 // ── Actions ──
-type Action =
-  | { type: 'SET_DATE_RANGE';  payload: DateRange }
-  | { type: 'SET_PARSE_RESULT'; payload: ParseResult }
-  | { type: 'LOAD_FROM_STORAGE'; payload: Partial<AppState> }
-  | { type: 'SET_INVENTORY';   payload: InventoryItem[] }
-  | { type: 'ADD_RANKING';     payload: RankingEntry }
-  | { type: 'SET_RANKINGS';    payload: RankingEntry[] }
-  | { type: 'ADD_AD_ENTRY';    payload: AdEntry }
-  | { type: 'SET_AD_ENTRIES';  payload: AdEntry[] }
-  | { type: 'DELETE_AD_ENTRY'; payload: number }
-  | { type: 'APPEND_LOG';      payload: string }
-  | { type: 'SET_ANALYZING';   payload: boolean }
+export type Action =
+  | { type: 'SET_DATE_RANGE';     payload: DateRange }
+  | { type: 'SET_PARSE_RESULT';   payload: ParseResult }
+  | { type: 'HYDRATE';            payload: Partial<AppState> }
+  | { type: 'SET_INVENTORY';      payload: InventoryItem[] }
+  | { type: 'ADD_RANKING';        payload: RankingEntry }
+  | { type: 'SET_RANKINGS';       payload: RankingEntry[] }
+  | { type: 'ADD_AD_ENTRY';       payload: AdEntry }
+  | { type: 'SET_AD_ENTRIES';     payload: AdEntry[] }
+  | { type: 'DELETE_AD_ENTRY';    payload: number }
+  | { type: 'APPEND_LOG';         payload: string }
+  | { type: 'SET_ANALYZING';      payload: boolean }
   | { type: 'RESET' }
 
-function reducer(state: AppState, action: Action): AppState {
+export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'SET_DATE_RANGE':
       return { ...state, dateRange: action.payload }
 
-    case 'LOAD_FROM_STORAGE':
+    case 'HYDRATE':
       return { ...state, ...action.payload }
 
     case 'SET_PARSE_RESULT': {
       const { key, data } = action.payload
+      let next: AppState
       if (key === 'sales') {
         const incoming = data as unknown as SalesRow[]
-        return { ...state, salesData: mergeSales(state.salesData, incoming), hasData: true }
+        next = { ...state, salesData: mergeSales(state.salesData, incoming), hasData: true }
+      } else if (key === 'master') {
+        next = { ...state, masterData: mergeByName(state.masterData, data), hasData: true }
+      } else if (key === 'orders') {
+        next = { ...state, ordersData: mergeByName(state.ordersData, data), hasData: true }
+      } else {
+        next = { ...state, supplyData: data, hasData: true }
       }
-      if (key === 'master') {
-        return { ...state, masterData: mergeByName(state.masterData, data), hasData: true }
-      }
-      if (key === 'orders') {
-        return { ...state, ordersData: mergeByName(state.ordersData, data), hasData: true }
-      }
-      if (key === 'supply') {
-        // 공급 중 수량은 항상 교체
-        return { ...state, supplyData: data, hasData: true }
-      }
-      return { ...state, hasData: true }
+      // 즉시 저장
+      persistState(next)
+      return next
     }
 
     case 'SET_INVENTORY':
@@ -177,7 +161,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, isAnalyzing: action.payload }
 
     case 'RESET': {
-      localStorage.removeItem(STORAGE_KEY)
+      if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
       return { ...initialState, dateRange: state.dateRange }
     }
 
@@ -194,26 +178,17 @@ const AppContext = createContext<{
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
-  const isFirstRender = useRef(true)
+  const hydrated = useRef(false)
 
-  // 마운트 시 localStorage에서 데이터 복원 (클라이언트 전용)
+  // 클라이언트 마운트 후 1회만 복원
   useEffect(() => {
-    const saved = loadFromStorage()
-    if (saved && saved.hasData) {
-      dispatch({ type: 'LOAD_FROM_STORAGE', payload: saved })
+    if (hydrated.current) return
+    hydrated.current = true
+    const saved = loadPersistedState()
+    if (saved?.hasData) {
+      dispatch({ type: 'HYDRATE', payload: saved })
     }
   }, [])
-
-  // 데이터 변경 시 localStorage에 저장 (첫 렌더 이후부터)
-  useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-      return
-    }
-    if (state.hasData) {
-      saveToStorage(state)
-    }
-  }, [state.masterData, state.salesData, state.ordersData, state.supplyData, state.hasData]) // eslint-disable-line
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
