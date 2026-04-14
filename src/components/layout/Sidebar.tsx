@@ -1,80 +1,66 @@
 'use client'
 
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { formatKorean } from '@/lib/dateUtils'
 import { useApp } from '@/lib/store'
+import { formatKorean } from '@/lib/dateUtils'
 
-const NAV_ITEMS = [
-  { section: '메인', items: [
-    { path: '/',          icon: '🏠', label: '대시보드' },
-    { path: '/sales',     icon: '📊', label: '판매 현황' },
-    { path: '/inventory', icon: '📦', label: '재고 현황' },
-    { path: '/supply',    icon: '🚚', label: '공급 현황' },
+const NAV = [
+  { group: '메인', items: [
+    { key: 'dashboard', label: '대시보드', icon: '🏠', path: '/' },
+    { key: 'sales',     label: '판매 현황', icon: '📊', path: '/sales' },
+    { key: 'inventory', label: '재고 현황', icon: '📦', path: '/inventory' },
+    { key: 'supply',    label: '공급 현황', icon: '🚚', path: '/supply' },
   ]},
-  { section: '채널 분석', items: [
-    { path: '/ranking',   icon: '🏆', label: '랭킹 현황',  badge: 'rank' },
-    { path: '/ad',        icon: '📣', label: '광고 현황' },
+  { group: '채널 분석', items: [
+    { key: 'ranking', label: '랭킹 현황', icon: '🏆', path: '/ranking' },
+    { key: 'ad',      label: '광고 현황', icon: '📢', path: '/ad' },
   ]},
-  { section: '관리', items: [
-    { path: '/datamanage', icon: '🗂️', label: '데이터 관리', badge: 'alert' },
+  { group: '관리', items: [
+    { key: 'datamanage', label: '데이터 관리', icon: '🗂️', path: '/datamanage' },
   ]},
 ]
 
-export default function Sidebar() {
-  const pathname = usePathname()
+export default function Sidebar({ currentTab }: { currentTab?: string }) {
   const { state } = useApp()
   const today = new Date()
 
-  const alertCount = state.inventory.filter(i => i.status === 'danger').length
-  const rankCount  = state.rankings.length
-
-  function getBadge(key?: string) {
-    if (key === 'rank'  && rankCount  > 0) return rankCount
-    if (key === 'alert' && alertCount > 0) return alertCount
-    return null
+  function go(path: string) {
+    const nav = (window as unknown as Record<string,unknown>).navigateTo as ((p:string)=>void) | undefined
+    if (nav) nav(path)
+    else window.location.href = path
   }
 
   return (
-    <aside className="sb">
-      <div className="sb-top">
-        <div className="sb-logo">
-          <div className="sb-mark">🚀</div>
-          <div>
-            <div className="sb-name">Coupang<br />Analytics</div>
-          </div>
+    <aside className="sidebar">
+      <div className="sb-logo" onClick={() => go('/')} style={{ cursor:'pointer' }}>
+        <div className="sb-logo-icon">🛒</div>
+        <div className="sb-logo-text">
+          <div className="sb-logo-title">Coupang</div>
+          <div className="sb-logo-sub">Analytics</div>
         </div>
       </div>
 
-      {NAV_ITEMS.map(group => (
-        <div key={group.section}>
-          <div className="sb-sec">{group.section}</div>
-          {group.items.map(item => {
-            const badge = getBadge(item.badge)
-            const isActive = pathname === item.path
-            return (
-              <Link key={item.path} href={item.path} className={`ni${isActive ? ' active' : ''}`}>
-                <div className="ni-ico">{item.icon}</div>
-                <span className="ni-lbl">{item.label}</span>
-                {badge !== null && (
-                  <span className={`nb ${item.badge === 'alert' ? 'nb-r' : 'nb-b'}`}>
-                    {badge}
-                  </span>
-                )}
-              </Link>
-            )
-          })}
-        </div>
-      ))}
-
-      <div className="sb-foot">
-        <div className="sb-datecard">
-          <span style={{ fontSize: 14 }}>📅</span>
-          <div>
-            <div className="sb-date-text">{formatKorean(today)}</div>
-            <div className="sb-date-sub">오늘 기준</div>
+      <nav className="sb-nav">
+        {NAV.map(({ group, items }) => (
+          <div key={group} className="sb-group">
+            <div className="sb-group-label">{group}</div>
+            {items.map(({ key, label, icon, path }) => {
+              const active = currentTab === key || (currentTab === 'dashboard' && key === 'dashboard')
+              return (
+                <button key={key} className={`sb-item${active ? ' active' : ''}`} onClick={() => go(path)}>
+                  <span className="sb-item-icon">{icon}</span>
+                  <span className="sb-item-label">{label}</span>
+                </button>
+              )
+            })}
           </div>
-          <div className="sb-dot" />
+        ))}
+      </nav>
+
+      <div className="sb-footer">
+        <div className="sb-date">{formatKorean(today)}</div>
+        <div className="sb-status">
+          <span className={`sb-dot ${state.hasData ? 'on' : 'off'}`} />
+          {state.hasData ? '오늘 기준' : '데이터 없음'}
         </div>
       </div>
     </aside>
