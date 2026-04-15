@@ -52,9 +52,9 @@ export default function DataManagePage() {
         const normalized = normalizeSalesData(result.data)
         result.data = normalized as unknown as Record<string,unknown>[]
 
-        // quantity > 0 인 행만 Supabase daily_sales 에 upsert
-        const upsertRows: DailySalesRow[] = normalized
-          .filter(r => r.qty > 0 && !r.isReturn)
+ // 전체 행 upsert (qty=0 포함) — 재고 데이터 완전 저장
+const upsertRows: DailySalesRow[] = normalized
+  .filter(r => !r.isReturn)
           .map(r => ({
             date: r.date,
             barcode: r.option,   // normalizeSalesData: option 필드에 barcode 저장
