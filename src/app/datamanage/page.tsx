@@ -11,9 +11,9 @@ import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
   { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터', sub: '상품코드 · 상품명 · 옵션 · 재고' },
-  { key: 'sales' as const,  icon: '🛒', title: '쿠팡 판매 데이터',    sub: '판매량 · 금액 · 날짜' },
-  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서',          sub: '발주번호 · 수량' },
-  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',         sub: '입고 대기 수량 · 예정일' },
+  { key: 'sales' as const, icon: '🛒', title: '쿠팡 판매 데이터', sub: '판매량 · 금액 · 날짜' },
+  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서', sub: '발주번호 · 수량' },
+  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량', sub: '입고 대기 수량 · 예정일' },
 ]
 
 function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
@@ -51,23 +51,82 @@ export default function DataManagePage() {
       if (key === 'sales') {
         const normalized = normalizeSalesData(result.data)
         result.data = normalized as unknown as Record<string,unknown>[]
+        const aggMap = new Map<string, DailySalesRow>()
+        normalized
+          .filter(r => !r.isReturn)
+          .forEach(r => {
+            const k = `${r.date}|${r.option}`
+            const stock = (r as SalesRow & { stock: number }).stock || 0
+            if (!aggMap.has(k)) {
+              aggMap.set(k, { date: r.date, barcode: r.option, quantity: r.qty, stock, cost: 0 })
+            } else {
+              const e = aggMap.get(k)!
+              e.quantity += r.qty
+              e.stock += stock
+            }
+          })
+        const upsertRows: DailySalesRow[] = Array.from(aggMap.values())
+        if (upsertRows.length > 0) {
+          const upsertResult = await upsertDailySales(upsertRows)
+          if (upsertResult.error) {
+            dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패: ${upsertResult.error}` })
+          } else {
+            dispatch({ type: 'APPEND_LOG', payload: `✅ Supabase 저장 완료: ${upsertRows.length}건` })
+          }
+        }
+        dispatch({ type: 'HYDRATE', payload: {
+          salesData: mergeSales(state.salesData, normalized),
+          hasData: true,
+        }})
+      } else if (key === 'master') {
+        dispatch({ type: 'HYDRATE', payload: { masterData: mergeRaw(state.masterData, result.data), hasData: true } })
+      } else if (key === 'orders') {
+        dispatch({ type: 'HYDRATE', payload: { ordersData: mergeRaw(state.ordersData, result.data), hasData: true } })
+      } else if (key === 'supply') {
+        dispatch({ type: 'HYDRATE', payload: { supplyData: mergeRaw(state.supplyData, result.data), hasData: true } })
+      }
+      dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.data.length}행 로드` })
+      setFileNames(f => ({ ...f, [key]: file.name }))
+      setDone(d => ({ ...d, [key]: true }))
+    }
+    setUploading(u => ({ ...u, [key]: false }))
+  }
 
-         // 날짜+바코드별 집계: qty와 stock을 SUM (같은 바코드가 FC/VF 등 여러 행으로 존재)
-                const aggMap = new Map<string, DailySalesRow>()
-                normalized
-                  .filter(r => !r.isReturn)
-                  .forEach(r => {
-                                const key = `${r.date}|${r.option}`
-                                const stock = (r as SalesRow & { stock: number }).stock || 0
-                                if (!aggMap.has(key)) {
-                                                aggMap.set(key, { date: r.date, barcode: r.option, quantity: r.qty, stock, cost: 0 })
-                                } else {
-                                                const e = aggMap.get(key)!
-                                                e.quantity += r.qty
-                                                e.stock += stock
-                                }
-                  })
-                const upsertRows: DailySalesRow[] = Array.from(aggMap.values())
+  function reset() {
+    dispatch({ type: 'RESET' })
+    setFileNames({})
+    setDone({})
+  }
+
+  async function runAnalysis() {
+    setAnalyzing(true)
+    dispatch({ type: 'SET_ANALYZING', payload: true })
+    try {
+      await persistData({
+        salesData: state.salesData,
+        salesData24: [] as never[],
+        salesData25: [] as never[],
+        masterData: state.masterData,
+        products: [] as never[],
+        ordersData: state.ordersData,
+        supplyData: state.supplyData,
+        hasData: true,
+        dateRangePreset: 'yesterday',
+        stockSummary: state.stockSummary,
+        daily26: state.daily26,
+        daily25: state.daily25,
+        daily24: state.daily24,
+        latestSaleDate: state.latestSaleDate,
+      })
+      dispatch({ type: 'HYDRATE', payload: { hasData: true, dateRange: getPresetRange('yesterday', new Date()) } })
+      dispatch({ type: 'APPEND_LOG', payload: '✅ 분석 완료! 대시보드로 이동합니다.' })
+      router.push('/')
+    } catch (e) {
+      dispatch({ type: 'APPEND_LOG', payload: `❌ 분석 실패: ${e}` })
+    }
+    setAnalyzing(false)
+    dispatch({ type: 'SET_ANALYZING', payload: false })
+  }
 
   const hasAny = state.masterData.length > 0 || state.salesData.length > 0
   const salesDates = state.salesData.map(r=>r.date).filter(Boolean).sort()
@@ -170,4 +229,4 @@ export default function DataManagePage() {
       </div>
     </div>
   )
-          }
+}
