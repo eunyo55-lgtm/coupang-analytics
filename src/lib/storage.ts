@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase'
 
-const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
 
 export interface PersistedData {
   masterData:   Record<string, unknown>[]
