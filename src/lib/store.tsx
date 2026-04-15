@@ -1,7 +1,7 @@
 'use client'
 
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useState } from 'react'
-import type { DateRange, InventoryItem, RankingEntry, AdEntry } from '@/types'
+import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
 import { loadData, clearData, PersistedData } from '@/lib/storage'
 
@@ -20,7 +20,7 @@ export interface AppState {
   supplyData:   Record<string,unknown>[]
   // 레거시 (다른 페이지 호환)
   masterData:   Record<string,unknown>[]
-  salesData:    never[]
+  salesData:    SalesRow[]
   products:     never[]
   // UI
   inventory:    InventoryItem[]
