@@ -53,10 +53,14 @@ async function upsertDailySales(rows: SalesRow[]) {
       },
       body: JSON.stringify(data.slice(i, i + 500)),
     })
-    if (res.ok) total += Math.min(500, data.length - i)
-    else {
-      const err = await res.text().catch(()=>'')
-      console.warn('[upsert] daily_sales error:', res.status, err.substring(0,300))
+    if (res.ok) {
+      total += Math.min(500, data.length - i)
+    } else {
+      const err = await res.text().catch(()=>'unknown error')
+      const errMsg = err.substring(0, 200)
+      console.warn('[upsert] error:', res.status, errMsg)
+      dispatch({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${errMsg}` })
+      break
     }
   }
   return total
@@ -111,7 +115,7 @@ export default function DataManagePage() {
           }).then(() => dispatch({ type: 'APPEND_LOG', payload: `🔄 대시보드 데이터 갱신 완료` }))
             .catch(() => {}) // 실패해도 무시
         } else {
-          dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패 — 파일 컬럼 확인 필요` })
+          dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패 — 위 에러 메시지 확인` })
         }
 
       } else {
