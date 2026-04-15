@@ -52,63 +52,22 @@ export default function DataManagePage() {
         const normalized = normalizeSalesData(result.data)
         result.data = normalized as unknown as Record<string,unknown>[]
 
- // 전체 행 upsert (qty=0 포함) — 재고 데이터 완전 저장
-const upsertRows: DailySalesRow[] = normalized
-  .filter(r => !r.isReturn)
-          .map(r => ({
-            date: r.date,
-            barcode: r.option,   // normalizeSalesData: option 필드에 barcode 저장
-            quantity: r.qty,
-            stock: (r as SalesRow & { stock: number }).stock || 0,
-            cost: 0,
-          }))
-
-        dispatch({ type: 'APPEND_LOG', payload: `🗄️ Supabase 업로드 중... ${upsertRows.length}행` })
-        const { success, error: upsertErr } = await upsertDailySales(upsertRows)
-        dispatch({
-          type: 'APPEND_LOG',
-          payload: upsertErr
-            ? `❌ Supabase 오류: ${upsertErr}`
-            : `✅ Supabase 저장 완료: ${success}행`,
-        })
-      }
-
-      // 새 state 직접 계산
-      const newSales  = key === 'sales'  ? mergeSales(state.salesData, result.data as unknown as SalesRow[]) : state.salesData
-      const newMaster = key === 'master' ? mergeRaw(state.masterData, result.data)  : state.masterData
-      const newOrders = key === 'orders' ? mergeRaw(state.ordersData, result.data)  : state.ordersData
-      const newSupply = key === 'supply' ? (result.data as Record<string,unknown>[]) : state.supplyData
-
-      // ① 즉시 저장
-      await persistData({
-        masterData: newMaster, salesData: newSales,
-        ordersData: newOrders, supplyData: newSupply,
-        dateRangePreset: 'total', hasData: true,
-      })
-
-      // ② state 업데이트
-      dispatch({ type: 'SET_PARSE_RESULT', payload: result })
-      const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
-      dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 | ${cols}` })
-      setDone(d => ({ ...d, [key]: true }))
-      setFileNames(f => ({ ...f, [key]: file.name }))
-    }
-    setUploading(u => ({ ...u, [key]: false }))
-  }
-
-  function runAnalysis() {
-    setAnalyzing(true)
-    const t = new Date(); t.setHours(0,0,0,0)
-    dispatch({ type: 'SET_DATE_RANGE', payload: getPresetRange('total', t) })
-    dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료! 대시보드로 이동합니다.' })
-    setTimeout(() => { setAnalyzing(false); router.push('/') }, 300)
-  }
-
-  function reset() {
-    dispatch({ type: 'RESET' })
-    setFileNames({}); setDone({})
-    FILE_CONFIG.forEach(({ key }) => { if (inputRefs.current[key]) inputRefs.current[key]!.value = '' })
-  }
+         // 날짜+바코드별 집계: qty와 stock을 SUM (같은 바코드가 FC/VF 등 여러 행으로 존재)
+                const aggMap = new Map<string, DailySalesRow>()
+                normalized
+                  .filter(r => !r.isReturn)
+                  .forEach(r => {
+                                const key = `${r.date}|${r.option}`
+                                const stock = (r as SalesRow & { stock: number }).stock || 0
+                                if (!aggMap.has(key)) {
+                                                aggMap.set(key, { date: r.date, barcode: r.option, quantity: r.qty, stock, cost: 0 })
+                                } else {
+                                                const e = aggMap.get(key)!
+                                                e.quantity += r.qty
+                                                e.stock += stock
+                                }
+                  })
+                const upsertRows: DailySalesRow[] = Array.from(aggMap.values())
 
   const hasAny = state.masterData.length > 0 || state.salesData.length > 0
   const salesDates = state.salesData.map(r=>r.date).filter(Boolean).sort()
