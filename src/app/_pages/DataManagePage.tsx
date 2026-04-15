@@ -23,19 +23,26 @@ async function upsertDailySales(rows: SalesRow[]) {
   // SalesRow.option에 barcode가 들어있음 (fileParser.ts 참고)
   const data = rows.map(r => ({
     date:        r.date,
-    barcode:     r.option || r.productName, // option 컬럼에 바코드 저장됨
+    barcode:     r.option || r.productName,
     quantity:    r.qty,
     revenue:     r.revenue,
-    fc_quantity: r.qty,  // 출고수량
+    fc_quantity: r.qty,
     vf_quantity: 0,
-  })).filter(r => r.date && r.barcode && r.quantity > 0)
+  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode && r.quantity > 0)
 
-  if (!data.length) return 0
+  if (!data.length) {
+    console.warn('[upsert] 유효한 데이터 없음. 샘플:', rows.slice(0,2).map(r=>({date:r.date,barcode:r.option,qty:r.qty})))
+    return 0
+  }
 
-  // daily_sales 테이블에 upsert (date + barcode 기준)
+  // 날짜 분포 확인
+  const dates = [...new Set(data.map(r=>r.date))].sort()
+  console.log('[upsert] 날짜 분포:', dates, '총', data.length, '행')
+
+  // daily_sales 테이블에 upsert (date + barcode 기준 conflict)
   let total = 0
   for (let i = 0; i < data.length; i += 500) {
-    const res = await fetch(`${SUPA_URL}/rest/v1/daily_sales`, {
+    const res = await fetch(`${SUPA_URL}/rest/v1/daily_sales?on_conflict=date,barcode`, {
       method: 'POST',
       headers: {
         'apikey':        SUPA_KEY,
@@ -48,7 +55,7 @@ async function upsertDailySales(rows: SalesRow[]) {
     if (res.ok) total += Math.min(500, data.length - i)
     else {
       const err = await res.text().catch(()=>'')
-      console.warn('[upsert] daily_sales error:', res.status, err.substring(0,200))
+      console.warn('[upsert] daily_sales error:', res.status, err.substring(0,300))
     }
   }
   return total
