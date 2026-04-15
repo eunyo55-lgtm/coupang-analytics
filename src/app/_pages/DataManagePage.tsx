@@ -1,11 +1,9 @@
 'use client'
 
 import { useRef, useState } from 'react'
-
 import { useApp } from '@/lib/store'
 import { persistData } from '@/lib/storage'
 import { parseFile, normalizeSalesData } from '@/lib/fileParser'
-import { getPresetRange } from '@/lib/dateUtils'
 import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
@@ -15,24 +13,43 @@ const FILE_CONFIG = [
   { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',          sub: '입고 대기 수량 · 예정일' },
 ]
 
-function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
-  if (!prev.length) return next
-  const m = new Map<string, SalesRow>()
-  prev.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
-  next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
-  return Array.from(m.values()).sort((a,b) => a.date.localeCompare(b.date))
-}
-function mergeRaw(prev: Record<string,unknown>[], next: Record<string,unknown>[]): Record<string,unknown>[] {
-  if (!prev.length) return next
-  const k = (r: Record<string,unknown>) => `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
-  const m = new Map<string,Record<string,unknown>>()
-  prev.forEach(r => m.set(k(r),r)); next.forEach(r => m.set(k(r),r))
-  return Array.from(m.values())
+// Supabase upsert 함수 (anon key 사용)
+const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
+const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+
+async function upsertDailySales(rows: SalesRow[]) {
+  if (!rows.length) return 0
+  // SalesRow → daily_sales 형식으로 변환
+  // barcode가 없으면 productName으로 products에서 찾기
+  const data = rows.map(r => ({
+    date:     r.date,
+    barcode:  r.option || r.productName, // barcode는 option 컬럼에 저장됨 (파서에서 처리)
+    quantity: r.qty,
+    revenue:  r.revenue,
+  })).filter(r => r.date && r.barcode)
+
+  if (!data.length) return 0
+
+  // 배치로 upsert (500건씩)
+  let total = 0
+  for (let i = 0; i < data.length; i += 500) {
+    const res = await fetch(`${SUPA_URL}/rest/v1/sales_data`, {
+      method: 'POST',
+      headers: {
+        'apikey':        SUPA_KEY,
+        'Authorization': `Bearer ${SUPA_KEY}`,
+        'Content-Type':  'application/json',
+        'Prefer':        'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(data.slice(i, i + 500)),
+    })
+    if (res.ok) total += Math.min(500, data.length - i)
+  }
+  return total
 }
 
 export default function DataManagePage() {
   const { state, dispatch } = useApp()
-  
   const [uploading, setUploading] = useState<Record<string,boolean>>({})
   const [fileNames, setFileNames] = useState<Record<string,string>>({})
   const [done, setDone]           = useState<Record<string,boolean>>({})
@@ -48,24 +65,40 @@ export default function DataManagePage() {
     if (result.error) {
       dispatch({ type: 'APPEND_LOG', payload: `❌ [${key}] ${result.error}` })
     } else {
+      const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
+
       if (key === 'sales') {
         result.data = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${result.rows.toLocaleString()}행 | ${cols}` })
+
+        // Supabase sales_data 테이블에 upsert — MV 자동 갱신을 위해 mv_kpi_daily refresh 필요
+        dispatch({ type: 'APPEND_LOG', payload: `📤 Supabase에 업로드 중...` })
+        const salesRows = result.data as unknown as SalesRow[]
+        const saved = await upsertDailySales(salesRows)
+        if (saved > 0) {
+          dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 Supabase 저장 완료` })
+        } else {
+          dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패 — 파일 컬럼 확인 필요` })
+        }
+
+      } else {
+        // master/orders/supply는 기존 방식
+        await persistData({
+          masterData:  key === 'master' ? result.data : state.masterData as Record<string,unknown>[],
+          salesData:   [] as never[],
+          salesData24: [] as never[],
+          salesData25: [] as never[],
+          products:    [] as never[],
+          ordersData:  key === 'orders' ? result.data : state.ordersData,
+          supplyData:  key === 'supply' ? result.data : state.supplyData,
+          stockSummary: { total_stock: 0, stock_value: 0 },
+          daily26: [], daily25: [], daily24: [],
+          latestSaleDate: '',
+          hasData: true,
+          dateRangePreset: 'total',
+        })
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 | ${cols}` })
       }
-
-      // 새 state 직접 계산
-      const newSales  = key === 'sales'  ? mergeSales(state.salesData, result.data as unknown as SalesRow[]) : state.salesData
-      const newMaster = key === 'master' ? mergeRaw(state.masterData, result.data) : state.masterData
-      const newOrders = key === 'orders' ? mergeRaw(state.ordersData, result.data) : state.ordersData
-      const newSupply = key === 'supply' ? (result.data as Record<string,unknown>[]) : state.supplyData
-
-      // ① 즉시 저장
-      await persistData({ masterData: newMaster, salesData: newSales, ordersData: newOrders, supplyData: newSupply, dateRangePreset: 'total', hasData: true })
-
-      // ② state 업데이트
-      dispatch({ type: 'SET_PARSE_RESULT', payload: result })
-
-      const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
-      dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 | ${cols}` })
 
       setDone(d => ({ ...d, [key]: true }))
       setFileNames(f => ({ ...f, [key]: file.name }))
@@ -75,15 +108,14 @@ export default function DataManagePage() {
 
   function runAnalysis() {
     setAnalyzing(true)
-    // 날짜 필터 전체로
-    const t = new Date(); t.setHours(0,0,0,0)
-    dispatch({ type: 'SET_DATE_RANGE', payload: getPresetRange('total', t) })
     dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료! 대시보드로 이동합니다.' })
     setTimeout(() => {
       setAnalyzing(false)
-      // SPA 이동 — state 날아가지 않음
-      router.push('/')
-    }, 300)
+      // SPA 이동
+      const nav = (window as unknown as Record<string,unknown>).navigateTo as ((p:string)=>void)|undefined
+      if (nav) nav('/')
+      else window.location.href = '/'
+    }, 400)
   }
 
   function reset() {
@@ -92,9 +124,7 @@ export default function DataManagePage() {
     FILE_CONFIG.forEach(({ key }) => { if (inputRefs.current[key]) inputRefs.current[key]!.value = '' })
   }
 
-  // 파일이 하나라도 업로드되면 분석 시작 활성화 (Supabase 연동 후 state.salesData 비어있음)
   const hasAny = Object.keys(done).length > 0
-  const salesDates = (state.salesData as {date?:string}[]).map(r=>r?.date).filter(Boolean).sort()
 
   return (
     <div>
@@ -110,16 +140,14 @@ export default function DataManagePage() {
         <div className="kpi kc-pu">
           <div className="kpi-top"><div className="kpi-ico">🏷️</div></div>
           <div className="kpi-lbl">상품 수</div>
-          <div className="kpi-val">{state.masterData.length ? fmt(state.masterData.length) : '—'}</div>
+          <div className="kpi-val">—</div>
           <div className="kpi-foot">마스터 기준</div>
         </div>
         <div className="kpi kc-gr">
           <div className="kpi-top"><div className="kpi-ico">🛒</div></div>
-          <div className="kpi-lbl">판매 행 (누적)</div>
-          <div className="kpi-val">{state.salesData.length ? fmt(state.salesData.length) : '—'}</div>
-          <div className="kpi-foot" style={{ fontSize:9 }}>
-            {salesDates.length ? salesDates[0]+' ~ '+salesDates[salesDates.length-1] : '로드 건수'}
-          </div>
+          <div className="kpi-lbl">업로드 파일</div>
+          <div className="kpi-val">{Object.keys(done).length}</div>
+          <div className="kpi-foot">개 완료</div>
         </div>
         <div className="kpi kc-am">
           <div className="kpi-top"><div className="kpi-ico">📋</div></div>
@@ -166,7 +194,7 @@ export default function DataManagePage() {
 
       {state.parseLog.length > 0 && (
         <div className="card">
-          <div className="ch"><div className="ch-l"><div className="ch-ico">🔍</div><div className="ch-title">파싱 로그</div></div></div>
+          <div className="ch"><div className="ch-l"><div className="ch-ico">🔍</div><div className="ch-title">업로드 로그</div></div></div>
           <div className="cb" style={{ padding:'10px 14px' }}>
             <div className="log-box">
               {state.parseLog.map((line, i) => (
@@ -184,12 +212,12 @@ export default function DataManagePage() {
             <thead><tr><th>파일</th><th>필수 컬럼</th><th>형식</th></tr></thead>
             <tbody>
               <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>상품명, 옵션, 재고수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량, 금액/결제금액, 날짜/주문일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량/출고수량, 날짜/출고일, 금액(선택)</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 발주서</td><td style={{color:'var(--t2)'}}>상품명, 수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>공급 중 수량</td><td style={{color:'var(--t2)'}}>상품명, 수량, 입고예정일(선택)</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
             </tbody>
           </table></div>
-          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 컬럼명이 정확히 일치하지 않아도 됩니다. 유사한 단어 포함 시 자동 감지. EUC-KR 엑셀도 자동 처리.</p>
+          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 컬럼명 자동 감지. EUC-KR 엑셀 자동 처리.</p>
         </div>
       </div>
     </div>
