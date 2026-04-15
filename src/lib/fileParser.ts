@@ -40,23 +40,30 @@ function csvParse(text: string): Record<string, unknown>[] {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
   const lines = text.split(/\r?\n/).filter(l => l.trim())
   if (!lines.length) return []
-  const headers = csvSplit(lines[0])
+  // 탭/콤마 자동 감지
+  const firstLine = lines[0]
+  const tabCount   = (firstLine.match(/\t/g) || []).length
+  const commaCount = (firstLine.match(/,/g) || []).length
+  const delimiter  = tabCount > commaCount ? '\t' : ','
+  const split = (line: string) => csvSplit(line, delimiter)
+  const headers = split(firstLine)
   return lines.slice(1).map(line => {
-    const vals = csvSplit(line)
+    const vals = split(line)
     const obj: Record<string, unknown> = {}
     headers.forEach((h, i) => (obj[h.trim()] = (vals[i] || '').trim()))
     return obj
   })
 }
 
-function csvSplit(line: string): string[] {
+function csvSplit(line: string, delimiter = ','): string[] {
+  if (delimiter === '\t') return line.split('\t').map(v => v.trim())
   const result: string[] = []
   let cur = ''
   let inQuote = false
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]
     if (ch === '"') { inQuote = !inQuote }
-    else if (ch === ',' && !inQuote) { result.push(cur); cur = '' }
+    else if (ch === delimiter && !inQuote) { result.push(cur); cur = '' }
     else cur += ch
   }
   result.push(cur)
