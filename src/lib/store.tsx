@@ -101,6 +101,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             latestSaleDate: saved.latestSaleDate,
             ordersData:     saved.ordersData,
             supplyData:     saved.supplyData,
+            salesData: saved.salesData,
+            masterData: saved.masterData,
             hasData:        true,
           },
         })
