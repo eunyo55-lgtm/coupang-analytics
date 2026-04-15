@@ -19,21 +19,23 @@ const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
 async function upsertDailySales(rows: SalesRow[]) {
   if (!rows.length) return 0
-  // SalesRow → daily_sales 형식으로 변환
-  // barcode가 없으면 productName으로 products에서 찾기
+
+  // SalesRow.option에 barcode가 들어있음 (fileParser.ts 참고)
   const data = rows.map(r => ({
-    date:     r.date,
-    barcode:  r.option || r.productName, // barcode는 option 컬럼에 저장됨 (파서에서 처리)
-    quantity: r.qty,
-    revenue:  r.revenue,
-  })).filter(r => r.date && r.barcode)
+    date:        r.date,
+    barcode:     r.option || r.productName, // option 컬럼에 바코드 저장됨
+    quantity:    r.qty,
+    revenue:     r.revenue,
+    fc_quantity: r.qty,  // 출고수량
+    vf_quantity: 0,
+  })).filter(r => r.date && r.barcode && r.quantity > 0)
 
   if (!data.length) return 0
 
-  // 배치로 upsert (500건씩)
+  // daily_sales 테이블에 upsert (date + barcode 기준)
   let total = 0
   for (let i = 0; i < data.length; i += 500) {
-    const res = await fetch(`${SUPA_URL}/rest/v1/sales_data`, {
+    const res = await fetch(`${SUPA_URL}/rest/v1/daily_sales`, {
       method: 'POST',
       headers: {
         'apikey':        SUPA_KEY,
@@ -44,6 +46,10 @@ async function upsertDailySales(rows: SalesRow[]) {
       body: JSON.stringify(data.slice(i, i + 500)),
     })
     if (res.ok) total += Math.min(500, data.length - i)
+    else {
+      const err = await res.text().catch(()=>'')
+      console.warn('[upsert] daily_sales error:', res.status, err.substring(0,200))
+    }
   }
   return total
 }
@@ -232,3 +238,4 @@ export default function DataManagePage() {
     </div>
   )
 }
+// This line intentionally left blank
