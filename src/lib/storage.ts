@@ -1,5 +1,8 @@
 import { supabase } from '@/lib/supabase'
 
+const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+
 export interface PersistedData {
   masterData:   Record<string, unknown>[]
   salesData:    { date:string; productName:string; option:string; qty:number; revenue:number; isReturn:boolean }[]
@@ -17,6 +20,31 @@ export interface PersistedData {
   latestSaleDate: string
 }
 
+// fetch로 직접 RPC 호출 (1000행 제한 없음)
+async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
+  if (typeof window === 'undefined') return []
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPA_KEY,
+        'Authorization': `Bearer ${SUPA_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      console.warn(`[storage] RPC ${fn} error:`, res.status, err.substring(0,100))
+      return []
+    }
+    return await res.json()
+  } catch(e) {
+    console.warn(`[storage] RPC ${fn} exception:`, e)
+    return []
+  }
+}
+
 export async function loadData(): Promise<PersistedData | null> {
   if (typeof window === 'undefined') return null
   try {
@@ -26,13 +54,12 @@ export async function loadData(): Promise<PersistedData | null> {
     const from90 = ninetyAgo.toISOString().slice(0, 10)
 
     // 모든 데이터 병렬 로드
-    const [stockRes, daily26Res, daily25Res, daily24Res, salesRes, supplyRes, ordersRes] = await Promise.all([
-      supabase.rpc('get_stock_summary'),
-      supabase.rpc('get_daily_qty_by_year', { target_year: 2026 }),
-      supabase.rpc('get_daily_qty_by_year', { target_year: 2025 }),
-      supabase.rpc('get_daily_qty_by_year', { target_year: 2024 }),
-      // get_sales_with_products RPC — products JOIN으로 1000행 제한 우회
-      supabase.rpc('get_sales_with_products', { date_from: from90, date_to: today }),
+    const [stock, daily26, daily25, daily24, salesRaw, supplyRes, ordersRes] = await Promise.all([
+      rpcFetch('get_stock_summary'),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2026 }),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2025 }),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2024 }),
+      rpcFetch('get_sales_with_products', { date_from: from90, date_to: today }),
       supabase.from('supply_status')
         .select('"발주번호","SKU 이름","SKU Barcode","입고예정일","발주일","발주수량","확정수량","입고수량"')
         .limit(5000),
@@ -42,10 +69,8 @@ export async function loadData(): Promise<PersistedData | null> {
         .limit(5000),
     ])
 
-    if (salesRes.error) console.warn('[storage] sales RPC error:', salesRes.error.message)
-
-    // RPC 결과 → SalesRow 변환
-    const salesData = (salesRes.data || []).map((r: Record<string,unknown>) => {
+    // SalesRow 변환
+    const salesData = (salesRaw as Record<string,unknown>[]).map(r => {
       const qty = Number(r['quantity'] || 0)
       const cost = Number(r['cost'] || 0)
       return {
@@ -58,26 +83,28 @@ export async function loadData(): Promise<PersistedData | null> {
       }
     })
 
-    const stockSummary = stockRes.data?.[0] ?? { total_stock: 0, stock_value: 0 }
-    const daily26 = (daily26Res.data || []).map((r: Record<string,unknown>) => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
-    const daily25 = (daily25Res.data || []).map((r: Record<string,unknown>) => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
-    const daily24 = (daily24Res.data || []).map((r: Record<string,unknown>) => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
-    const latestSaleDate = daily26.length > 0 ? daily26[daily26.length - 1].date : ''
+    const stockSummary = (stock as Record<string,unknown>[])[0] ?? { total_stock: 0, stock_value: 0 }
+    const d26 = (daily26 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d25 = (daily25 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d24 = (daily24 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    const latestSaleDate = d26.length > 0 ? d26[d26.length - 1].date : ''
 
-    // masterData: 상품명 기반 재고현황용
-    const masterData = salesData
-      .reduce((acc: Record<string,unknown>[], r) => {
-        if (!acc.find((a: Record<string,unknown>) => a['상품명'] === r.productName)) {
-          acc.push({ 상품명: r.productName, 옵션: r.option, 바코드: r.option })
-        }
-        return acc
-      }, [])
+    // masterData: 재고현황용 상품 목록
+    const seen = new Set<string>()
+    const masterData = salesData.reduce((acc: Record<string,unknown>[], r) => {
+      if (!seen.has(r.productName)) {
+        seen.add(r.productName)
+        acc.push({ 상품명: r.productName, 옵션: r.option, 바코드: r.option })
+      }
+      return acc
+    }, [])
 
     console.log('[CA] ✅ Supabase 로드 완료:', {
       sales90d: salesData.length,
-      daily26: daily26.length,
-      daily25: daily25.length,
-      stock: stockSummary.total_stock,
+      daily26: d26.length,
+      daily25: d25.length,
+      daily24: d24.length,
+      stock: (stockSummary as Record<string,unknown>).total_stock,
       latestSaleDate,
     })
 
@@ -91,7 +118,9 @@ export async function loadData(): Promise<PersistedData | null> {
       supplyData: (supplyRes.data  || []) as Record<string,unknown>[],
       hasData: salesData.length > 0,
       dateRangePreset: 'yesterday',
-      stockSummary, daily26, daily25, daily24, latestSaleDate,
+      stockSummary: stockSummary as { total_stock: number; stock_value: number },
+      daily26: d26, daily25: d25, daily24: d24,
+      latestSaleDate,
     }
   } catch (e) {
     console.warn('[storage] loadData error:', e)
