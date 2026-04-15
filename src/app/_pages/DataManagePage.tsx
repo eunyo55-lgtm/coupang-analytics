@@ -77,6 +77,13 @@ export default function DataManagePage() {
         const saved = await upsertDailySales(salesRows)
         if (saved > 0) {
           dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 Supabase 저장 완료` })
+          // MV 갱신 (대시보드 즉시 반영)
+          fetch(`${SUPA_URL}/rest/v1/rpc/refresh_analytics_mv`, {
+            method: 'POST',
+            headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+            body: '{}',
+          }).then(() => dispatch({ type: 'APPEND_LOG', payload: `🔄 대시보드 데이터 갱신 완료` }))
+            .catch(() => {}) // 실패해도 무시
         } else {
           dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패 — 파일 컬럼 확인 필요` })
         }
@@ -111,11 +118,13 @@ export default function DataManagePage() {
     dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료! 대시보드로 이동합니다.' })
     setTimeout(() => {
       setAnalyzing(false)
-      // SPA 이동
       const nav = (window as unknown as Record<string,unknown>).navigateTo as ((p:string)=>void)|undefined
-      if (nav) nav('/')
-      else window.location.href = '/'
-    }, 400)
+      if (nav) {
+        nav('/')
+      } else {
+        window.location.href = '/'
+      }
+    }, 600)
   }
 
   function reset() {
