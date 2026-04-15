@@ -20,29 +20,40 @@ export interface PersistedData {
   latestSaleDate: string
 }
 
-// fetch로 직접 RPC 호출 (1000행 제한 없음)
+// fetch로 RPC 호출 — 일반용
 async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
   if (typeof window === 'undefined') return []
   try {
     const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
       method: 'POST',
-      headers: {
-        'apikey': SUPA_KEY,
-        'Authorization': `Bearer ${SUPA_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     })
-    if (!res.ok) {
-      const err = await res.text()
-      console.warn(`[storage] RPC ${fn} error:`, res.status, err.substring(0,100))
-      return []
-    }
+    if (!res.ok) { console.warn(`[storage] RPC ${fn} error:`, res.status); return [] }
     return await res.json()
-  } catch(e) {
-    console.warn(`[storage] RPC ${fn} exception:`, e)
-    return []
+  } catch(e) { console.warn(`[storage] RPC ${fn}:`, e); return [] }
+}
+
+// 테이블 직접 페이지네이션 (1000행 제한 우회)
+async function fetchAllPages(path: string, extraHeaders: Record<string,string> = {}) {
+  if (typeof window === 'undefined') return []
+  const all: Record<string,unknown>[] = []
+  let offset = 0
+  const PAGE = 1000
+  while (true) {
+    const sep = path.includes('?') ? '&' : '?'
+    const res = await fetch(`${SUPA_URL}/rest/v1/${path}${sep}offset=${offset}&limit=${PAGE}`, {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, ...extraHeaders }
+    })
+    if (!res.ok) break
+    const data = await res.json()
+    if (!data.length) break
+    all.push(...data)
+    if (data.length < PAGE) break
+    offset += PAGE
+    if (all.length > 300000) break
   }
+  return all
 }
 
 export async function loadData(): Promise<PersistedData | null> {
@@ -59,7 +70,10 @@ export async function loadData(): Promise<PersistedData | null> {
       rpcFetch('get_daily_qty_by_year', { target_year: 2026 }),
       rpcFetch('get_daily_qty_by_year', { target_year: 2025 }),
       rpcFetch('get_daily_qty_by_year', { target_year: 2024 }),
-      rpcFetch('get_sales_with_products', { date_from: from90, date_to: today }),
+      // daily_sales + products JOIN — 페이지네이션으로 전체 로드
+      fetchAllPages(
+        `daily_sales?select=date,barcode,quantity&date=gte.${from90}&date=lte.${today}&quantity=gt.0&order=date.asc`
+      ),
       supabase.from('supply_status')
         .select('"발주번호","SKU 이름","SKU Barcode","입고예정일","발주일","발주수량","확정수량","입고수량"')
         .limit(5000),
@@ -69,16 +83,25 @@ export async function loadData(): Promise<PersistedData | null> {
         .limit(5000),
     ])
 
+    // products 페이지네이션으로 전체 로드 (barcode→name 매핑용)
+    const productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost&barcode=not.is.null&name=not.is.null&cost=gt.0')
+    const barcodeMap = new Map<string, {name:string; option:string; cost:number}>()
+    ;(productsRaw as Record<string,unknown>[]).forEach(r => {
+      const bc = String(r['barcode'] || '')
+      if (bc) barcodeMap.set(bc, { name: String(r['name']||bc), option: String(r['option_value']||''), cost: Number(r['cost']||0) })
+    })
+
     // SalesRow 변환
     const salesData = (salesRaw as Record<string,unknown>[]).map(r => {
-      const qty = Number(r['quantity'] || 0)
-      const cost = Number(r['cost'] || 0)
+      const bc   = String(r['barcode'] || '')
+      const info = barcodeMap.get(bc) || { name: bc, option: '', cost: 0 }
+      const qty  = Number(r['quantity'] || 0)
       return {
-        date:        String(r['sale_date']),
-        productName: String(r['product_name'] || r['barcode'] || ''),
-        option:      String(r['option_val'] || ''),
+        date:        String(r['date']),
+        productName: info.name,
+        option:      info.option,
         qty,
-        revenue:     cost * qty,
+        revenue:     info.cost * qty,
         isReturn:    false,
       }
     })
