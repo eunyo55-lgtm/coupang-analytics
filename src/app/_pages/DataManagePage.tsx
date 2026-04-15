@@ -23,15 +23,16 @@ async function upsertDailySales(rows: SalesRow[]) {
   // SalesRow.option에 barcode가 들어있음 (fileParser.ts 참고)
   const data = rows.map(r => ({
     date:        r.date,
-    barcode:     r.option || r.productName,
+    barcode:     (r.option && r.option.length > 3) ? r.option : r.productName,
     quantity:    r.qty,
     revenue:     r.revenue,
     fc_quantity: r.qty,
     vf_quantity: 0,
-  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode && r.quantity > 0)
+    stock:       r.stock ?? 0,  // 현재재고수량
+  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode)
 
   if (!data.length) {
-    console.warn('[upsert] 유효한 데이터 없음. 샘플:', rows.slice(0,2).map(r=>({date:r.date,barcode:r.option,qty:r.qty})))
+    console.warn('[upsert] 유효한 데이터 없음. rows샘플:', JSON.stringify(rows.slice(0,2)))
     return 0
   }
 

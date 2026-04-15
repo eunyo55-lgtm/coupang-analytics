@@ -3,9 +3,9 @@ import type { SalesRow, ParseResult } from '@/types'
 
 // ── Column auto-detection ──
 const COL_CANDIDATES = {
-  productName: ['상품명', 'productname', '노출상품명', '상품이름', 'item', '상품 명', 'SKU 명'],
+  productName: ['SKU 명', 'SKU명', '상품명', 'productname', '노출상품명', '상품이름', 'item', '상품 명'],
   option:      ['옵션', 'option', '옵션명', '속성', '옵션 명'],
-  barcode:     ['바코드', 'barcode', 'sku', 'SKU', 'SKUBarcode', 'SKU Barcode', '상품바코드'],
+  barcode:     ['바코드', 'barcode', 'SKU Barcode', 'SKUBarcode', 'SKU ID', 'sku', 'SKU', '상품바코드'],
   qty:         ['출고수량', '판매수량', '수량', 'qty', '주문수량', 'quantity', '판매 수량', '출고수량(판매량)'],
   price:       ['매입원가', '원가', '금액', 'price', '매출', '결제금액', '판매금액', '상품금액', '단가', '매입원가(쿠팡공급가)'],
   date:        ['날짜', '판매일', 'date', '주문일', '결제일', '주문날짜', '날짜(판매일)'],
@@ -128,23 +128,31 @@ export function normalizeSalesData(
 
   console.log('[parser] 감지된 컬럼:', { barcodeCol, nameCol, qtyCol, priceCol, dateCol })
 
+  const stockCol = detectColumn(s0, COL_CANDIDATES.stock)
+
   return raw
     .filter(row => {
-      // 빈 행 제거
       const d = dateCol ? String(row[dateCol] || '') : ''
       return d.length > 0
     })
     .map(row => {
       const rawDate = dateCol ? String(row[dateCol] || '') : ''
-      const date = rawDate.substring(0, 10).replace(/[/.]/g, '-') || ''
+      // 날짜 형식 정규화: YYYYMMDD → YYYY-MM-DD, YYYY.MM.DD → YYYY-MM-DD
+      let date = rawDate.trim()
+      if (/^\d{8}$/.test(date)) {
+        date = `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}`
+      } else {
+        date = date.substring(0, 10).replace(/[/.]/g, '-')
+      }
+
       const qty   = toNumber(row[qtyCol || ''])
       const price = toNumber(row[priceCol || ''])
+      const stock = stockCol ? toNumber(row[stockCol]) : 0
       const isReturn = retCol
         ? String(row[retCol]).includes('반품') || String(row[retCol]).includes('취소')
         : false
 
-      // 쿠팡 허브 파일: 바코드를 option으로, 상품명은 products 테이블에서 매핑
-      const barcode = barcodeCol ? String(row[barcodeCol] || '') : ''
+      const barcode = barcodeCol ? String(row[barcodeCol] || '').trim() : ''
       const name    = nameCol    ? String(row[nameCol] || barcode) : barcode
 
       return {
@@ -154,7 +162,8 @@ export function normalizeSalesData(
         qty:         qty || 0,
         revenue:     price * (qty || 1),
         isReturn,
+        stock,  // 현재재고수량
       }
     })
-    .filter(r => r.date && r.qty > 0)  // 출고수량 0인 행 제외
+    .filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/))  // 날짜 형식 유효한 행만
 }

@@ -14,6 +14,7 @@ export interface SalesRow {
   qty: number
   revenue: number
   isReturn: boolean
+  stock?: number      // 현재재고수량 (쿠팡 허브)
 }
 
 export interface SalesByProduct {
