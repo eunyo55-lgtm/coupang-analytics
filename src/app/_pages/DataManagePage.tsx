@@ -82,7 +82,19 @@ export default function DataManagePage() {
       const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
 
       if (key === 'sales') {
-        result.data = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+        // 디버그: raw 첫 행 컬럼명 확인
+        const rawKeys = result.data[0] ? Object.keys(result.data[0]).slice(0,8).join(' | ') : 'empty'
+        dispatch({ type: 'APPEND_LOG', payload: `🔍 원본컬럼: ${rawKeys}` })
+        
+        const normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+        // 디버그: 파싱 후 첫 행 확인
+        if (normalized.length > 0) {
+          const s = normalized[0] as Record<string,unknown>
+          dispatch({ type: 'APPEND_LOG', payload: `🔍 파싱결과: date=${s.date} barcode=${s.option} qty=${s.qty}` })
+        } else {
+          dispatch({ type: 'APPEND_LOG', payload: `⚠️ 파싱결과: 0행 (날짜/수량 필터에 걸림)` })
+        }
+        result.data = normalized
         dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${result.rows.toLocaleString()}행 | ${cols}` })
 
         // Supabase sales_data 테이블에 upsert — MV 자동 갱신을 위해 mv_kpi_daily refresh 필요
