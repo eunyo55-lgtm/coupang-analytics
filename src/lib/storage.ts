@@ -42,12 +42,15 @@ async function fetchAllPages(path: string, extraHeaders: Record<string,string> =
   const PAGE = 1000
   while (true) {
     const sep = path.includes('?') ? '&' : '?'
-    const res = await fetch(`${SUPA_URL}/rest/v1/${path}${sep}offset=${offset}&limit=${PAGE}`, {
+    const url = `${SUPA_URL}/rest/v1/${path}${sep}offset=${offset}&limit=${PAGE}`
+    const res = await fetch(url, {
       headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, ...extraHeaders }
     })
-    if (!res.ok) break
+    console.log('[fetchAllPages]', path.substring(0,30), 'offset:', offset, 'status:', res.status)
+    if (!res.ok) { console.warn('[fetchAllPages] not ok:', res.status, await res.text().catch(()=>'')); break }
     const data = await res.json()
-    if (!data.length) break
+    console.log('[fetchAllPages] data type:', typeof data, 'isArray:', Array.isArray(data), 'length:', Array.isArray(data) ? data.length : 'N/A')
+    if (!Array.isArray(data) || !data.length) break
     all.push(...data)
     if (data.length < PAGE) break
     offset += PAGE
