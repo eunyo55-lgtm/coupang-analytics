@@ -27,7 +27,7 @@ async function upsertDailySales(rows: SalesRow[]) {
     stock:    r.stock ?? 0,
     fc_quantity: 0,
     vf_quantity: 0,
-  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode && r.quantity > 0)
+  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode)
 
   if (!data.length) {
     console.warn('[upsert] 유효한 데이터 없음. rows샘플:', JSON.stringify(rows.slice(0,2)))
