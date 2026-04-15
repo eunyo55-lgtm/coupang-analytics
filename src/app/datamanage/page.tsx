@@ -1,18 +1,19 @@
 'use client'
-
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useApp } from '@/lib/store'
 import { persistData } from '@/lib/storage'
 import { parseFile, normalizeSalesData } from '@/lib/fileParser'
+import { upsertDailySales } from '@/lib/upsertSales'
+import type { DailySalesRow } from '@/lib/upsertSales'
 import { getPresetRange } from '@/lib/dateUtils'
 import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
   { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터', sub: '상품코드 · 상품명 · 옵션 · 재고' },
-  { key: 'sales'  as const, icon: '🛒', title: '쿠팡 판매 데이터',      sub: '판매량 · 금액 · 날짜' },
-  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서',           sub: '발주번호 · 수량' },
-  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',          sub: '입고 대기 수량 · 예정일' },
+  { key: 'sales' as const,  icon: '🛒', title: '쿠팡 판매 데이터',    sub: '판매량 · 금액 · 날짜' },
+  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서',          sub: '발주번호 · 수량' },
+  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',         sub: '입고 대기 수량 · 예정일' },
 ]
 
 function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
@@ -22,6 +23,7 @@ function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
   next.forEach(r => m.set(`${r.date}|${r.productName}|${r.option}`, r))
   return Array.from(m.values()).sort((a,b) => a.date.localeCompare(b.date))
 }
+
 function mergeRaw(prev: Record<string,unknown>[], next: Record<string,unknown>[]): Record<string,unknown>[] {
   if (!prev.length) return next
   const k = (r: Record<string,unknown>) => `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
@@ -35,38 +37,59 @@ export default function DataManagePage() {
   const router = useRouter()
   const [uploading, setUploading] = useState<Record<string,boolean>>({})
   const [fileNames, setFileNames] = useState<Record<string,string>>({})
-  const [done, setDone]           = useState<Record<string,boolean>>({})
+  const [done, setDone] = useState<Record<string,boolean>>({})
   const [analyzing, setAnalyzing] = useState(false)
   const inputRefs = useRef<Record<string, HTMLInputElement|null>>({})
-
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 
   async function handleFile(file: File, key: ParseResult['key']) {
     setUploading(u => ({ ...u, [key]: true }))
     const result = await parseFile(file, key)
-
     if (result.error) {
       dispatch({ type: 'APPEND_LOG', payload: `❌ [${key}] ${result.error}` })
     } else {
       if (key === 'sales') {
-        result.data = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+        const normalized = normalizeSalesData(result.data)
+        result.data = normalized as unknown as Record<string,unknown>[]
+
+        // quantity > 0 인 행만 Supabase daily_sales 에 upsert
+        const upsertRows: DailySalesRow[] = normalized
+          .filter(r => r.qty > 0 && !r.isReturn)
+          .map(r => ({
+            date: r.date,
+            barcode: r.option,   // normalizeSalesData: option 필드에 barcode 저장
+            quantity: r.qty,
+            stock: (r as SalesRow & { stock: number }).stock || 0,
+            cost: 0,
+          }))
+
+        dispatch({ type: 'APPEND_LOG', payload: `🗄️ Supabase 업로드 중... ${upsertRows.length}행` })
+        const { success, error: upsertErr } = await upsertDailySales(upsertRows)
+        dispatch({
+          type: 'APPEND_LOG',
+          payload: upsertErr
+            ? `❌ Supabase 오류: ${upsertErr}`
+            : `✅ Supabase 저장 완료: ${success}행`,
+        })
       }
 
       // 새 state 직접 계산
       const newSales  = key === 'sales'  ? mergeSales(state.salesData, result.data as unknown as SalesRow[]) : state.salesData
-      const newMaster = key === 'master' ? mergeRaw(state.masterData, result.data) : state.masterData
-      const newOrders = key === 'orders' ? mergeRaw(state.ordersData, result.data) : state.ordersData
+      const newMaster = key === 'master' ? mergeRaw(state.masterData, result.data)  : state.masterData
+      const newOrders = key === 'orders' ? mergeRaw(state.ordersData, result.data)  : state.ordersData
       const newSupply = key === 'supply' ? (result.data as Record<string,unknown>[]) : state.supplyData
 
       // ① 즉시 저장
-      await persistData({ masterData: newMaster, salesData: newSales, ordersData: newOrders, supplyData: newSupply, dateRangePreset: 'total', hasData: true })
+      await persistData({
+        masterData: newMaster, salesData: newSales,
+        ordersData: newOrders, supplyData: newSupply,
+        dateRangePreset: 'total', hasData: true,
+      })
 
       // ② state 업데이트
       dispatch({ type: 'SET_PARSE_RESULT', payload: result })
-
       const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
       dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 | ${cols}` })
-
       setDone(d => ({ ...d, [key]: true }))
       setFileNames(f => ({ ...f, [key]: file.name }))
     }
@@ -75,15 +98,10 @@ export default function DataManagePage() {
 
   function runAnalysis() {
     setAnalyzing(true)
-    // 날짜 필터 전체로
     const t = new Date(); t.setHours(0,0,0,0)
     dispatch({ type: 'SET_DATE_RANGE', payload: getPresetRange('total', t) })
     dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료! 대시보드로 이동합니다.' })
-    setTimeout(() => {
-      setAnalyzing(false)
-      // SPA 이동 — state 날아가지 않음
-      router.push('/')
-    }, 300)
+    setTimeout(() => { setAnalyzing(false); router.push('/') }, 300)
   }
 
   function reset() {
@@ -183,7 +201,7 @@ export default function DataManagePage() {
             <thead><tr><th>파일</th><th>필수 컬럼</th><th>형식</th></tr></thead>
             <tbody>
               <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>상품명, 옵션, 재고수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량, 금액/결제금액, 날짜/주문일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>바코드, 출고수량, 날짜</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 발주서</td><td style={{color:'var(--t2)'}}>상품명, 수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>공급 중 수량</td><td style={{color:'var(--t2)'}}>상품명, 수량, 입고예정일(선택)</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
             </tbody>
@@ -193,4 +211,4 @@ export default function DataManagePage() {
       </div>
     </div>
   )
-}
+          }
