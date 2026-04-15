@@ -20,46 +20,43 @@ const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 async function upsertDailySales(rows: SalesRow[]) {
   if (!rows.length) return 0
 
-  // SalesRow.option에 barcode가 들어있음 (fileParser.ts 참고)
   const data = rows.map(r => ({
-    date:        r.date,
-    barcode:     (r.option && r.option.length > 3) ? r.option : r.productName,
-    quantity:    r.qty,
-    revenue:     r.revenue,
-    fc_quantity: r.qty,
+    date:     r.date,
+    barcode:  (r.option && r.option.length > 3) ? r.option : r.productName,
+    quantity: r.qty,
+    stock:    r.stock ?? 0,
+    fc_quantity: 0,
     vf_quantity: 0,
-    stock:       r.stock ?? 0,  // 현재재고수량
-  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode)
+  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode && r.quantity > 0)
 
   if (!data.length) {
     console.warn('[upsert] 유효한 데이터 없음. rows샘플:', JSON.stringify(rows.slice(0,2)))
     return 0
   }
 
-  // 날짜 분포 확인
   const dates = [...new Set(data.map(r=>r.date))].sort()
   console.log('[upsert] 날짜 분포:', dates, '총', data.length, '행')
 
-  // daily_sales 테이블에 upsert (date + barcode 기준 conflict)
+  // RPC upsert_daily_sales 사용 (on_conflict 문제 완전 우회)
   let total = 0
   for (let i = 0; i < data.length; i += 500) {
-    const res = await fetch(`${SUPA_URL}/rest/v1/daily_sales?on_conflict=date,barcode`, {
+    const batch = data.slice(i, i + 500)
+    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
       method: 'POST',
       headers: {
         'apikey':        SUPA_KEY,
         'Authorization': `Bearer ${SUPA_KEY}`,
         'Content-Type':  'application/json',
-        'Prefer':        'resolution=merge-duplicates,return=minimal',
       },
-      body: JSON.stringify(data.slice(i, i + 500)),
+      body: JSON.stringify({ rows: batch }),
     })
     if (res.ok) {
-      total += Math.min(500, data.length - i)
+      const cnt = await res.json().catch(()=>batch.length)
+      total += Number(cnt) || batch.length
     } else {
       const err = await res.text().catch(()=>'unknown error')
-      const errMsg = err.substring(0, 200)
-      console.warn('[upsert] error:', res.status, errMsg)
-      dispatch({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${errMsg}` })
+      console.warn('[upsert] RPC error:', res.status, err.substring(0, 200))
+      dispatch({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${err.substring(0,100)}` })
       break
     }
   }
