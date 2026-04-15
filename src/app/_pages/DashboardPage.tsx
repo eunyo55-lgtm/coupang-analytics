@@ -318,12 +318,12 @@ export default function DashboardPage() {
   const pct = (now: number, prev: number) => prev ? Math.round((now - prev) / prev * 100) : 0
 
   const s = state.stockSummary
-  const kpiCards = [
-    { label: '판매량', sub: `전일 (${latestDate})`, qty: kpiYest?.qty ?? null, rev: kpiYest?.rev ?? null, yoy: kpiYest && kpiYest25 ? pct(kpiYest.qty, kpiYest25.qty) : null, color: 'var(--blue)' },
-    { label: '주간 판매량', sub: `${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`, qty: kpiWeek?.qty ?? null, rev: kpiWeek?.rev ?? null, yoy: kpiWeek && kpiWeek25 ? pct(kpiWeek.qty, kpiWeek25.qty) : null, color: 'var(--purple)' },
-    { label: '누적 판매량', sub: `26년 (${cumRange.from.slice(5)} ~ ${latestDate.slice(5)})`, qty: kpiCum?.qty ?? null, rev: kpiCum?.rev ?? null, yoy: kpiCum && kpiCum25 ? pct(kpiCum.qty, kpiCum25.qty) : null, color: 'var(--green)' },
-    { label: '전일 재고', sub: `쿠팡 재고 (${latestDate})`, qty: s.total_stock || null, rev: s.stock_value || null, yoy: null, color: 'var(--amber)', isStock: true },
-  ]
+ const kpiCards: { label:string; sub:string; qty:number|null; rev:number|null; yoy:number|null; color:string; isStock:boolean }[] = [
+  { label: '판매량', ..., color: 'var(--blue)', isStock: false },
+  { label: '주간 판매량', ..., color: 'var(--purple)', isStock: false },
+  { label: '누적 판매량', ..., color: 'var(--green)', isStock: false },
+  { label: '전일 재고', ..., color: 'var(--amber)', isStock: true },
+]
 
   return (
     <div>
