@@ -1,3 +1,5 @@
+'use client'
+
 import { supabase } from '@/lib/supabase'
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
