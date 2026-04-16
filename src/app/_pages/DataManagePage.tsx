@@ -7,10 +7,9 @@ import { parseFile, normalizeSalesData } from '@/lib/fileParser'
 import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
-  { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터', sub: '상품코드 · 상품명 · 옵션 · 재고' },
-  { key: 'sales'  as const, icon: '🛒', title: '쿠팡 판매 데이터',      sub: '판매량 · 금액 · 날짜' },
-  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서',           sub: '발주번호 · 수량' },
-  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',          sub: '입고 대기 수량 · 예정일' },
+  { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터',         sub: '상품코드 · 상품명 · 옵션 · 재고' },
+  { key: 'sales'  as const, icon: '🛒', title: '쿠팡 판매 데이터',              sub: '판매량 · 금액 · 날짜' },
+  { key: 'supply' as const, icon: '🚚', title: '쿠팡 발주서 / 공급 중 수량',    sub: '발주번호 · 입고예정일 · 수량 · 매입가' },
 ]
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
@@ -105,31 +104,23 @@ async function upsertSupplyStatus(
 
   const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' }
 
-  // 기존 데이터 전체 삭제 후 INSERT (constraint 없이 동작)
-  dispatchFn({ type: 'APPEND_LOG', payload: `🗑️ 기존 supply_status 데이터 초기화 중...` })
-  const delRes = await fetch(`${SUPA_URL}/rest/v1/supply_status?발주번호=gte.0`, {
-    method: 'DELETE',
-    headers: h,
-  })
-  if (!delRes.ok && delRes.status !== 404) {
-    // 전체 삭제 (조건 없이)
-    await fetch(`${SUPA_URL}/rest/v1/supply_status?입고예정일=gte.2020-01-01`, {
-      method: 'DELETE',
-      headers: h,
-    })
-  }
-
+  // 발주번호 + SKU Barcode unique constraint 기준으로 중복 시 업데이트, 신규는 추가
   let total = 0
   for (let i = 0; i < mapped.length; i += 500) {
     const batch = mapped.slice(i, i + 500)
     const res = await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
       method: 'POST',
-      headers: { ...h, 'Prefer': 'return=minimal' },
+      headers: {
+        ...h,
+        'Prefer': 'resolution=merge-duplicates,return=minimal',
+      },
       body: JSON.stringify(batch),
     })
     if (res.ok || res.status === 201) {
       total += batch.length
-      dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${total}/${mapped.length}행 저장 중...` })
+      if (i % 1000 === 0 || i + 500 >= mapped.length) {
+        dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${Math.min(total, mapped.length)}/${mapped.length}행 처리 중...` })
+      }
     } else {
       const err = await res.text().catch(() => 'unknown')
       dispatchFn({ type: 'APPEND_LOG', payload: `❌ supply 저장 에러 (${res.status}): ${err.substring(0,150)}` })
@@ -331,11 +322,10 @@ export default function DataManagePage() {
             <tbody>
               <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>상품명, 옵션, 재고수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량/출고수량, 날짜/출고일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 발주서</td><td style={{color:'var(--t2)'}}>상품명, 수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>공급 중 수량</td><td style={{color:'var(--t2)'}}>SKU Barcode · 입고예정일 · 발주수량 · 확정수량 · 입고수량 · 매입가</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>쿠팡 발주서 / 공급 중 수량</td><td style={{color:'var(--t2)'}}>SKU Barcode · 입고예정일 · 발주수량 · 확정수량 · 입고수량 · 매입가</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
             </tbody>
           </table></div>
-          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 공급 중 수량 파일은 supply_status 테이블에 자동 저장됩니다.</p>
+          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 쿠팡 발주서 = 공급 중 수량 파일은 동일해요. 발주번호+바코드 기준으로 중복 자동 처리되므로 매일 누적 업로드 가능합니다.</p>
         </div>
       </div>
     </div>
