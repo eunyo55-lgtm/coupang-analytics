@@ -116,20 +116,18 @@ async function upsertSupplyStatus(
 
   const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' }
 
-  // 발주번호 + SKU Barcode unique constraint 기준으로 중복 시 업데이트, 신규는 추가
+  // upsert_supply_status RPC 사용 — ON CONFLICT ("발주번호","SKU Barcode") DO UPDATE
   let total = 0
   for (let i = 0; i < deduped.length; i += 500) {
     const batch = deduped.slice(i, i + 500)
-    const res = await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
+    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_supply_status`, {
       method: 'POST',
-      headers: {
-        ...h,
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify(batch),
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: batch }),
     })
-    if (res.ok || res.status === 201) {
-      total += batch.length
+    if (res.ok) {
+      const cnt = await res.json().catch(() => batch.length)
+      total += Number(cnt) || batch.length
       if (i % 1000 === 0 || i + 500 >= deduped.length) {
         dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${Math.min(total, deduped.length)}/${deduped.length}행 처리 중...` })
       }
