@@ -35,8 +35,8 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
     return dates.map(d=>({date:d.slice(5),'26년':map26.get(d)||0,'25년':map25.get(d)||0,'24년':map24.get(d)||0})).filter(d=>d['26년']||d['25년']||d['24년'])
   },[state.daily26,state.daily25,state.daily24])
   return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--card)',borderRadius:'var(--r12)',padding:24,width:'min(720px,95vw)',boxShadow:'0 20px 60px rgba(0,0,0,0.4)'}} onClick={e=>e.stopPropagation()}>
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'#ffffff',borderRadius:'var(--r12)',padding:24,width:'min(720px,95vw)',boxShadow:'0 20px 60px rgba(0,0,0,0.4)'}} onClick={e=>e.stopPropagation()}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
           <div><div style={{fontWeight:800,fontSize:15}}>📈 판매 추이</div><div style={{fontSize:12,color:'var(--t3)',marginTop:2}}>{productName}</div></div>
           <button onClick={onClose} style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 12px',cursor:'pointer',fontSize:12}}>✕ 닫기</button>
@@ -49,9 +49,9 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
               <YAxis tick={{fontSize:9}} width={36}/>
               <Tooltip formatter={(val:number,name:string)=>[fmt(val)+'개',name]}/>
               <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:10}}/>
-             <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false}/>
-             <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={1.5} dot={false} strokeDasharray="5 3"/>
-             <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={1.5} dot={false} strokeDasharray="2 2"/>
+              <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false}/>
+              <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={2} dot={false} strokeDasharray="5 3"/>
+              <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={2} dot={false} strokeDasharray="2 2"/>
             </LineChart>
           </ResponsiveContainer>
         ):<div style={{textAlign:'center',padding:40,color:'var(--t3)'}}>데이터 없음</div>}
@@ -63,8 +63,8 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
 function StockTrendModal({ productName, stockHistory, onClose }: { productName:string; stockHistory:{week:string;qty:number}[]; onClose:()=>void }) {
   const fmt = (n:number) => Math.round(n).toLocaleString('ko-KR')
   return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--card)',borderRadius:'var(--r12)',padding:24,width:'min(600px,95vw)',boxShadow:'0 20px 60px rgba(0,0,0,0.4)'}} onClick={e=>e.stopPropagation()}>
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'#ffffff',borderRadius:'var(--r12)',padding:24,width:'min(600px,95vw)',boxShadow:'0 20px 60px rgba(0,0,0,0.4)'}} onClick={e=>e.stopPropagation()}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
           <div><div style={{fontWeight:800,fontSize:15}}>📦 재고 추이</div><div style={{fontSize:12,color:'var(--t3)',marginTop:2}}>{productName}</div></div>
           <button onClick={onClose} style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 12px',cursor:'pointer',fontSize:12}}>✕ 닫기</button>
@@ -228,8 +228,8 @@ export default function DashboardPage() {
                 <Tooltip formatter={(val:number,name:string)=>[fmt(val)+'개',name]} labelFormatter={l=>`날짜: ${l}`}/>
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{fontSize:11}}/>
                 <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false}/>
-                <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={2} dot={false}/>
-                <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={2} dot={false}/>
+                <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={1.5} dot={false} strokeDasharray="5 3"/>
+                <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={1.5} dot={false} strokeDasharray="2 2"/>
               </LineChart>
             </ResponsiveContainer>
           ):<div className="empty-st" style={{height:300}}><div className="es-ico">📈</div><div className="es-t">데이터 로딩 중...</div></div>}
