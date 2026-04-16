@@ -87,9 +87,9 @@ function SalesTrendModal({
               <YAxis tick={{ fontSize:9 }} width={36} />
               <Tooltip formatter={(val: number, name: string) => [fmt(val)+'개', name]} />
               <Legend iconType="circle" iconSize={7} wrapperStyle={{ fontSize:10 }} />
-              <Line type="monotone" dataKey="26년" stroke="#3B82F6" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="25년" stroke="#A855F7" strokeWidth={1.5} dot={false} strokeDasharray="5 3" />
-              <Line type="monotone" dataKey="24년" stroke="#10B981" strokeWidth={1.5} dot={false} strokeDasharray="2 2" />
+             <Line type="monotone" dataKey="26년" stroke="#2563EB" strokeWidth={2.5} dot={false} />
+<Line type="monotone" dataKey="25년" stroke="#9333EA" strokeWidth={2} dot={false} />
+<Line type="monotone" dataKey="24년" stroke="#059669" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
