@@ -52,19 +52,19 @@ export default function DataManagePage() {
         const normalized = normalizeSalesData(result.data)
         result.data = normalized as unknown as Record<string,unknown>[]
         const aggMap = new Map<string, DailySalesRow>()
-        normalized
-          .filter(r => !r.isReturn)
-          .forEach(r => {
-            const k = `${r.date}|${r.option}`
-            const stock = (r as SalesRow & { stock: number }).stock || 0
-            if (!aggMap.has(k)) {
-              aggMap.set(k, { date: r.date, barcode: r.option, quantity: r.qty, stock, cost: 0 })
-            } else {
-              const e = aggMap.get(k)!
-              e.quantity += r.qty
-              e.stock += stock
-            }
-          })
+   normalized
+  .filter(r => !r.isReturn)
+  .forEach(r => {
+    const k = `${r.date}|${r.option}`
+    const stock = (r as SalesRow & { stock: number }).stock || 0
+    if (!aggMap.has(k)) {
+      aggMap.set(k, { date: r.date, barcode: r.option, quantity: Number(r.qty) || 0, stock: Number(stock) || 0, cost: 0 })
+    } else {
+      const e = aggMap.get(k)!
+      e.quantity += Number(r.qty) || 0  // SUM 합산
+      e.stock = Math.max(e.stock, Number(stock) || 0)  // 재고는 최신값
+    }
+  })
         const upsertRows: DailySalesRow[] = Array.from(aggMap.values())
         if (upsertRows.length > 0) {
           const upsertResult = await upsertDailySales(upsertRows)
