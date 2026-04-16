@@ -271,26 +271,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="card" style={{marginBottom:12}}>
-        <div className="ch"><div className="ch-l"><div className="ch-ico">🚚</div><div><div className="ch-title">공급 현황</div><div className="ch-sub">월별 발주수량 · 공급수량 · 입고수량</div></div></div></div>
-        <div className="cb">
-          {supplyChartData.length>0?(
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={supplyChartData} margin={{top:8,right:20,left:0,bottom:5}} barCategoryGap="30%">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
-                <XAxis dataKey="month" tick={{fontSize:10}}/>
-                <YAxis tick={{fontSize:10}} width={40}/>
-                <Tooltip formatter={(val:number,name:string)=>[fmt(val)+'개',name]} labelFormatter={l=>`기간: ${l}`}/>
-                <Legend iconType="circle" iconSize={8} wrapperStyle={{fontSize:11}}/>
-                <Bar dataKey="발주수량" fill="#3B82F6" radius={[4,4,0,0]}/>
-                <Bar dataKey="공급수량" fill="#A855F7" radius={[4,4,0,0]}/>
-                <Bar dataKey="입고수량" fill="#10B981" radius={[4,4,0,0]}/>
-              </BarChart>
-            </ResponsiveContainer>
-          ):<div className="empty-st" style={{height:260}}><div className="es-ico">🚚</div><div className="es-t">발주/공급/입고 데이터 로딩 중...</div></div>}
-        </div>
-      </div>
-
       <div className="g2" style={{marginBottom:12}}>
         <div className="card">
           <div className="ch">
