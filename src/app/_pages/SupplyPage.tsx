@@ -15,9 +15,12 @@ type SupplyRow = {
   발주수량: number | string
   확정수량: number | string
   입고수량: number | string
-  image_url?: string
-  option_value?: string
-  cost?: number
+  매입가?: number
+  공급가?: number
+  총발주매입금?: number
+  입고금액?: number
+  발주유형?: string
+  발주현황?: string
 }
 
 function toD(s: unknown) { return s ? String(s).slice(0, 10) : '' }
@@ -32,7 +35,7 @@ export default function SupplyPage() {
   const [dateFrom, setDateFrom] = useState('2026-01-01')
   const [dateTo, setDateTo] = useState('2026-12-31')
   const [search, setSearch] = useState('')
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
 
   const weekRange = useMemo(() => {
     const d = new Date(), dow = d.getDay()
@@ -49,26 +52,13 @@ export default function SupplyPage() {
         const r = await fetch(`${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&limit=5000`, { headers: h })
         const data: SupplyRow[] = await r.json()
         if (!Array.isArray(data)) { setLoading(false); return }
-
-        const barcodes = [...new Set(data.map(r => r['SKU Barcode']).filter(Boolean))]
-        const prodMap: Record<string, { cost: number; image_url: string; option_value: string }> = {}
-        for (let i = 0; i < barcodes.length; i += 200) {
-          const batch = barcodes.slice(i, i + 200)
-          try {
-            const pr = await fetch(`${SUPA_URL}/rest/v1/products?select=barcode,cost,image_url,option_value&barcode=in.(${batch.map(b => `"${b}"`).join(',')})`, { headers: h })
-            const pdata: { barcode: string; cost: number; image_url: string; option_value: string }[] = await pr.json()
-            if (Array.isArray(pdata)) pdata.forEach(p => { prodMap[p.barcode] = { cost: p.cost, image_url: p.image_url, option_value: p.option_value } })
-          } catch { /* ignore */ }
-        }
-
         setRows(data.map(r => ({
           ...r,
           발주수량: toN(r.발주수량),
           확정수량: toN(r.확정수량),
           입고수량: toN(r.입고수량),
-          cost: prodMap[r['SKU Barcode']]?.cost || 0,
-          image_url: prodMap[r['SKU Barcode']]?.image_url || '',
-          option_value: prodMap[r['SKU Barcode']]?.option_value || '',
+          매입가:   toN(r.매입가),
+          공급가:   toN(r.공급가),
         })))
       } catch (e) { console.warn(e) }
       setLoading(false)
@@ -82,16 +72,18 @@ export default function SupplyPage() {
       (!search || r['SKU 이름'].toLowerCase().includes(search.toLowerCase()) || r['SKU Barcode'].includes(search))
   }), [rows, dateFrom, dateTo, search])
 
-  // KPI 계산: qty=확정수량, ord=발주수량, rec=입고수량, cost 기반 금액
+  // KPI 계산 — 금액은 매입가 × 수량
   function calcKpi(rowSet: SupplyRow[]) {
-    const qty = rowSet.reduce((s,r) => s + toN(r.확정수량), 0)
     const ord = rowSet.reduce((s,r) => s + toN(r.발주수량), 0)
+    const qty = rowSet.reduce((s,r) => s + toN(r.확정수량), 0)
     const rec = rowSet.reduce((s,r) => s + toN(r.입고수량), 0)
-    const confirmedAmt = rowSet.reduce((s,r) => s + toN(r.확정수량) * (r.cost||0), 0)
-    const ordAmt       = rowSet.reduce((s,r) => s + toN(r.발주수량) * (r.cost||0), 0)
-    const recAmt       = rowSet.reduce((s,r) => s + toN(r.입고수량) * (r.cost||0), 0)
+    const unp = qty - rec
+    const ordAmt       = rowSet.reduce((s,r) => s + toN(r.발주수량) * toN(r.매입가), 0)
+    const confirmedAmt = rowSet.reduce((s,r) => s + toN(r.확정수량) * toN(r.매입가), 0)
+    const recAmt       = rowSet.reduce((s,r) => s + toN(r.입고수량) * toN(r.매입가), 0)
+    const unpAmt       = confirmedAmt - recAmt
     const supplyRate   = ord > 0 ? Math.round(qty / ord * 100) : 0
-    return { qty, ord, rec, confirmedAmt, ordAmt, recAmt, supplyRate }
+    return { ord, qty, rec, unp, ordAmt, confirmedAmt, recAmt, unpAmt, supplyRate }
   }
 
   const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1)
@@ -111,18 +103,18 @@ export default function SupplyPage() {
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
   }, [rows])
 
-  const toggleRow = (i: number) => {
+  const toggleRow = (key: string) => {
     setExpandedRows(prev => {
       const next = new Set(prev)
-      next.has(i) ? next.delete(i) : next.add(i)
+      next.has(key) ? next.delete(key) : next.add(key)
       return next
     })
   }
 
   const kpiCards = [
-    { label:'전일 확정수량', sub: yesterdayStr, kpi: kpiYest, color:'var(--blue)', ico:'📦', cls:'kc-bl' },
+    { label:'전일 확정수량', sub: yesterdayStr, kpi: kpiYest,   color:'var(--blue)',   ico:'📦', cls:'kc-bl' },
     { label:'주간 확정수량', sub:`${weekRange.from.slice(5)}~${weekRange.to.slice(5)} (금~목)`, kpi: kpiWeek, color:'var(--purple)', ico:'📅', cls:'kc-pu' },
-    { label:'누적 확정수량', sub:'26년 1/1~', kpi: kpiCum, color:'var(--green)', ico:'📊', cls:'kc-gr' },
+    { label:'누적 확정수량', sub:'26년 1/1~',   kpi: kpiCum,    color:'var(--green)',  ico:'📊', cls:'kc-gr' },
     { label:'이동중 확정수량', sub:'오늘~ 미입고', kpi: kpiMoving, color:'var(--amber)', ico:'🚢', cls:'kc-am' },
   ]
 
@@ -135,27 +127,26 @@ export default function SupplyPage() {
             <div className="kpi-top"><div className="kpi-ico">{c.ico}</div></div>
             <div className="kpi-lbl">{c.label}</div>
             <div className="kpi-val" style={{ color: c.color }}>{loading ? '—' : fmt(c.kpi.qty)}</div>
-            {/* 세부 데이터 */}
             <div style={{ marginTop:6, display:'flex', flexDirection:'column', gap:2 }}>
               <div style={{ fontSize:10, color:'var(--t3)', display:'flex', justifyContent:'space-between' }}>
-                <span>확정금액</span><span style={{ color:'var(--text)', fontWeight:700 }}>{loading ? '—' : fmt(c.kpi.confirmedAmt)}원</span>
+                <span>확정금액</span><span style={{ color:'var(--text)', fontWeight:700 }}>{loading?'—':fmt(c.kpi.confirmedAmt)}원</span>
               </div>
               <div style={{ fontSize:10, color:'var(--t3)', display:'flex', justifyContent:'space-between' }}>
-                <span>발주수량</span><span style={{ color:'var(--text)', fontWeight:700 }}>{loading ? '—' : fmt(c.kpi.ord)}</span>
+                <span>발주수량</span><span style={{ color:'var(--text)', fontWeight:700 }}>{loading?'—':fmt(c.kpi.ord)}</span>
               </div>
               <div style={{ fontSize:10, color:'var(--t3)', display:'flex', justifyContent:'space-between' }}>
-                <span>발주금액</span><span style={{ color:'var(--text)', fontWeight:700 }}>{loading ? '—' : fmt(c.kpi.ordAmt)}원</span>
+                <span>발주금액</span><span style={{ color:'var(--text)', fontWeight:700 }}>{loading?'—':fmt(c.kpi.ordAmt)}원</span>
               </div>
               <div style={{ fontSize:10, color:'var(--t3)', display:'flex', justifyContent:'space-between' }}>
-                <span>입고수량</span><span style={{ color:'var(--green)', fontWeight:700 }}>{loading ? '—' : fmt(c.kpi.rec)}</span>
+                <span>입고수량</span><span style={{ color:'var(--green)', fontWeight:700 }}>{loading?'—':fmt(c.kpi.rec)}</span>
               </div>
               <div style={{ fontSize:10, color:'var(--t3)', display:'flex', justifyContent:'space-between' }}>
-                <span>입고금액</span><span style={{ color:'var(--green)', fontWeight:700 }}>{loading ? '—' : fmt(c.kpi.recAmt)}원</span>
+                <span>입고금액</span><span style={{ color:'var(--green)', fontWeight:700 }}>{loading?'—':fmt(c.kpi.recAmt)}원</span>
               </div>
               <div style={{ fontSize:10, color:'var(--t3)', display:'flex', justifyContent:'space-between' }}>
                 <span>공급률</span>
                 <span style={{ fontWeight:800, color: c.kpi.supplyRate>=100?'var(--green)':c.kpi.supplyRate>=50?'var(--amber)':'#ef4444' }}>
-                  {loading ? '—' : c.kpi.supplyRate + '%'}
+                  {loading?'—':c.kpi.supplyRate+'%'}
                 </span>
               </div>
             </div>
@@ -164,7 +155,7 @@ export default function SupplyPage() {
         ))}
       </div>
 
-      {/* 공급 현황 리스트 */}
+      {/* 공급 현황 테이블 */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">🚚</div><div>
@@ -184,84 +175,59 @@ export default function SupplyPage() {
           {loading ? (
             <div className="empty-st"><div className="es-ico">🚚</div><div className="es-t">로딩 중...</div></div>
           ) : rows.length === 0 ? (
-            <div className="empty-st"><div className="es-ico">📦</div><div className="es-t">데이터 없음</div><div style={{ fontSize:11, color:'var(--t3)', marginTop:4 }}>Supabase supply_status 테이블에 데이터를 업로드해주세요</div></div>
+            <div className="empty-st"><div className="es-ico">📦</div><div className="es-t">데이터 없음</div><div style={{ fontSize:11, color:'var(--t3)', marginTop:4 }}>공급 중 수량 파일을 업로드해주세요</div></div>
           ) : (
             <div className="tw" style={{ overflowX:'auto' }}>
               <table style={{ minWidth:900 }}>
                 <thead><tr>
-                  <th style={{ width:28 }}></th>
+                  <th style={{ width:24 }}></th>
                   <th>입고예정일</th>
-                  <th style={{ width:36 }}>이미지</th>
                   <th>상품명</th>
-                  <th style={{ textAlign:'right' }}>확정수량</th>
-                  <th style={{ textAlign:'right' }}>확정금액</th>
                   <th style={{ textAlign:'right' }}>발주수량</th>
-                  <th style={{ textAlign:'right' }}>발주금액</th>
+                  <th style={{ textAlign:'right' }}>확정수량</th>
                   <th style={{ textAlign:'right' }}>입고수량</th>
-                  <th style={{ textAlign:'right' }}>입고금액</th>
+                  <th style={{ textAlign:'right' }}>미납수량</th>
                   <th style={{ textAlign:'right' }}>공급률</th>
+                  <th style={{ textAlign:'right' }}>발주금액</th>
+                  <th style={{ textAlign:'right' }}>확정금액</th>
+                  <th style={{ textAlign:'right' }}>입고금액</th>
                 </tr></thead>
                 <tbody>
                   {filtered.length > 0 ? filtered.map((r, i) => {
                     const ord = toN(r.발주수량), sup = toN(r.확정수량), rec = toN(r.입고수량)
+                    const unp = sup - rec
                     const rate = ord > 0 ? Math.round(sup / ord * 100) : 0
-                    const cost = r.cost || 0
-                    const expanded = expandedRows.has(i)
+                    const mp = toN(r.매입가)
+                    const rowKey = `main-${i}`
+                    const expanded = expandedRows.has(rowKey)
                     return (
                       <>
-                        <tr key={i} style={{ cursor:'pointer' }} onClick={() => toggleRow(i)}>
-                          <td style={{ textAlign:'center', fontSize:11, color:'var(--t3)' }}>
-                            {expanded ? '▲' : '▼'}
-                          </td>
+                        <tr key={rowKey} style={{ cursor:'pointer' }} onClick={() => toggleRow(rowKey)}>
+                          <td style={{ textAlign:'center', fontSize:10, color:'var(--t3)', userSelect:'none' }}>{expanded ? '▲' : '▼'}</td>
                           <td style={{ fontSize:11, whiteSpace:'nowrap' }}>{toD(r.입고예정일)}</td>
-                          <td>
-                            {r.image_url
-                              ? <img src={r.image_url} alt="" style={{ width:28, height:28, borderRadius:4, objectFit:'cover' }} onError={e=>{(e.target as HTMLImageElement).style.display='none'}} />
-                              : <div style={{ width:28, height:28, borderRadius:4, background:'var(--bg)', border:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9 }}>-</div>}
-                          </td>
-                          <td style={{ fontWeight:700, maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r['SKU 이름']}</td>
-                          <td style={{ textAlign:'right', color:'var(--blue)', fontWeight:700 }}>{fmt(sup)}</td>
-                          <td style={{ textAlign:'right', fontSize:11, color:'var(--blue)' }}>{fmt(sup*cost)}</td>
+                          <td style={{ fontWeight:700, maxWidth:280, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r['SKU 이름']}</td>
                           <td style={{ textAlign:'right' }}>{fmt(ord)}</td>
-                          <td style={{ textAlign:'right', fontSize:11 }}>{fmt(ord*cost)}</td>
+                          <td style={{ textAlign:'right', color:'var(--blue)', fontWeight:700 }}>{fmt(sup)}</td>
                           <td style={{ textAlign:'right', color:'var(--green)', fontWeight:700 }}>{fmt(rec)}</td>
-                          <td style={{ textAlign:'right', fontSize:11, color:'var(--green)' }}>{fmt(rec*cost)}</td>
+                          <td style={{ textAlign:'right', color: unp>0?'#ef4444':'var(--t3)', fontWeight: unp>0?700:400 }}>{fmt(unp)}</td>
                           <td style={{ textAlign:'right' }}>
                             <span style={{ fontSize:10, fontWeight:700, color: rate>=100?'var(--green)':rate>=50?'var(--amber)':'#ef4444' }}>{rate}%</span>
                           </td>
+                          <td style={{ textAlign:'right', fontSize:11 }}>{fmt(ord*mp)}</td>
+                          <td style={{ textAlign:'right', fontSize:11, color:'var(--blue)' }}>{fmt(sup*mp)}</td>
+                          <td style={{ textAlign:'right', fontSize:11, color:'var(--green)' }}>{fmt(rec*mp)}</td>
                         </tr>
                         {expanded && (
-                          <tr key={`${i}-detail`} style={{ background:'var(--bg)' }}>
-                            <td colSpan={11} style={{ padding:'8px 16px 10px 48px' }}>
-                              <div style={{ display:'flex', gap:24, fontSize:11, color:'var(--t3)' }}>
-                                <div>
-                                  <span style={{ fontWeight:700, color:'var(--text)' }}>바코드: </span>
-                                  <span>{r['SKU Barcode']}</span>
-                                </div>
-                                {r.option_value && (
-                                  <div>
-                                    <span style={{ fontWeight:700, color:'var(--text)' }}>옵션: </span>
-                                    <span>{r.option_value}</span>
-                                  </div>
-                                )}
-                                {r['SKU ID'] && (
-                                  <div>
-                                    <span style={{ fontWeight:700, color:'var(--text)' }}>SKU ID: </span>
-                                    <span>{r['SKU ID']}</span>
-                                  </div>
-                                )}
-                                {r.발주번호 && (
-                                  <div>
-                                    <span style={{ fontWeight:700, color:'var(--text)' }}>발주번호: </span>
-                                    <span>{r.발주번호}</span>
-                                  </div>
-                                )}
-                                {r.물류센터 && (
-                                  <div>
-                                    <span style={{ fontWeight:700, color:'var(--text)' }}>물류센터: </span>
-                                    <span>{r.물류센터}</span>
-                                  </div>
-                                )}
+                          <tr key={`${rowKey}-detail`} style={{ background:'var(--bg)' }}>
+                            <td colSpan={11} style={{ padding:'6px 12px 8px 36px' }}>
+                              <div style={{ display:'flex', gap:20, fontSize:11, color:'var(--t3)', flexWrap:'wrap' }}>
+                                <div><span style={{ fontWeight:700, color:'var(--text)' }}>바코드: </span>{r['SKU Barcode']}</div>
+                                {r['SKU ID'] && <div><span style={{ fontWeight:700, color:'var(--text)' }}>SKU ID: </span>{r['SKU ID']}</div>}
+                                {r.발주번호 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>발주번호: </span>{r.발주번호}</div>}
+                                {r.물류센터 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>물류센터: </span>{r.물류센터}</div>}
+                                {r.발주유형 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>발주유형: </span>{r.발주유형}</div>}
+                                {r.발주현황 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>발주현황: </span>{r.발주현황}</div>}
+                                {mp > 0 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>매입가: </span>{fmt(mp)}원</div>}
                               </div>
                             </td>
                           </tr>
@@ -286,49 +252,47 @@ export default function SupplyPage() {
           <div className="tw" style={{ overflowX:'auto' }}>
             <table style={{ minWidth:900 }}>
               <thead><tr>
-                <th style={{ width:28 }}></th>
-                <th>입고예정일</th><th style={{ width:36 }}>이미지</th><th>상품명</th>
+                <th style={{ width:24 }}></th>
+                <th>입고예정일</th><th>상품명</th>
+                <th style={{ textAlign:'right' }}>발주</th>
                 <th style={{ textAlign:'right' }}>확정</th>
                 <th style={{ textAlign:'right' }}>입고</th>
                 <th style={{ textAlign:'right' }}>미납</th>
                 <th style={{ textAlign:'right' }}>공급률</th>
+                <th style={{ textAlign:'right' }}>발주금액</th>
                 <th style={{ textAlign:'right' }}>확정금액</th>
                 <th style={{ textAlign:'right' }}>입고금액</th>
-                <th style={{ textAlign:'right' }}>미납금액</th>
               </tr></thead>
               <tbody>
                 {unpaid.length > 0 ? unpaid.map((r, i) => {
-                  const idx = 90000 + i
-                  const sup=toN(r.확정수량), rec=toN(r.입고수량)
-                  const unp=sup-rec, rate=sup>0?Math.round(rec/sup*100):0, cost=r.cost||0
-                  const expanded = expandedRows.has(idx)
+                  const ord=toN(r.발주수량), sup=toN(r.확정수량), rec=toN(r.입고수량)
+                  const unp=sup-rec, rate=sup>0?Math.round(rec/sup*100):0, mp=toN(r.매입가)
+                  const rowKey = `unp-${i}`
+                  const expanded = expandedRows.has(rowKey)
                   return (
                     <>
-                      <tr key={i} style={{ cursor:'pointer' }} onClick={() => toggleRow(idx)}>
-                        <td style={{ textAlign:'center', fontSize:11, color:'var(--t3)' }}>{expanded ? '▲' : '▼'}</td>
+                      <tr key={rowKey} style={{ cursor:'pointer' }} onClick={() => toggleRow(rowKey)}>
+                        <td style={{ textAlign:'center', fontSize:10, color:'var(--t3)', userSelect:'none' }}>{expanded ? '▲' : '▼'}</td>
                         <td style={{ fontSize:11, whiteSpace:'nowrap' }}>{toD(r.입고예정일)}</td>
-                        <td>
-                          {r.image_url
-                            ? <img src={r.image_url} alt="" style={{ width:28, height:28, borderRadius:4, objectFit:'cover' }} onError={e=>{(e.target as HTMLImageElement).style.display='none'}} />
-                            : <div style={{ width:28, height:28, borderRadius:4, background:'var(--bg)', border:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9 }}>-</div>}
-                        </td>
-                        <td style={{ fontWeight:700, maxWidth:240, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r['SKU 이름']}</td>
+                        <td style={{ fontWeight:700, maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r['SKU 이름']}</td>
+                        <td style={{ textAlign:'right' }}>{fmt(ord)}</td>
                         <td style={{ textAlign:'right', color:'var(--blue)', fontWeight:700 }}>{fmt(sup)}</td>
                         <td style={{ textAlign:'right', color:'var(--green)', fontWeight:700 }}>{fmt(rec)}</td>
                         <td style={{ textAlign:'right', fontWeight:700, color:'#ef4444' }}>{fmt(unp)}</td>
                         <td style={{ textAlign:'right' }}><span style={{ fontSize:10, fontWeight:700, color:rate>=100?'var(--green)':rate>=50?'var(--amber)':'#ef4444' }}>{rate}%</span></td>
-                        <td style={{ textAlign:'right', fontSize:11, color:'var(--blue)' }}>{fmt(sup*cost)}</td>
-                        <td style={{ textAlign:'right', fontSize:11, color:'var(--green)' }}>{fmt(rec*cost)}</td>
-                        <td style={{ textAlign:'right', fontSize:11, fontWeight:700, color:'#ef4444' }}>{fmt(unp*cost)}</td>
+                        <td style={{ textAlign:'right', fontSize:11 }}>{fmt(ord*mp)}</td>
+                        <td style={{ textAlign:'right', fontSize:11, color:'var(--blue)' }}>{fmt(sup*mp)}</td>
+                        <td style={{ textAlign:'right', fontSize:11, color:'var(--green)' }}>{fmt(rec*mp)}</td>
                       </tr>
                       {expanded && (
-                        <tr key={`${i}-detail`} style={{ background:'var(--bg)' }}>
-                          <td colSpan={11} style={{ padding:'8px 16px 10px 48px' }}>
-                            <div style={{ display:'flex', gap:24, fontSize:11, color:'var(--t3)' }}>
-                              <div><span style={{ fontWeight:700, color:'var(--text)' }}>바코드: </span><span>{r['SKU Barcode']}</span></div>
-                              {r.option_value && <div><span style={{ fontWeight:700, color:'var(--text)' }}>옵션: </span><span>{r.option_value}</span></div>}
-                              {r['SKU ID'] && <div><span style={{ fontWeight:700, color:'var(--text)' }}>SKU ID: </span><span>{r['SKU ID']}</span></div>}
-                              {r.발주번호 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>발주번호: </span><span>{r.발주번호}</span></div>}
+                        <tr key={`${rowKey}-detail`} style={{ background:'var(--bg)' }}>
+                          <td colSpan={11} style={{ padding:'6px 12px 8px 36px' }}>
+                            <div style={{ display:'flex', gap:20, fontSize:11, color:'var(--t3)', flexWrap:'wrap' }}>
+                              <div><span style={{ fontWeight:700, color:'var(--text)' }}>바코드: </span>{r['SKU Barcode']}</div>
+                              {r['SKU ID'] && <div><span style={{ fontWeight:700, color:'var(--text)' }}>SKU ID: </span>{r['SKU ID']}</div>}
+                              {r.발주번호 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>발주번호: </span>{r.발주번호}</div>}
+                              {r.물류센터 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>물류센터: </span>{r.물류센터}</div>}
+                              {mp > 0 && <div><span style={{ fontWeight:700, color:'var(--text)' }}>매입가: </span>{fmt(mp)}원</div>}
                             </div>
                           </td>
                         </tr>
@@ -358,7 +322,7 @@ export default function SupplyPage() {
             <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
               {movingByDate.map(([date, items]) => {
                 const dayQty = items.reduce((s,r)=>s+toN(r.확정수량),0)
-                const dayAmt = items.reduce((s,r)=>s+toN(r.확정수량)*(r.cost||0),0)
+                const dayAmt = items.reduce((s,r)=>s+toN(r.확정수량)*toN(r.매입가),0)
                 return (
                   <div key={date} style={{ border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
                     <div style={{ background:'var(--bg)', padding:'8px 14px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid var(--border)' }}>
@@ -367,15 +331,12 @@ export default function SupplyPage() {
                     </div>
                     <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))', gap:8, padding:12 }}>
                       {items.map((r, i) => (
-                        <div key={i} style={{ display:'flex', alignItems:'center', gap:8, background:'var(--bg)', borderRadius:8, padding:'8px 10px', border:'1px solid var(--border)' }}>
-                          {r.image_url
-                            ? <img src={r.image_url} alt="" style={{ width:36, height:36, borderRadius:6, objectFit:'cover', flexShrink:0 }} onError={e=>{(e.target as HTMLImageElement).style.display='none'}} />
-                            : <div style={{ width:36, height:36, borderRadius:6, background:'var(--card)', border:'1px solid var(--border)', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:10 }}>📦</div>}
-                          <div style={{ overflow:'hidden', flex:1 }}>
-                            <div style={{ fontWeight:700, fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r['SKU 이름']}</div>
-                            <div style={{ fontSize:10, color:'var(--t3)', marginTop:1 }}>{r['SKU Barcode']}</div>
-                            {r.option_value && <div style={{ fontSize:10, color:'var(--t3)' }}>{r.option_value}</div>}
-                            <div style={{ fontSize:11, fontWeight:800, color:'var(--amber)', marginTop:2 }}>{fmt(toN(r.확정수량))}개 · {fmt(toN(r.확정수량)*(r.cost||0))}원</div>
+                        <div key={i} style={{ background:'var(--bg)', borderRadius:8, padding:'10px 12px', border:'1px solid var(--border)' }}>
+                          <div style={{ fontWeight:700, fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r['SKU 이름']}</div>
+                          <div style={{ fontSize:10, color:'var(--t3)', marginTop:2 }}>{r['SKU Barcode']}</div>
+                          {r.물류센터 && <div style={{ fontSize:10, color:'var(--t3)' }}>📍 {r.물류센터}</div>}
+                          <div style={{ fontSize:11, fontWeight:800, color:'var(--amber)', marginTop:4 }}>
+                            {fmt(toN(r.확정수량))}개 · {fmt(toN(r.확정수량)*toN(r.매입가))}원
                           </div>
                         </div>
                       ))}
