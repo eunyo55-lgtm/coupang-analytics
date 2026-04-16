@@ -80,8 +80,39 @@ export default function DataManagePage() {
         }})
       } else if (key === 'master') {
         dispatch({ type: 'HYDRATE', payload: { masterData: mergeRaw(state.masterData, result.data), hasData: true } })
-      } else if (key === 'orders') {
-        dispatch({ type: 'HYDRATE', payload: { ordersData: mergeRaw(state.ordersData, result.data), hasData: true } })
+    } else if (key === 'orders') {
+  // Supabase supply_status 테이블에 upsert
+  const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
+  const supplyRows = result.data.map(r => ({
+    '발주번호': r['발주번호'] || r['주문번호'] || '',
+    'SKU ID': r['SKU ID'] || r['SKU_ID'] || '',
+    'SKU 이름': r['SKU 이름'] || r['SKU이름'] || r['상품명'] || '',
+    'SKU Barcode': r['SKU Barcode'] || r['SKUBarcode'] || r['바코드'] || '',
+    '물류센터': r['물류센터'] || '',
+    '입고예정일': String(r['입고예정일'] || '').slice(0, 10),
+    '발주일': String(r['발주일'] || '').slice(0, 10),
+    '발주수량': Number(r['발주수량']) || 0,
+    '확정수량': Number(r['확정수량']) || 0,
+    '입고수량': Number(r['입고수량']) || 0,
+  })).filter(r => r['SKU Barcode'] && r['입고예정일'])
+  // 500건씩 배치 upsert
+  for (let i = 0; i < supplyRows.length; i += 500) {
+    const batch = supplyRows.slice(i, i + 500)
+    await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPA_KEY,
+        'Authorization': `Bearer ${SUPA_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(batch),
+    })
+  }
+  dispatch({ type: 'APPEND_LOG', payload: `✅ 발주서 Supabase 저장 완료: ${supplyRows.length}건` })
+  dispatch({ type: 'HYDRATE', payload: { ordersData: mergeRaw(state.ordersData, result.data), hasData: true } })
+}
       } else if (key === 'supply') {
         dispatch({ type: 'HYDRATE', payload: { supplyData: mergeRaw(state.supplyData, result.data), hasData: true } })
       }
