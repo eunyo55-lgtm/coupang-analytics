@@ -49,9 +49,9 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
               <YAxis tick={{fontSize:9}} width={36}/>
               <Tooltip formatter={(val:number,name:string)=>[fmt(val)+'개',name]}/>
               <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:10}}/>
-              <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false}/>
-              <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={2} dot={false}/>
-              <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={2} dot={false}/>
+             <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false}/>
+             <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={1.5} dot={false} strokeDasharray="5 3"/>
+             <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={1.5} dot={false} strokeDasharray="2 2"/>
             </LineChart>
           </ResponsiveContainer>
         ):<div style={{textAlign:'center',padding:40,color:'var(--t3)'}}>데이터 없음</div>}
