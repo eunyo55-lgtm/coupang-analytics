@@ -137,7 +137,8 @@ export function normalizeSalesData(
 
   const stockCol = detectColumn(s0, COL_CANDIDATES.stock)
 
-  return raw
+  // ── Step 1: row별 파싱 ──
+  const parsed = raw
     .filter(row => {
       const d = dateCol ? String(row[dateCol] || '') : ''
       return d.length > 0
@@ -173,4 +174,22 @@ export function normalizeSalesData(
       }
     })
     .filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/))  // 날짜 형식 유효한 행만
+
+  // ── Step 2: 날짜 + 바코드(option) 기준으로 집계 ──
+  // 쿠팡 허브 파일은 동일 날짜에 같은 바코드가 여러 row로 나올 수 있음
+  // 출고수량(qty)은 SUM, 현재재고수량(stock)은 최신값(마지막 row) 사용
+  const aggMap = new Map<string, SalesRow>()
+  for (const row of parsed) {
+    const key = `${row.date}||${row.option}||${String(row.isReturn)}`
+    const existing = aggMap.get(key)
+    if (existing) {
+      existing.qty     += row.qty                     // 출고수량 누적 합산
+      existing.revenue += row.revenue                 // 매출 누적 합산
+      existing.stock    = row.stock                   // 재고는 최신값(마지막 row)으로 덮어씀
+    } else {
+      aggMap.set(key, { ...row })
+    }
+  }
+
+  return Array.from(aggMap.values())
 }
