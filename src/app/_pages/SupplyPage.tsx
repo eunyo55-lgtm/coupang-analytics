@@ -59,12 +59,12 @@ export default function SupplyPage() {
   const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>(_cachedProdMap)
   const [loading, setLoading] = useState(!_cacheLoaded)
 
-  // 차트용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 1달 후
+  // 차트용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 오늘
   const [chartFrom, setChartFrom] = useState(() => getOneMonthAgo())
-  const [chartTo,   setChartTo]   = useState(() => getOneMonthLater())
-  // 테이블용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 1달 후
+  const [chartTo,   setChartTo]   = useState(() => new Date().toISOString().slice(0,10))
+  // 테이블용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 오늘
   const [tableFrom, setTableFrom] = useState(() => getOneMonthAgo())
-  const [tableTo,   setTableTo]   = useState(() => getOneMonthLater())
+  const [tableTo,   setTableTo]   = useState(() => new Date().toISOString().slice(0,10))
   // DB 로드용 = 두 필터의 min/max
   const dateFrom = useMemo(() => chartFrom < tableFrom ? chartFrom : tableFrom, [chartFrom, tableFrom])
   const dateTo   = useMemo(() => chartTo > tableTo ? chartTo : tableTo, [chartTo, tableTo])
