@@ -9,11 +9,14 @@ import type { DailySalesRow } from '@/lib/upsertSales'
 import { getPresetRange } from '@/lib/dateUtils'
 import type { ParseResult, SalesRow } from '@/types'
 
+const SURL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
+const SKEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
+
 const FILE_CONFIG = [
   { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터', sub: '상품코드 · 상품명 · 옵션 · 재고' },
-  { key: 'sales' as const, icon: '🛒', title: '쿠팡 판매 데이터', sub: '판매량 · 금액 · 날짜' },
-  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서', sub: '발주번호 · 수량' },
-  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량', sub: '입고 대기 수량 · 예정일' },
+  { key: 'sales'  as const, icon: '🛒', title: '쿠팡 판매 데이터',      sub: '판매량 · 금액 · 날짜' },
+  { key: 'orders' as const, icon: '📦', title: '쿠팡 발주서',            sub: '발주번호 · 수량' },
+  { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',           sub: '입고 대기 수량 · 예정일' },
 ]
 
 function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
@@ -26,9 +29,11 @@ function mergeSales(prev: SalesRow[], next: SalesRow[]): SalesRow[] {
 
 function mergeRaw(prev: Record<string,unknown>[], next: Record<string,unknown>[]): Record<string,unknown>[] {
   if (!prev.length) return next
-  const k = (r: Record<string,unknown>) => `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
+  const k = (r: Record<string,unknown>) =>
+    `${r['상품명']||r['productName']||r['item']||''}|${r['옵션']||r['option']||''}`
   const m = new Map<string,Record<string,unknown>>()
-  prev.forEach(r => m.set(k(r),r)); next.forEach(r => m.set(k(r),r))
+  prev.forEach(r => m.set(k(r),r))
+  next.forEach(r => m.set(k(r),r))
   return Array.from(m.values())
 }
 
@@ -37,7 +42,7 @@ export default function DataManagePage() {
   const router = useRouter()
   const [uploading, setUploading] = useState<Record<string,boolean>>({})
   const [fileNames, setFileNames] = useState<Record<string,string>>({})
-  const [done, setDone] = useState<Record<string,boolean>>({})
+  const [done, setDone]           = useState<Record<string,boolean>>({})
   const [analyzing, setAnalyzing] = useState(false)
   const inputRefs = useRef<Record<string, HTMLInputElement|null>>({})
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
@@ -45,6 +50,7 @@ export default function DataManagePage() {
   async function handleFile(file: File, key: ParseResult['key']) {
     setUploading(u => ({ ...u, [key]: true }))
     const result = await parseFile(file, key)
+
     if (result.error) {
       dispatch({ type: 'APPEND_LOG', payload: `❌ [${key}] ${result.error}` })
     } else {
@@ -52,19 +58,19 @@ export default function DataManagePage() {
         const normalized = normalizeSalesData(result.data)
         result.data = normalized as unknown as Record<string,unknown>[]
         const aggMap = new Map<string, DailySalesRow>()
-   normalized
-  .filter(r => !r.isReturn)
-  .forEach(r => {
-    const k = `${r.date}|${r.option}`
-    const stock = (r as SalesRow & { stock: number }).stock || 0
-    if (!aggMap.has(k)) {
-      aggMap.set(k, { date: r.date, barcode: r.option, quantity: Number(r.qty) || 0, stock: Number(stock) || 0, cost: 0 })
-    } else {
-      const e = aggMap.get(k)!
-      e.quantity += Number(r.qty) || 0  // SUM 합산
-      e.stock = Math.max(e.stock, Number(stock) || 0)  // 재고는 최신값
-    }
-  })
+        normalized
+          .filter(r => !r.isReturn)
+          .forEach(r => {
+            const k = `${r.date}|${r.option}`
+            const stock = (r as SalesRow & { stock: number }).stock || 0
+            if (!aggMap.has(k)) {
+              aggMap.set(k, { date: r.date, barcode: r.option, quantity: Number(r.qty)||0, stock: Number(stock)||0, cost: 0 })
+            } else {
+              const e = aggMap.get(k)!
+              e.quantity += Number(r.qty) || 0
+              e.stock = Math.max(e.stock, Number(stock)||0)
+            }
+          })
         const upsertRows: DailySalesRow[] = Array.from(aggMap.values())
         if (upsertRows.length > 0) {
           const upsertResult = await upsertDailySales(upsertRows)
@@ -74,48 +80,46 @@ export default function DataManagePage() {
             dispatch({ type: 'APPEND_LOG', payload: `✅ Supabase 저장 완료: ${upsertRows.length}건` })
           }
         }
-        dispatch({ type: 'HYDRATE', payload: {
-          salesData: mergeSales(state.salesData, normalized),
-          hasData: true,
-        }})
+        dispatch({ type: 'HYDRATE', payload: { salesData: mergeSales(state.salesData, normalized), hasData: true } })
+
       } else if (key === 'master') {
         dispatch({ type: 'HYDRATE', payload: { masterData: mergeRaw(state.masterData, result.data), hasData: true } })
-    } else if (key === 'orders') {
-  // Supabase supply_status 테이블에 upsert
-  const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
-  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
-  const supplyRows = result.data.map(r => ({
-    '발주번호': r['발주번호'] || r['주문번호'] || '',
-    'SKU ID': r['SKU ID'] || r['SKU_ID'] || '',
-    'SKU 이름': r['SKU 이름'] || r['SKU이름'] || r['상품명'] || '',
-    'SKU Barcode': r['SKU Barcode'] || r['SKUBarcode'] || r['바코드'] || '',
-    '물류센터': r['물류센터'] || '',
-    '입고예정일': String(r['입고예정일'] || '').slice(0, 10),
-    '발주일': String(r['발주일'] || '').slice(0, 10),
-    '발주수량': Number(r['발주수량']) || 0,
-    '확정수량': Number(r['확정수량']) || 0,
-    '입고수량': Number(r['입고수량']) || 0,
-  })).filter(r => r['SKU Barcode'] && r['입고예정일'])
-  // 500건씩 배치 upsert
-  for (let i = 0; i < supplyRows.length; i += 500) {
-    const batch = supplyRows.slice(i, i + 500)
-    await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPA_KEY,
-        'Authorization': `Bearer ${SUPA_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates',
-      },
-      body: JSON.stringify(batch),
-    })
-  }
-  dispatch({ type: 'APPEND_LOG', payload: `✅ 발주서 Supabase 저장 완료: ${supplyRows.length}건` })
-  dispatch({ type: 'HYDRATE', payload: { ordersData: mergeRaw(state.ordersData, result.data), hasData: true } })
-}
+
+      } else if (key === 'orders') {
+        // 발주서 → supply_status 테이블에 upsert
+        const supplyRows = result.data.map(r => ({
+          '발주번호':   r['발주번호']   || '',
+          'SKU ID':     r['SKU ID']     || '',
+          'SKU 이름':   r['SKU 이름']   || r['상품명'] || '',
+          'SKU Barcode': r['SKU Barcode'] || r['바코드'] || '',
+          '물류센터':   r['물류센터']   || '',
+          '입고예정일': String(r['입고예정일'] || '').slice(0, 10),
+          '발주일':     String(r['발주일']     || '').slice(0, 10),
+          '발주수량':   Number(r['발주수량'])  || 0,
+          '확정수량':   Number(r['확정수량'])  || 0,
+          '입고수량':   Number(r['입고수량'])  || 0,
+        })).filter(r => r['SKU Barcode'] && r['입고예정일'])
+
+        for (let i = 0; i < supplyRows.length; i += 500) {
+          const batch = supplyRows.slice(i, i + 500)
+          await fetch(`${SURL}/rest/v1/supply_status`, {
+            method: 'POST',
+            headers: {
+              'apikey': SKEY,
+              'Authorization': `Bearer ${SKEY}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates',
+            },
+            body: JSON.stringify(batch),
+          })
+        }
+        dispatch({ type: 'APPEND_LOG', payload: `✅ 발주서 Supabase 저장: ${supplyRows.length}건` })
+        dispatch({ type: 'HYDRATE', payload: { ordersData: mergeRaw(state.ordersData, result.data), hasData: true } })
+
       } else if (key === 'supply') {
         dispatch({ type: 'HYDRATE', payload: { supplyData: mergeRaw(state.supplyData, result.data), hasData: true } })
       }
+
       dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.data.length}행 로드` })
       setFileNames(f => ({ ...f, [key]: file.name }))
       setDone(d => ({ ...d, [key]: true }))
@@ -160,7 +164,7 @@ export default function DataManagePage() {
   }
 
   const hasAny = state.masterData.length > 0 || state.salesData.length > 0
-  const salesDates = state.salesData.map(r=>r.date).filter(Boolean).sort()
+  const salesDates = state.salesData.map(r => r.date).filter(Boolean).sort()
 
   return (
     <div>
@@ -211,7 +215,8 @@ export default function DataManagePage() {
         <div className="cb">
           <div className="up-grid2">
             {FILE_CONFIG.map(({ key, icon, title, sub }) => (
-              <div key={key} className={`up-mini${done[key] ? ' done' : ''}`} onClick={() => inputRefs.current[key]?.click()}>
+              <div key={key} className={`up-mini${done[key] ? ' done' : ''}`}
+                onClick={() => inputRefs.current[key]?.click()}>
                 <input type="file" accept=".xlsx,.xls,.csv"
                   ref={el => { inputRefs.current[key] = el }}
                   style={{ display:'none' }}
@@ -232,7 +237,8 @@ export default function DataManagePage() {
 
       {state.parseLog.length > 0 && (
         <div className="card">
-          <div className="ch"><div className="ch-l"><div className="ch-ico">🔍</div><div className="ch-title">파싱 로그</div></div></div>
+          <div className="ch"><div className="ch-l"><div className="ch-ico">🔍</div>
+            <div className="ch-title">파싱 로그</div></div></div>
           <div className="cb" style={{ padding:'10px 14px' }}>
             <div className="log-box">
               {state.parseLog.map((line, i) => (
@@ -244,18 +250,19 @@ export default function DataManagePage() {
       )}
 
       <div className="card">
-        <div className="ch"><div className="ch-l"><div className="ch-ico">📖</div><div className="ch-title">파일 컬럼 가이드</div></div></div>
+        <div className="ch"><div className="ch-l"><div className="ch-ico">📖</div>
+          <div className="ch-title">파일 컬럼 가이드</div></div></div>
         <div className="cb">
           <div className="tw"><table>
             <thead><tr><th>파일</th><th>필수 컬럼</th><th>형식</th></tr></thead>
             <tbody>
               <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>상품명, 옵션, 재고수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>바코드, 출고수량, 날짜</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 발주서</td><td style={{color:'var(--t2)'}}>상품명, 수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>쿠팡 발주서</td><td style={{color:'var(--t2)'}}>SKU Barcode, 발주수량, 확정수량, 입고수량, 입고예정일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>공급 중 수량</td><td style={{color:'var(--t2)'}}>상품명, 수량, 입고예정일(선택)</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
             </tbody>
           </table></div>
-          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 컬럼명이 정확히 일치하지 않아도 됩니다. 유사한 단어 포함 시 자동 감지. EUC-KR 엑셀도 자동 처리.</p>
+          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 쿠팡 발주서 업로드 시 공급현황 탭에 자동 반영됩니다.</p>
         </div>
       </div>
     </div>
