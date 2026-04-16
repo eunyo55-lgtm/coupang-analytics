@@ -1,88 +1,119 @@
 'use client'
-
-import { useState, useEffect } from 'react'
-import { useApp } from '@/lib/store'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
-import { toYMD } from '@/lib/dateUtils'
-import type { NaverKeywordResult, RankingEntry } from '@/types'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-const today = new Date()
-today.setHours(0, 0, 0, 0)
+const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
+
+type RankRow = {
+  id?: string
+  date: string
+  category: string
+  keyword: string
+  product_name: string
+  coupang_url: string
+  rank_today: number
+  rank_yesterday: number
+  naver_search: number
+  image_url?: string
+}
+
+// 랭킹 추이 모달
+function RankTrendModal({ row, onClose }: { row: RankRow; onClose: () => void }) {
+  const [history, setHistory] = useState<{ date: string; rank: number }[]>([])
+  useEffect(() => {
+    supabase.from('rankings')
+      .select('date, rank_today')
+      .eq('keyword', row.keyword)
+      .eq('product_name', row.product_name)
+      .order('date', { ascending: true })
+      .limit(90)
+      .then(({ data }) => {
+        setHistory((data || []).map((r: { date: string; rank_today: number }) => ({ date: r.date.slice(5), rank: r.rank_today })))
+      })
+  }, [row.keyword, row.product_name])
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: 'var(--card)', borderRadius: 'var(--r12)', padding: 24, width: 'min(600px,95vw)', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>📈 랭킹 추이</div>
+            <div style={{ fontSize: 12, color: 'var(--t3)', marginTop: 2 }}>{row.keyword} · {row.product_name}</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}>✕ 닫기</button>
+        </div>
+        {history.length > 0 ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={history} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+              <XAxis dataKey="date" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+              <YAxis reversed tick={{ fontSize: 9 }} width={30} />
+              <Tooltip formatter={(val: number) => [`${val}위`, '랭킹']} />
+              <Line type="monotone" dataKey="rank" stroke="#3B82F6" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : <div style={{ textAlign: 'center', padding: 40, color: 'var(--t3)' }}>추이 데이터 없음</div>}
+      </div>
+    </div>
+  )
+}
 
 export default function RankingPage() {
-  const { state, dispatch } = useApp()
-  const { dateRange } = state
+  const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
+  const today = new Date().toISOString().slice(0, 10)
 
-  const [pname,  setPname]  = useState('')
-  const [kw,     setKw]     = useState('')
-  const [today_, setToday_] = useState('')
-  const [yest,   setYest]   = useState('')
+  const [rankings, setRankings] = useState<RankRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [trendModal, setTrendModal] = useState<RankRow | null>(null)
+
+  // 추가 폼
+  const [addCategory, setAddCategory] = useState('')
+  const [addKeyword, setAddKeyword] = useState('')
+  const [addProduct, setAddProduct] = useState('')
+  const [addUrl, setAddUrl] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const [naverKw,      setNaverKw]      = useState('')
+  // 네이버 검색
+  const [naverKw, setNaverKw] = useState('')
   const [naverLoading, setNaverLoading] = useState(false)
-  const [naverResults, setNaverResults] = useState<NaverKeywordResult[]>([])
+  const [naverMap, setNaverMap] = useState<Record<string, number>>({})
 
-  const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
-
-  // Load rankings from Supabase on mount
-  useEffect(() => {
-    loadRankings()
-  }, [dateRange]) // eslint-disable-line
+  useEffect(() => { loadRankings() }, [])
 
   async function loadRankings() {
-    try {
-      const { data, error } = await supabase
-        .from('rankings')
-        .select('*')
-        .gte('date', toYMD(dateRange.from))
-        .lte('date', toYMD(dateRange.to))
-        .order('date', { ascending: false })
-      if (error) throw error
-      if (data) {
-        dispatch({
-          type: 'SET_RANKINGS',
-          payload: (data as any[]).map((r: any) => ({
-            id: r.id,
-            productName: r.product_name,
-            keyword: r.keyword,
-            rankToday: r.rank_today,
-            rankYesterday: r.rank_yesterday ?? 0,
-            date: r.date,
-          })),
-        })
-      }
-    } catch {
-      // Supabase not configured — use local state only
+    setLoading(true)
+    const { data } = await supabase
+      .from('rankings')
+      .select('*')
+      .order('date', { ascending: false })
+      .order('rank_today', { ascending: true })
+    if (data) {
+      // 키워드별 최신 날짜만
+      const map = new Map<string, RankRow>()
+      ;(data as RankRow[]).forEach(r => {
+        const key = `${r.keyword}|${r.product_name}`
+        if (!map.has(key)) map.set(key, r)
+      })
+      setRankings(Array.from(map.values()))
     }
+    setLoading(false)
   }
 
   async function addRanking() {
-    if (!pname || !kw) return
-    const entry: RankingEntry = {
-      productName: pname,
-      keyword: kw,
-      rankToday:     parseInt(today_) || 0,
-      rankYesterday: parseInt(yest)   || 0,
-      date: toYMD(today),
-    }
-
-    // Save to Supabase
+    if (!addKeyword || !addProduct) return
     setSaving(true)
-    try {
-      const { data } = await supabase.from('rankings').insert({
-        product_name:    entry.productName,
-        keyword:         entry.keyword,
-        rank_today:      entry.rankToday,
-        rank_yesterday:  entry.rankYesterday,
-        date:            entry.date,
-      }).select().single()
-      if (data) entry.id = data.id
-    } catch { /* offline fallback */ }
+    await supabase.from('rankings').insert({
+      date: today,
+      category: addCategory,
+      keyword: addKeyword,
+      product_name: addProduct,
+      coupang_url: addUrl,
+      rank_today: 0,
+      rank_yesterday: 0,
+    })
+    setAddCategory(''); setAddKeyword(''); setAddProduct(''); setAddUrl('')
+    await loadRankings()
     setSaving(false)
-
-    dispatch({ type: 'ADD_RANKING', payload: entry })
-    setPname(''); setKw(''); setToday_(''); setYest('')
   }
 
   async function naverLookup() {
@@ -90,161 +121,148 @@ export default function RankingPage() {
     if (!keywords.length) return
     setNaverLoading(true)
     try {
-      const res  = await fetch('/api/naver-keywords', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ keywords }),
+      const res = await fetch('/api/naver-keywords', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keywords }),
       })
       const json = await res.json()
-      setNaverResults(json.results || [])
-    } catch {
-      setNaverResults([])
-    }
+      const map: Record<string, number> = {}
+      ;(json.results || []).forEach((r: { keyword: string; total: number }) => { map[r.keyword] = r.total })
+      setNaverMap(prev => ({ ...prev, ...map }))
+    } catch { /* ignore */ }
     setNaverLoading(false)
   }
 
-  const withRank = state.rankings.filter(r => r.rankToday > 0)
-  const avgRank  = withRank.length
-    ? Math.round(withRank.reduce((s, r) => s + r.rankToday, 0) / withRank.length)
-    : 0
-  const top10    = state.rankings.filter(r => r.rankToday > 0 && r.rankToday <= 10).length
-  const totalNaverSearch = naverResults.reduce((s, r) => s + r.total, 0)
+  // 상단 카드 집계
+  const rank1 = useMemo(() => rankings.filter(r => r.rank_today === 1), [rankings])
+  const rank2_10 = useMemo(() => rankings.filter(r => r.rank_today >= 2 && r.rank_today <= 10), [rankings])
+  const rank11_27 = useMemo(() => rankings.filter(r => r.rank_today >= 11 && r.rank_today <= 27), [rankings])
+  const rank28_54 = useMemo(() => rankings.filter(r => r.rank_today >= 28 && r.rank_today <= 54), [rankings])
+
+  const kpiCards = [
+    { label: '랭킹 1위', count: rank1.length, items: rank1.slice(0, 2).map(r => r.product_name).join(', '), color: 'var(--amber)', ico: '🥇' },
+    { label: '2위~10위', count: rank2_10.length, items: rank2_10.slice(0, 2).map(r => r.product_name).join(', '), color: 'var(--blue)', ico: '🥈' },
+    { label: '11위~27위', count: rank11_27.length, items: rank11_27.slice(0, 2).map(r => r.product_name).join(', '), color: 'var(--purple)', ico: '📍' },
+    { label: '28위~54위', count: rank28_54.length, items: rank28_54.slice(0, 2).map(r => r.product_name).join(', '), color: 'var(--green)', ico: '📌' },
+  ]
 
   return (
     <div>
-      <div className="krow">
-        <div className="kpi kc-bl">
-          <div className="kpi-top"><div className="kpi-ico">🔑</div></div>
-          <div className="kpi-lbl">등록 키워드</div>
-          <div className="kpi-val">{state.rankings.length}</div>
-          <div className="kpi-foot">추적 중</div>
-        </div>
-        <div className="kpi kc-am">
-          <div className="kpi-top"><div className="kpi-ico">🥇</div></div>
-          <div className="kpi-lbl">Top 10</div>
-          <div className="kpi-val">{top10}</div>
-          <div className="kpi-foot">키워드 수</div>
-        </div>
-        <div className="kpi kc-gr">
-          <div className="kpi-top"><div className="kpi-ico">📍</div></div>
-          <div className="kpi-lbl">평균 순위</div>
-          <div className="kpi-val">{avgRank || '—'}</div>
-          <div className="kpi-foot">위</div>
-        </div>
-        <div className="kpi kc-pu">
-          <div className="kpi-top"><div className="kpi-ico">🔎</div></div>
-          <div className="kpi-lbl">네이버 검색량</div>
-          <div className="kpi-val">{totalNaverSearch ? fmt(totalNaverSearch) : '—'}</div>
-          <div className="kpi-foot">월간 합계</div>
+      {/* 상단 카드 */}
+      <div className="krow" style={{ marginBottom: 16 }}>
+        {kpiCards.map((c, i) => (
+          <div key={i} className={`kpi kc-${['am','bl','pu','gr'][i]}`}>
+            <div className="kpi-top"><div className="kpi-ico">{c.ico}</div></div>
+            <div className="kpi-lbl">{c.label}</div>
+            <div className="kpi-val" style={{ color: c.color, fontSize: 28 }}>{c.count}</div>
+            <div className="kpi-foot" style={{ fontSize: 10, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.items || '—'}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 랭킹 추가 */}
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="ch"><div className="ch-l"><div className="ch-ico">➕</div><div><div className="ch-title">랭킹 추가</div><div className="ch-sub">키워드 · 상품 등록</div></div></div></div>
+        <div className="cb">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 2fr auto', gap: 8, alignItems: 'flex-end' }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>분류</div>
+              <input className="fi" value={addCategory} onChange={e => setAddCategory(e.target.value)} placeholder="예) 장화" />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>키워드</div>
+              <input className="fi" value={addKeyword} onChange={e => setAddKeyword(e.target.value)} placeholder="예) 아동 장화" />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>상품명 검색</div>
+              <input className="fi" value={addProduct} onChange={e => setAddProduct(e.target.value)} placeholder="상품명" />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>쿠팡 링크</div>
+              <input className="fi" value={addUrl} onChange={e => setAddUrl(e.target.value)} placeholder="https://..." />
+            </div>
+            <button className="btn-p" onClick={addRanking} disabled={saving || !addKeyword || !addProduct} style={{ height: 36 }}>
+              {saving ? '저장중' : '추가'}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="g2">
-        {/* 쿠팡 랭킹 입력 */}
-        <div className="card">
-          <div className="ch">
-            <div className="ch-l"><div className="ch-ico">🏆</div><div>
-              <div className="ch-title">쿠팡 랭킹 입력</div>
-              <div className="ch-sub">로컬봇 데이터 수동 등록</div>
-            </div></div>
+      {/* 네이버 검색량 조회 */}
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="ch"><div className="ch-l"><div className="ch-ico">🔎</div><div><div className="ch-title">네이버 검색량</div><div className="ch-sub">키워드 도구 API</div></div></div></div>
+        <div className="cb">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <input className="si" value={naverKw} onChange={e => setNaverKw(e.target.value)} placeholder="키워드 쉼표 구분 입력..." onKeyDown={e => e.key === 'Enter' && naverLookup()} style={{ flex: 1 }} />
+            <button className="btn-p" onClick={naverLookup} disabled={naverLoading}>{naverLoading ? '조회중...' : '🔍 조회'}</button>
           </div>
-          <div className="cb">
-            <div className="fgrid" style={{ marginBottom: 12 }}>
-              <div className="fcol" style={{ gridColumn: '1 / -1' }}>
-                <label className="fl">📦 상품명</label>
-                <input className="fi" value={pname} onChange={e => setPname(e.target.value)} placeholder="상품명 입력" />
-              </div>
-              <div className="fcol">
-                <label className="fl">🔑 키워드</label>
-                <input className="fi" value={kw} onChange={e => setKw(e.target.value)} placeholder="키워드" />
-              </div>
-              <div className="fcol">
-                <label className="fl">오늘 순위</label>
-                <input className="fi" type="number" value={today_} onChange={e => setToday_(e.target.value)} placeholder="순위" />
-              </div>
-              <div className="fcol">
-                <label className="fl">어제 순위</label>
-                <input className="fi" type="number" value={yest} onChange={e => setYest(e.target.value)} placeholder="순위" />
-              </div>
-              <div className="fcol" style={{ justifyContent: 'flex-end' }}>
-                <button className="btn-p" onClick={addRanking} disabled={saving} style={{ marginTop: 18, width: '100%' }}>
-                  {saving ? '저장 중...' : '➕ 추가'}
-                </button>
-              </div>
-            </div>
+        </div>
+      </div>
 
-            <div className="tw">
-              <table>
-                <thead><tr><th>상품</th><th>키워드</th><th>어제</th><th>오늘</th><th>변동</th></tr></thead>
+      {/* 랭킹 현황 테이블 */}
+      <div className="card">
+        <div className="ch">
+          <div className="ch-l"><div className="ch-ico">🏆</div><div><div className="ch-title">랭킹 현황</div><div className="ch-sub">Supabase 데이터 기준</div></div></div>
+          <button className="btn-g" onClick={loadRankings} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: 'none' }}>🔄 새로고침</button>
+        </div>
+        <div className="cb">
+          {loading ? <div className="empty-st"><div className="es-ico">🏆</div><div className="es-t">로딩 중...</div></div> : (
+            <div className="tw" style={{ overflowX: 'auto' }}>
+              <table style={{ minWidth: 700 }}>
+                <thead><tr>
+                  <th>분류</th><th>키워드</th><th>이미지</th><th>상품명</th>
+                  <th style={{ textAlign: 'right' }}>네이버 검색</th>
+                  <th style={{ textAlign: 'right' }}>전주대비</th>
+                  <th style={{ textAlign: 'right' }}>어제</th>
+                  <th style={{ textAlign: 'right' }}>오늘</th>
+                  <th style={{ textAlign: 'center' }}>추이</th>
+                </tr></thead>
                 <tbody>
-                  {state.rankings.length > 0 ? state.rankings.slice(0, 20).map((r, i) => {
-                    const diff = r.rankYesterday && r.rankToday ? r.rankYesterday - r.rankToday : 0
-                    const rc   = r.rankToday === 1 ? 'rm1' : r.rankToday <= 3 ? 'rm2' : r.rankToday <= 10 ? 'rm3' : 'rmn'
+                  {rankings.length > 0 ? rankings.map((r, i) => {
+                    const diff = r.rank_yesterday && r.rank_today ? r.rank_yesterday - r.rank_today : 0
+                    const rc = r.rank_today === 1 ? 'rm1' : r.rank_today <= 3 ? 'rm2' : r.rank_today <= 10 ? 'rm3' : 'rmn'
+                    const naverVal = naverMap[r.keyword] || r.naver_search || 0
                     return (
                       <tr key={i}>
-                        <td style={{ fontWeight: 700, fontSize: 12, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.productName}</td>
+                        <td><span className="badge b-bl" style={{ fontSize: 10 }}>{r.category || '—'}</span></td>
                         <td><span className="kw-tag">{r.keyword}</span></td>
-                        <td style={{ color: 'var(--t3)', fontWeight: 600 }}>{r.rankYesterday || '—'}</td>
-                        <td><span className={`rank-medal ${rc}`}>{r.rankToday || '—'}</span></td>
                         <td>
+                          {r.image_url
+                            ? <img src={r.image_url} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                            : <div style={{ width: 28, height: 28, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>-</div>}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span
+                              style={{ fontWeight: 700, fontSize: 12, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', color: 'var(--blue)', textDecoration: 'underline dotted' }}
+                              onClick={() => setTrendModal(r)}
+                              title="클릭 시 추이"
+                            >{r.product_name}</span>
+                            {r.coupang_url && <a href={r.coupang_url} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: 'var(--t3)' }}>🔗</a>}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{naverVal ? fmt(naverVal) : '—'}</td>
+                        <td style={{ textAlign: 'right' }}>
                           {diff > 0 ? <span style={{ color: 'var(--green)', fontWeight: 800, fontSize: 11 }}>▲{diff}</span>
-                          : diff < 0 ? <span style={{ color: 'var(--red)',   fontWeight: 800, fontSize: 11 }}>▼{Math.abs(diff)}</span>
-                          : <span style={{ color: 'var(--t3)', fontSize: 11 }}>—</span>}
+                            : diff < 0 ? <span style={{ color: 'var(--red, #ef4444)', fontWeight: 800, fontSize: 11 }}>▼{Math.abs(diff)}</span>
+                            : <span style={{ color: 'var(--t3)', fontSize: 11 }}>—</span>}
+                        </td>
+                        <td style={{ textAlign: 'right', color: 'var(--t3)', fontWeight: 600 }}>{r.rank_yesterday || '—'}</td>
+                        <td style={{ textAlign: 'right' }}><span className={`rank-medal ${rc}`}>{r.rank_today || '—'}</span></td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button onClick={() => setTrendModal(r)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--blue)', fontSize: 16 }}>📈</button>
                         </td>
                       </tr>
                     )
-                  }) : (
-                    <tr><td colSpan={5}><div className="empty-st" style={{ padding: 20 }}><div className="es-ico">🏆</div><div className="es-t">랭킹을 입력하세요</div></div></td></tr>
-                  )}
+                  }) : <tr><td colSpan={9}><div className="empty-st"><div className="es-ico">🏆</div><div className="es-t">랭킹 데이터 없음</div></div></td></tr>}
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
-
-        {/* 네이버 키워드 검색량 */}
-        <div className="card">
-          <div className="ch">
-            <div className="ch-l"><div className="ch-ico">🔎</div><div>
-              <div className="ch-title">네이버 키워드 검색량</div>
-              <div className="ch-sub">네이버 검색 API 조회</div>
-            </div></div>
-          </div>
-          <div className="cb">
-            <div className="frow">
-              <input className="si" value={naverKw} onChange={e => setNaverKw(e.target.value)} placeholder="키워드 쉼표로 구분 입력..."
-                onKeyDown={e => e.key === 'Enter' && naverLookup()} />
-              <button className="btn-p" onClick={naverLookup} disabled={naverLoading}>
-                {naverLoading ? <><span className="spinner" /> 조회중</> : '🔍 조회'}
-              </button>
-            </div>
-            <div className="tw">
-              <table>
-                <thead><tr><th>키워드</th><th>PC</th><th>모바일</th><th>합계</th><th>경쟁도</th></tr></thead>
-                <tbody>
-                  {naverResults.length > 0 ? naverResults.map((r, i) => (
-                    <tr key={i}>
-                      <td><span className="kw-tag">{r.keyword}</span></td>
-                      <td style={{ fontWeight: 700 }}>{fmt(r.pc)}</td>
-                      <td style={{ fontWeight: 700 }}>{fmt(r.mobile)}</td>
-                      <td style={{ fontWeight: 800 }}>{fmt(r.total)}</td>
-                      <td>
-                        <span className={`badge ${r.competition === 'high' ? 'b-re' : r.competition === 'mid' ? 'b-am' : 'b-gr'}`}>
-                          {r.competition === 'high' ? '높음' : r.competition === 'mid' ? '중간' : '낮음'}
-                        </span>
-                      </td>
-                    </tr>
-                  )) : (
-                    <tr><td colSpan={5}><div className="empty-st" style={{ padding: 20 }}>
-                      <div className="es-ico">🔎</div><div className="es-t">키워드를 입력하고 조회하세요</div>
-                    </div></td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </div>
       </div>
+
+      {trendModal && <RankTrendModal row={trendModal} onClose={() => setTrendModal(null)} />}
     </div>
   )
 }
