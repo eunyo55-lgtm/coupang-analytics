@@ -86,19 +86,35 @@ export default function DataManagePage() {
         dispatch({ type: 'HYDRATE', payload: { masterData: mergeRaw(state.masterData, result.data), hasData: true } })
 
       } else if (key === 'orders') {
-        // 발주서 → supply_status 테이블에 upsert
-        const supplyRows = result.data.map(r => ({
-          '발주번호':   r['발주번호']   || '',
-          'SKU ID':     r['SKU ID']     || '',
-          'SKU 이름':   r['SKU 이름']   || r['상품명'] || '',
-          'SKU Barcode': r['SKU Barcode'] || r['바코드'] || '',
-          '물류센터':   r['물류센터']   || '',
-          '입고예정일': String(r['입고예정일'] || '').slice(0, 10),
-          '발주일':     String(r['발주일']     || '').slice(0, 10),
-          '발주수량':   Number(r['발주수량'])  || 0,
-          '확정수량':   Number(r['확정수량'])  || 0,
-          '입고수량':   Number(r['입고수량'])  || 0,
-        })).filter(r => r['SKU Barcode'] && r['입고예정일'])
+        // 발주번호+바코드+물류센터 기준으로 SUM 집계 후 upsert
+        const aggMap = new Map<string, Record<string,unknown>>()
+        result.data.forEach(r => {
+          const barcode = String(r['SKU Barcode'] || r['바코드'] || '').trim()
+          const date = String(r['입고예정일'] || '').slice(0, 10)
+          const center = String(r['물류센터'] || '').trim()
+          if (!barcode || !date) return
+          const k = `${r['발주번호']}|${barcode}|${center}`
+          if (!aggMap.has(k)) {
+            aggMap.set(k, {
+              '발주번호': String(r['발주번호'] || ''),
+              'SKU ID': String(r['SKU ID'] || ''),
+              'SKU 이름': String(r['SKU 이름'] || r['상품명'] || ''),
+              'SKU Barcode': barcode,
+              '물류센터': center,
+              '입고예정일': date,
+              '발주일': String(r['발주일'] || '').slice(0, 10),
+              '발주수량': Number(r['발주수량']) || 0,
+              '확정수량': Number(r['확정수량']) || 0,
+              '입고수량': Number(r['입고수량']) || 0,
+            })
+          } else {
+            const e = aggMap.get(k)!
+            e['발주수량'] = Number(e['발주수량']) + (Number(r['발주수량']) || 0)
+            e['확정수량'] = Number(e['확정수량']) + (Number(r['확정수량']) || 0)
+            e['입고수량'] = Number(e['입고수량']) + (Number(r['입고수량']) || 0)
+          }
+        })
+        const supplyRows = Array.from(aggMap.values())
 
         let saved = 0
         for (let i = 0; i < supplyRows.length; i += 500) {
