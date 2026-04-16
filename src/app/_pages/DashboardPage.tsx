@@ -479,7 +479,18 @@ export default function DashboardPage() {
                           </td>
                           <td>
                             <span
-                              onClick={() => setSalesModal(item.product_name)}
+                              onClick={() => {
+  const SURL = 'https://vzyfygmzqqiwgrcuydti.supabase.co';
+  const SKEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI';
+  fetch(`${SURL}/rest/v1/rpc/get_stock_history_by_name`, {
+    method: 'POST',
+    headers: { 'apikey': SKEY, 'Authorization': `Bearer ${SKEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_name: p.product_name, p_from: '2026-01-01' })
+  }).then(r => r.json()).then(data => {
+    const history = Array.isArray(data) ? data.map((r: {sale_date:string; total_stock:number}) => ({ week: r.sale_date.slice(5), qty: r.total_stock })) : [];
+    setStockModal({ name: p.product_name, history });
+  });
+}}
                               style={{ fontWeight:700, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', display:'block', cursor:'pointer', color:'var(--blue)', textDecoration:'underline dotted' }}
                               title="클릭 시 판매 추이"
                             >{item.product_name}</span>
