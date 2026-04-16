@@ -491,9 +491,10 @@ export default function DashboardPage() {
     setStockModal({ name: p.product_name, history });
   });
 }}
-                              style={{ fontWeight:700, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', display:'block', cursor:'pointer', color:'var(--blue)', textDecoration:'underline dotted' }}
-                              title="클릭 시 판매 추이"
-                            >{item.product_name}</span>
+                             onClick={() => setSalesModal(item.product_name)}
+style={{ fontWeight:700, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', display:'block', cursor:'pointer', color:'var(--blue)', textDecoration:'underline dotted' }}
+title="클릭 시 판매 추이"
+>{item.product_name}</span>
                           </td>
                           <td style={{ textAlign:'right', color:'var(--t3)', fontSize:11 }}>{item.qty_24 ? fmt(item.qty_24) : '-'}</td>
                           <td style={{ textAlign:'right', color:'var(--t3)', fontSize:11 }}>{item.qty_25 ? fmt(item.qty_25) : '-'}</td>
