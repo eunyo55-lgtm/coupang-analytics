@@ -13,50 +13,114 @@ const FILE_CONFIG = [
   { key: 'supply' as const, icon: '🚚', title: '공급 중 수량',          sub: '입고 대기 수량 · 예정일' },
 ]
 
-// Supabase upsert 함수 (anon key 사용)
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
-async function upsertDailySales(rows: SalesRow[]) {
+// ── 판매 데이터 upsert ──
+async function upsertDailySales(rows: SalesRow[], dispatchFn: (a: {type: string; payload: string}) => void) {
   if (!rows.length) return 0
 
   const data = rows.map(r => ({
-    date:     r.date,
-    barcode:  (r.option && r.option.length > 3) ? r.option : r.productName,
-    quantity: r.qty,
-    stock:    r.stock ?? 0,
+    date:        r.date,
+    barcode:     (r.option && r.option.length > 3) ? r.option : r.productName,
+    quantity:    r.qty,
+    stock:       r.stock ?? 0,
     fc_quantity: 0,
     vf_quantity: 0,
   })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode)
 
-  if (!data.length) {
-    console.warn('[upsert] 유효한 데이터 없음. rows샘플:', JSON.stringify(rows.slice(0,2)))
-    return 0
-  }
+  if (!data.length) return 0
 
-  const dates = [...new Set(data.map(r=>r.date))].sort()
-  console.log('[upsert] 날짜 분포:', dates, '총', data.length, '행')
-
-  // RPC upsert_daily_sales 사용 (on_conflict 문제 완전 우회)
   let total = 0
   for (let i = 0; i < data.length; i += 500) {
     const batch = data.slice(i, i + 500)
     const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
       method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: batch }),
+    })
+    if (res.ok) {
+      const cnt = await res.json().catch(() => batch.length)
+      total += Number(cnt) || batch.length
+    } else {
+      const err = await res.text().catch(() => 'unknown error')
+      dispatchFn({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${err.substring(0,100)}` })
+      break
+    }
+  }
+  return total
+}
+
+// ── 공급 중 수량 → supply_status upsert ──
+async function upsertSupplyStatus(
+  rows: Record<string, unknown>[],
+  dispatchFn: (a: {type: string; payload: string}) => void
+) {
+  if (!rows.length) return 0
+
+  const toN = (v: unknown) => Number(String(v ?? '').replace(/[,\s]/g, '')) || 0
+  const toS = (v: unknown) => v != null ? String(v).trim() : ''
+  const toD = (v: unknown) => {
+    const s = toS(v)
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+    if (/^\d{4}\/\d{2}\/\d{2}/.test(s)) return s.slice(0, 10).replace(/\//g, '-')
+    if (/^\d{8}$/.test(s)) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`
+    return s.slice(0, 10)
+  }
+
+  const mapped = rows.map(r => ({
+    '발주번호':     toN(r['발주번호']),
+    'SKU ID':       toN(r['SKU ID']),
+    'SKU 이름':     toS(r['SKU 이름']),
+    'SKU Barcode':  toS(r['SKU Barcode']),
+    '물류센터':     toS(r['물류센터']),
+    '입고예정일':   toD(r['입고예정일']),
+    '발주일':       toS(r['발주일']),
+    '발주수량':     toN(r['발주수량']),
+    '확정수량':     toN(r['확정수량']),
+    '입고수량':     toN(r['입고수량']),
+    '발주유형':     toS(r['발주유형']),
+    '발주현황':     toS(r['발주현황']),
+    '매입유형':     toS(r['매입유형']),
+    '면세여부':     toS(r['면세여부']),
+    '생산연도':     toS(r['생산연도']),
+    '제조일자':     toS(r['제조일자']),
+    '유통기한':     toS(r['유통(소비)기한'] ?? r['유통기한'] ?? ''),
+    '매입가':       toN(r['매입가']),
+    '공급가':       toN(r['공급가']),
+    '부가세':       toN(r['부가세']),
+    '총발주매입금': toN(r['총발주 매입금'] ?? r['총발주매입금'] ?? 0),
+    '입고금액':     toN(r['입고금액']),
+    'xdock':        toS(r['Xdock'] ?? r['xdock'] ?? ''),
+  })).filter(r => r['SKU Barcode'] && r['입고예정일'])
+
+  if (!mapped.length) {
+    dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 유효한 supply 데이터 없음 (SKU Barcode, 입고예정일 필수)` })
+    return 0
+  }
+
+  // 첫 행 확인 로그
+  const sample = mapped[0]
+  dispatchFn({ type: 'APPEND_LOG', payload: `🔍 supply 샘플: ${sample['SKU Barcode']} | 예정일:${sample['입고예정일']} | 확정:${sample['확정수량']} | 매입가:${sample['매입가']}` })
+
+  let total = 0
+  for (let i = 0; i < mapped.length; i += 500) {
+    const batch = mapped.slice(i, i + 500)
+    const res = await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
+      method: 'POST',
       headers: {
         'apikey':        SUPA_KEY,
         'Authorization': `Bearer ${SUPA_KEY}`,
         'Content-Type':  'application/json',
+        'Prefer':        'resolution=merge-duplicates,return=minimal',
       },
-      body: JSON.stringify({ rows: batch }),
+      body: JSON.stringify(batch),
     })
-    if (res.ok) {
-      const cnt = await res.json().catch(()=>batch.length)
-      total += Number(cnt) || batch.length
+    if (res.ok || res.status === 201) {
+      total += batch.length
     } else {
-      const err = await res.text().catch(()=>'unknown error')
-      console.warn('[upsert] RPC error:', res.status, err.substring(0, 200))
-      dispatch({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${err.substring(0,100)}` })
+      const err = await res.text().catch(() => 'unknown')
+      dispatchFn({ type: 'APPEND_LOG', payload: `❌ supply 저장 에러 (${res.status}): ${err.substring(0,150)}` })
       break
     }
   }
@@ -83,12 +147,9 @@ export default function DataManagePage() {
       const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
 
       if (key === 'sales') {
-        // 디버그: raw 첫 행 컬럼명 확인
         const rawKeys = result.data[0] ? Object.keys(result.data[0]).slice(0,8).join(' | ') : 'empty'
         dispatch({ type: 'APPEND_LOG', payload: `🔍 원본컬럼: ${rawKeys}` })
-        
         const normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
-        // 디버그: 파싱 후 첫 행 확인
         if (normalized.length > 0) {
           const s = normalized[0] as Record<string,unknown>
           dispatch({ type: 'APPEND_LOG', payload: `🔍 파싱결과: date=${s.date} barcode=${s.option} qty=${s.qty}` })
@@ -97,39 +158,52 @@ export default function DataManagePage() {
         }
         result.data = normalized
         dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${result.rows.toLocaleString()}행 | ${cols}` })
-
-        // Supabase sales_data 테이블에 upsert — MV 자동 갱신을 위해 mv_kpi_daily refresh 필요
         dispatch({ type: 'APPEND_LOG', payload: `📤 Supabase에 업로드 중...` })
         const salesRows = result.data as unknown as SalesRow[]
-        const saved = await upsertDailySales(salesRows)
+        const saved = await upsertDailySales(salesRows, dispatch)
         if (saved > 0) {
           dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 Supabase 저장 완료` })
-          // MV 갱신 (대시보드 즉시 반영)
           fetch(`${SUPA_URL}/rest/v1/rpc/refresh_analytics_mv`, {
             method: 'POST',
             headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
             body: '{}',
           }).then(() => dispatch({ type: 'APPEND_LOG', payload: `🔄 대시보드 데이터 갱신 완료` }))
-            .catch(() => {}) // 실패해도 무시
+            .catch(() => {})
         } else {
           dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패 — 위 에러 메시지 확인` })
         }
 
-      } else {
-        // master/orders/supply는 기존 방식
+      } else if (key === 'supply') {
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [supply] ${result.rows.toLocaleString()}행 | ${cols}` })
+        dispatch({ type: 'APPEND_LOG', payload: `📤 supply_status 테이블에 업로드 중...` })
+        const saved = await upsertSupplyStatus(result.data, dispatch)
+        if (saved > 0) {
+          dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 supply_status 저장 완료` })
+        } else {
+          dispatch({ type: 'APPEND_LOG', payload: `⚠️ supply_status 저장 실패 — 로그 확인` })
+        }
+        // store에도 보관
         await persistData({
-          masterData:  key === 'master' ? result.data : state.masterData as Record<string,unknown>[],
-          salesData:   [] as never[],
-          salesData24: [] as never[],
-          salesData25: [] as never[],
-          products:    [] as never[],
-          ordersData:  key === 'orders' ? result.data : state.ordersData,
-          supplyData:  key === 'supply' ? result.data : state.supplyData,
+          masterData:   state.masterData as Record<string,unknown>[],
+          salesData:    [] as never[], salesData24: [] as never[], salesData25: [] as never[],
+          products:     [] as never[],
+          ordersData:   state.ordersData,
+          supplyData:   result.data,
           stockSummary: { total_stock: 0, stock_value: 0 },
           daily26: [], daily25: [], daily24: [],
-          latestSaleDate: '',
-          hasData: true,
-          dateRangePreset: 'total',
+          latestSaleDate: '', hasData: true, dateRangePreset: 'total',
+        })
+
+      } else {
+        await persistData({
+          masterData:  key === 'master' ? result.data : state.masterData as Record<string,unknown>[],
+          salesData:   [] as never[], salesData24: [] as never[], salesData25: [] as never[],
+          products:    [] as never[],
+          ordersData:  key === 'orders' ? result.data : state.ordersData,
+          supplyData:  state.supplyData,
+          stockSummary: { total_stock: 0, stock_value: 0 },
+          daily26: [], daily25: [], daily24: [],
+          latestSaleDate: '', hasData: true, dateRangePreset: 'total',
         })
         dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 | ${cols}` })
       }
@@ -146,11 +220,7 @@ export default function DataManagePage() {
     setTimeout(() => {
       setAnalyzing(false)
       const nav = (window as unknown as Record<string,unknown>).navigateTo as ((p:string)=>void)|undefined
-      if (nav) {
-        nav('/')
-      } else {
-        window.location.href = '/'
-      }
+      if (nav) { nav('/') } else { window.location.href = '/' }
     }, 600)
   }
 
@@ -248,15 +318,14 @@ export default function DataManagePage() {
             <thead><tr><th>파일</th><th>필수 컬럼</th><th>형식</th></tr></thead>
             <tbody>
               <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>상품명, 옵션, 재고수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량/출고수량, 날짜/출고일, 금액(선택)</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량/출고수량, 날짜/출고일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 발주서</td><td style={{color:'var(--t2)'}}>상품명, 수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>공급 중 수량</td><td style={{color:'var(--t2)'}}>상품명, 수량, 입고예정일(선택)</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>공급 중 수량</td><td style={{color:'var(--t2)'}}>SKU Barcode · 입고예정일 · 발주수량 · 확정수량 · 입고수량 · 매입가</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
             </tbody>
           </table></div>
-          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 컬럼명 자동 감지. EUC-KR 엑셀 자동 처리.</p>
+          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 공급 중 수량 파일은 supply_status 테이블에 자동 저장됩니다.</p>
         </div>
       </div>
     </div>
   )
 }
-// This line intentionally left blank
