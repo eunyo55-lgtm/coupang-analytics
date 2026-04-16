@@ -38,9 +38,13 @@ export default function SupplyPage() {
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
   const today = new Date().toISOString().slice(0, 10)
 
+  const threeMonthsAgo = useMemo(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0,10)
+  }, [])
+
   const [rows, setRows] = useState<SupplyRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [dateFrom, setDateFrom] = useState('2026-01-01')
+  const [dateFrom, setDateFrom] = useState(threeMonthsAgo)
   const [dateTo, setDateTo] = useState('2026-12-31')
   const [search, setSearch] = useState('')
   const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set())
@@ -57,7 +61,13 @@ export default function SupplyPage() {
       setLoading(true)
       try {
         const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
-        const r = await fetch(`${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&limit=5000`, { headers: h })
+        // 날짜 필터 적용해서 로드 (전체 로드 시 너무 무거움)
+        const from = dateFrom || threeMonthsAgo
+        const to   = dateTo   || '2099-12-31'
+        const r = await fetch(
+          `${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&입고예정일=gte.${from}&입고예정일=lte.${to}&limit=5000`,
+          { headers: h }
+        )
         const data: SupplyRow[] = await r.json()
         if (!Array.isArray(data)) { setLoading(false); return }
 
@@ -89,13 +99,11 @@ export default function SupplyPage() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [dateFrom, dateTo])
 
   const filtered = useMemo(() => rows.filter(r => {
-    const d = toD(r.입고예정일)
-    return (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo) &&
-      (!search || (r.name||r['SKU 이름']).toLowerCase().includes(search.toLowerCase()) || r['SKU Barcode'].includes(search))
-  }), [rows, dateFrom, dateTo, search])
+    return !search || (r.name||r['SKU 이름']).toLowerCase().includes(search.toLowerCase()) || r['SKU Barcode'].includes(search)
+  }), [rows, search])
 
   function calcKpi(rowSet: SupplyRow[]) {
     const ord = rowSet.reduce((s,r) => s + toN(r.발주수량), 0)
