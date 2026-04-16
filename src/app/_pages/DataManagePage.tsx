@@ -103,21 +103,33 @@ async function upsertSupplyStatus(
   const sample = mapped[0]
   dispatchFn({ type: 'APPEND_LOG', payload: `🔍 supply 샘플: ${sample['SKU Barcode']} | 예정일:${sample['입고예정일']} | 확정:${sample['확정수량']} | 매입가:${sample['매입가']}` })
 
+  const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' }
+
+  // 기존 데이터 전체 삭제 후 INSERT (constraint 없이 동작)
+  dispatchFn({ type: 'APPEND_LOG', payload: `🗑️ 기존 supply_status 데이터 초기화 중...` })
+  const delRes = await fetch(`${SUPA_URL}/rest/v1/supply_status?발주번호=gte.0`, {
+    method: 'DELETE',
+    headers: h,
+  })
+  if (!delRes.ok && delRes.status !== 404) {
+    // 전체 삭제 (조건 없이)
+    await fetch(`${SUPA_URL}/rest/v1/supply_status?입고예정일=gte.2020-01-01`, {
+      method: 'DELETE',
+      headers: h,
+    })
+  }
+
   let total = 0
   for (let i = 0; i < mapped.length; i += 500) {
     const batch = mapped.slice(i, i + 500)
     const res = await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
       method: 'POST',
-      headers: {
-        'apikey':        SUPA_KEY,
-        'Authorization': `Bearer ${SUPA_KEY}`,
-        'Content-Type':  'application/json',
-        'Prefer':        'resolution=merge-duplicates,return=minimal',
-      },
+      headers: { ...h, 'Prefer': 'return=minimal' },
       body: JSON.stringify(batch),
     })
     if (res.ok || res.status === 201) {
       total += batch.length
+      dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${total}/${mapped.length}행 저장 중...` })
     } else {
       const err = await res.text().catch(() => 'unknown')
       dispatchFn({ type: 'APPEND_LOG', payload: `❌ supply 저장 에러 (${res.status}): ${err.substring(0,150)}` })
