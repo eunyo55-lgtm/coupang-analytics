@@ -34,35 +34,37 @@ function getWeekLabel(dateStr: string): string {
   return `W${week}`
 }
 
-function getThreeMonthsAgo() {
-  const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0,10)
-}
+// ── 모듈 레벨 캐시 (탭 이동 시 데이터 유지) ──
+let _cachedAllRows: SupplyRow[] = []
+let _cachedProdMap: Record<string,{name:string;image_url:string}> = {}
+let _cachedRows: Record<string, SupplyRow[]> = {}  // key: `${dateFrom}-${dateTo}`
+let _cacheLoaded = false
 
 function getOneMonthAgo() {
   const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0,10)
+}
+
+function getOneMonthLater() {
+  const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0,10)
 }
 
 export default function SupplyPage() {
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
   const today = new Date().toISOString().slice(0, 10)
 
-  const threeMonthsAgo = getThreeMonthsAgo()
+  const threeMonthsAgo = getOneMonthAgo()  // 기본값을 1달로
 
-  const [rows, setRows] = useState<SupplyRow[]>([])
-  const [allRows, setAllRows] = useState<SupplyRow[]>([])
-  const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>({})
-  const [loading, setLoading] = useState(true)
+  const [rows, setRows] = useState<SupplyRow[]>(_cachedAllRows.length ? _cachedRows[`${getOneMonthAgo()}-${getOneMonthLater()}`] || [] : [])
+  const [allRows, setAllRows] = useState<SupplyRow[]>(_cachedAllRows)
+  const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>(_cachedProdMap)
+  const [loading, setLoading] = useState(!_cacheLoaded)
 
-  // 차트용 날짜 필터 (기본: 최근 1달 ~ 3달 후)
+  // 차트용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 1달 후
   const [chartFrom, setChartFrom] = useState(() => getOneMonthAgo())
-  const [chartTo, setChartTo] = useState(() => {
-    const d = new Date(); d.setMonth(d.getMonth() + 3); return d.toISOString().slice(0,10)
-  })
-  // 테이블용 날짜 필터 (기본: 최근 1달 ~ 3달 후)
+  const [chartTo,   setChartTo]   = useState(() => getOneMonthLater())
+  // 테이블용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 1달 후
   const [tableFrom, setTableFrom] = useState(() => getOneMonthAgo())
-  const [tableTo, setTableTo] = useState(() => {
-    const d = new Date(); d.setMonth(d.getMonth() + 3); return d.toISOString().slice(0,10)
-  })
+  const [tableTo,   setTableTo]   = useState(() => getOneMonthLater())
   // DB 로드용 = 두 필터의 min/max
   const dateFrom = useMemo(() => chartFrom < tableFrom ? chartFrom : tableFrom, [chartFrom, tableFrom])
   const dateTo   = useMemo(() => chartTo > tableTo ? chartTo : tableTo, [chartTo, tableTo])
@@ -77,8 +79,9 @@ export default function SupplyPage() {
     return { from: lastFri.toISOString().slice(0,10), to: lastThu.toISOString().slice(0,10) }
   }, [])
 
-  // ── 전체 데이터 로드 (KPI용, 최초 1회) ──
+  // ── 전체 데이터 로드 (KPI용, 최초 1회 + 캐시) ──
   useEffect(() => {
+    if (_cacheLoaded) return  // 캐시 있으면 재로딩 안 함
     async function loadAll() {
       const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
       let all: SupplyRow[] = [], offset = 0
@@ -97,6 +100,7 @@ export default function SupplyPage() {
         if (page.length < 1000) break
         offset += 1000
       }
+      _cachedAllRows = all
       setAllRows(all)
 
       // products 매핑
@@ -113,19 +117,32 @@ export default function SupplyPage() {
           if (Array.isArray(pdata)) pdata.forEach(p => { pm[p.barcode] = { name: p.name, image_url: p.image_url } })
         } catch { /* ignore */ }
       }
+      _cachedProdMap = pm
+      _cacheLoaded = true
       setProdMap(pm)
     }
     loadAll()
   }, [])
 
-  // ── 날짜 필터 기간 데이터 로드 (차트/테이블용) ──
+  // ── 날짜 필터 기간 데이터 로드 (차트/테이블용, 캐시 포함) ──
   useEffect(() => {
+    const cacheKey = `${dateFrom}-${dateTo}`
+    if (_cachedRows[cacheKey]) {
+      // 캐시 히트 — prodMap 적용 후 바로 세팅
+      setRows(_cachedRows[cacheKey].map(r => ({
+        ...r,
+        name:      _cachedProdMap[r['SKU Barcode']]?.name || r['SKU 이름'],
+        image_url: _cachedProdMap[r['SKU Barcode']]?.image_url || '',
+      })))
+      setLoading(false)
+      return
+    }
     async function load() {
       setLoading(true)
       try {
         const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
-        const from = dateFrom || threeMonthsAgo
-        const to   = dateTo   || '2099-12-31'
+        const from = dateFrom
+        const to   = dateTo
 
         let allData: SupplyRow[] = [], offset = 0
         while (true) {
@@ -140,13 +157,15 @@ export default function SupplyPage() {
           offset += 1000
         }
 
-        setRows(allData.map(r => ({
+        const mapped = allData.map(r => ({
           ...r,
           발주수량: toN(r.발주수량), 확정수량: toN(r.확정수량),
           입고수량: toN(r.입고수량), 매입가: toN(r.매입가),
           name:      prodMap[r['SKU Barcode']]?.name || r['SKU 이름'],
           image_url: prodMap[r['SKU Barcode']]?.image_url || '',
-        })))
+        }))
+        _cachedRows[cacheKey] = mapped  // 캐시 저장
+        setRows(mapped)
       } catch (e) { console.warn(e) }
       setLoading(false)
     }
@@ -238,8 +257,11 @@ export default function SupplyPage() {
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
       .map(([date, nameMap]) => [
         date,
-        Object.values(nameMap).sort((a,b) => b.amt - a.amt)  // 공급액 내림차순
+        Object.values(nameMap)
+          .filter(item => item.qty > 0 && item.amt > 0)  // 0개, 0원 제품 제외
+          .sort((a,b) => b.amt - a.amt)  // 공급액 내림차순
       ] as [string, {name:string;image_url:string;qty:number;amt:number}[]])
+      .filter(([, items]) => items.length > 0)  // 빈 날짜 제외
   }, [filteredAll, prodMap])
 
   const kpiCards = [
@@ -413,6 +435,37 @@ export default function SupplyPage() {
                       </>
                     )
                   })}
+                  {/* 서브토탈 행 */}
+                  {tableByDate.length > 0 && (() => {
+                    const total = tableByDate.reduce((acc, [, v]) => ({
+                      ord:     acc.ord     + v.ord,
+                      qty:     acc.qty     + v.qty,
+                      rec:     acc.rec     + v.rec,
+                      unp:     acc.unp     + v.unp,
+                      ordAmt:  acc.ordAmt  + v.ordAmt,
+                      confAmt: acc.confAmt + v.confAmt,
+                      recAmt:  acc.recAmt  + v.recAmt,
+                      count:   acc.count   + v.count,
+                    }), { ord:0, qty:0, rec:0, unp:0, ordAmt:0, confAmt:0, recAmt:0, count:0 })
+                    const totalRate = total.ord > 0 ? Math.round(total.qty / total.ord * 100) : 0
+                    return (
+                      <tr style={{ background:'rgba(59,130,246,0.06)', borderTop:'2px solid var(--border)', fontWeight:800 }}>
+                        <td style={{ textAlign:'center', fontSize:10, color:'var(--t3)' }}>합계</td>
+                        <td style={{ fontSize:12, color:'var(--text)', paddingLeft:8 }}>전체 {tableByDate.length}일</td>
+                        <td style={{ textAlign:'right', fontSize:11, color:'var(--t3)' }}>{total.count}건</td>
+                        <td style={{ textAlign:'right' }}>{fmt(total.ord)}</td>
+                        <td style={{ textAlign:'right', color:'var(--blue)' }}>{fmt(total.qty)}</td>
+                        <td style={{ textAlign:'right', color:'var(--green)' }}>{fmt(total.rec)}</td>
+                        <td style={{ textAlign:'right', color: total.unp>0?'#ef4444':'var(--t3)' }}>{fmt(total.unp)}</td>
+                        <td style={{ textAlign:'right' }}>
+                          <span style={{ fontSize:10, color: totalRate>=100?'var(--green)':totalRate>=50?'var(--amber)':'#ef4444' }}>{totalRate}%</span>
+                        </td>
+                        <td style={{ textAlign:'right', fontSize:11 }}>{fmt(total.ordAmt)}</td>
+                        <td style={{ textAlign:'right', fontSize:11, color:'var(--blue)' }}>{fmt(total.confAmt)}</td>
+                        <td style={{ textAlign:'right', fontSize:11, color:'var(--green)' }}>{fmt(total.recAmt)}</td>
+                      </tr>
+                    )
+                  })()}
                 </tbody>
               </table>
             </div>
