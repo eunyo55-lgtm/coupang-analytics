@@ -44,7 +44,9 @@ export default function SupplyPage() {
 
   const threeMonthsAgo = getThreeMonthsAgo()
 
-  const [rows, setRows] = useState<SupplyRow[]>([])
+  const [rows, setRows] = useState<SupplyRow[]>([])       // 필터 기간 (차트/테이블)
+  const [allRows, setAllRows] = useState<SupplyRow[]>([])  // 전체 기간 (KPI용)
+  const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>({})
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState(() => getThreeMonthsAgo())
   const [dateTo, setDateTo] = useState('2026-12-31')
@@ -58,6 +60,48 @@ export default function SupplyPage() {
     return { from: lastFri.toISOString().slice(0,10), to: lastThu.toISOString().slice(0,10) }
   }, [])
 
+  // ── 전체 데이터 로드 (KPI용, 최초 1회) ──
+  useEffect(() => {
+    async function loadAll() {
+      const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
+      let all: SupplyRow[] = [], offset = 0
+      while (true) {
+        const r = await fetch(
+          `${SUPA_URL}/rest/v1/supply_status?select=입고예정일,발주수량,확정수량,입고수량,매입가,SKU Barcode&order=입고예정일.asc&limit=1000&offset=${offset}`,
+          { headers: h }
+        )
+        const page: SupplyRow[] = await r.json()
+        if (!Array.isArray(page) || page.length === 0) break
+        all = all.concat(page.map(r => ({
+          ...r,
+          'SKU 이름': '', 발주수량: toN(r.발주수량),
+          확정수량: toN(r.확정수량), 입고수량: toN(r.입고수량), 매입가: toN(r.매입가),
+        })))
+        if (page.length < 1000) break
+        offset += 1000
+      }
+      setAllRows(all)
+
+      // products 매핑
+      const barcodes = [...new Set(all.map(r => r['SKU Barcode']).filter(Boolean))]
+      const pm: Record<string,{name:string;image_url:string}> = {}
+      for (let i = 0; i < barcodes.length; i += 200) {
+        const batch = barcodes.slice(i, i + 200)
+        try {
+          const pr = await fetch(
+            `${SUPA_URL}/rest/v1/products?select=barcode,name,image_url&barcode=in.(${batch.map(b=>`"${b}"`).join(',')})`,
+            { headers: h }
+          )
+          const pdata: {barcode:string;name:string;image_url:string}[] = await pr.json()
+          if (Array.isArray(pdata)) pdata.forEach(p => { pm[p.barcode] = { name: p.name, image_url: p.image_url } })
+        } catch { /* ignore */ }
+      }
+      setProdMap(pm)
+    }
+    loadAll()
+  }, [])
+
+  // ── 날짜 필터 기간 데이터 로드 (차트/테이블용) ──
   useEffect(() => {
     async function load() {
       setLoading(true)
@@ -66,46 +110,23 @@ export default function SupplyPage() {
         const from = dateFrom || threeMonthsAgo
         const to   = dateTo   || '2099-12-31'
 
-        // 페이지네이션으로 전체 데이터 로드
-        let allData: SupplyRow[] = []
-        let offset = 0
-        const pageSize = 1000
+        let allData: SupplyRow[] = [], offset = 0
         while (true) {
           const r = await fetch(
-            `${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&입고예정일=gte.${from}&입고예정일=lte.${to}&limit=${pageSize}&offset=${offset}`,
+            `${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&입고예정일=gte.${from}&입고예정일=lte.${to}&limit=1000&offset=${offset}`,
             { headers: h }
           )
           const page: SupplyRow[] = await r.json()
           if (!Array.isArray(page) || page.length === 0) break
           allData = allData.concat(page)
-          if (page.length < pageSize) break
-          offset += pageSize
+          if (page.length < 1000) break
+          offset += 1000
         }
 
-        const data = allData
-        if (!Array.isArray(data)) { setLoading(false); return }
-
-        // products에서 name, image_url 매핑
-        const barcodes = [...new Set(data.map(r => r['SKU Barcode']).filter(Boolean))]
-        const prodMap: Record<string, { name: string; image_url: string }> = {}
-        for (let i = 0; i < barcodes.length; i += 200) {
-          const batch = barcodes.slice(i, i + 200)
-          try {
-            const pr = await fetch(
-              `${SUPA_URL}/rest/v1/products?select=barcode,name,image_url&barcode=in.(${batch.map(b=>`"${b}"`).join(',')})`,
-              { headers: h }
-            )
-            const pdata: { barcode: string; name: string; image_url: string }[] = await pr.json()
-            if (Array.isArray(pdata)) pdata.forEach(p => { prodMap[p.barcode] = { name: p.name, image_url: p.image_url } })
-          } catch { /* ignore */ }
-        }
-
-        setRows(data.map(r => ({
+        setRows(allData.map(r => ({
           ...r,
-          발주수량: toN(r.발주수량),
-          확정수량: toN(r.확정수량),
-          입고수량: toN(r.입고수량),
-          매입가:   toN(r.매입가),
+          발주수량: toN(r.발주수량), 확정수량: toN(r.확정수량),
+          입고수량: toN(r.입고수량), 매입가: toN(r.매입가),
           name:      prodMap[r['SKU Barcode']]?.name || r['SKU 이름'],
           image_url: prodMap[r['SKU Barcode']]?.image_url || '',
         })))
@@ -113,7 +134,7 @@ export default function SupplyPage() {
       setLoading(false)
     }
     load()
-  }, [dateFrom, dateTo])
+  }, [dateFrom, dateTo, prodMap])
 
   const filtered = useMemo(() => rows.filter(r => {
     return !search || (r.name||r['SKU 이름']).toLowerCase().includes(search.toLowerCase()) || r['SKU Barcode'].includes(search)
@@ -133,10 +154,10 @@ export default function SupplyPage() {
   const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1)
   const yesterdayStr = yesterday.toISOString().slice(0,10)
 
-  const kpiYest   = useMemo(() => calcKpi(rows.filter(r => toD(r.입고예정일) === yesterdayStr)), [rows])
-  const kpiWeek   = useMemo(() => calcKpi(rows.filter(r => { const d=toD(r.입고예정일); return d>=weekRange.from&&d<=weekRange.to })), [rows, weekRange])
-  const kpiCum    = useMemo(() => calcKpi(rows.filter(r => toD(r.입고예정일) >= '2026-01-01')), [rows])
-  const kpiMoving = useMemo(() => calcKpi(rows.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)), [rows])
+  const kpiYest   = useMemo(() => calcKpi(allRows.filter(r => toD(r.입고예정일) === yesterdayStr)), [allRows])
+  const kpiWeek   = useMemo(() => calcKpi(allRows.filter(r => { const d=toD(r.입고예정일); return d>=weekRange.from&&d<=weekRange.to })), [allRows, weekRange])
+  const kpiCum    = useMemo(() => calcKpi(allRows.filter(r => toD(r.입고예정일) >= '2026-01-01')), [allRows])
+  const kpiMoving = useMemo(() => calcKpi(allRows.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)), [allRows])
 
   // 차트 — 날짜별 발주/확정/입고 수량
   const chartData = useMemo(() => {
@@ -171,21 +192,22 @@ export default function SupplyPage() {
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
   }, [filtered])
 
-  // 이동중 파이프라인 — supply_status 기준, products.name으로 SUM
+  // 이동중 파이프라인 — allRows 기준, products.name SUM
   const movingByDate = useMemo(() => {
-    const mv = rows.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)
+    const mv = allRows.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)
     const byDate: Record<string, Record<string, { name:string; image_url:string; qty:number; amt:number }>> = {}
     mv.forEach(r => {
       const d = toD(r.입고예정일)
-      const pName = r.name || r['SKU 이름']
+      const pName = prodMap[r['SKU Barcode']]?.name || r['SKU 이름']
+      const img   = prodMap[r['SKU Barcode']]?.image_url || ''
       if (!byDate[d]) byDate[d] = {}
-      if (!byDate[d][pName]) byDate[d][pName] = { name:pName, image_url:r.image_url||'', qty:0, amt:0 }
+      if (!byDate[d][pName]) byDate[d][pName] = { name:pName, image_url:img, qty:0, amt:0 }
       byDate[d][pName].qty += toN(r.확정수량)
       byDate[d][pName].amt += toN(r.확정수량) * toN(r.매입가)
     })
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
       .map(([date, nameMap]) => [date, Object.values(nameMap)] as [string, {name:string;image_url:string;qty:number;amt:number}[]])
-  }, [rows])
+  }, [allRows, prodMap])
 
   const kpiCards = [
     { label:'전일 확정수량', sub: yesterdayStr,   kpi: kpiYest,   color:'var(--blue)',   ico:'📦', cls:'kc-bl' },
