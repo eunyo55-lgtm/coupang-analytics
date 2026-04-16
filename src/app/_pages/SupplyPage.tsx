@@ -38,18 +38,24 @@ function getThreeMonthsAgo() {
   const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0,10)
 }
 
+function getOneMonthAgo() {
+  const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0,10)
+}
+
 export default function SupplyPage() {
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
   const today = new Date().toISOString().slice(0, 10)
 
   const threeMonthsAgo = getThreeMonthsAgo()
 
-  const [rows, setRows] = useState<SupplyRow[]>([])       // 필터 기간 (차트/테이블)
-  const [allRows, setAllRows] = useState<SupplyRow[]>([])  // 전체 기간 (KPI용)
+  const [rows, setRows] = useState<SupplyRow[]>([])
+  const [allRows, setAllRows] = useState<SupplyRow[]>([])
   const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>({})
   const [loading, setLoading] = useState(true)
-  const [dateFrom, setDateFrom] = useState(() => getThreeMonthsAgo())
-  const [dateTo, setDateTo] = useState('2026-12-31')
+  const [dateFrom, setDateFrom] = useState(() => getOneMonthAgo())
+  const [dateTo, setDateTo] = useState(() => {
+    const d = new Date(); d.setMonth(d.getMonth() + 3); return d.toISOString().slice(0,10)
+  })
   const [search, setSearch] = useState('')
   const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set())
 
@@ -189,7 +195,8 @@ export default function SupplyPage() {
       byDate[d].recAmt  += rec * mp
       byDate[d].count   += 1
     })
-    return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
+    // 입고예정일 내림차순 (최신이 위)
+    return Object.entries(byDate).sort(([a],[b]) => b.localeCompare(a))
   }, [filtered])
 
   // 이동중 파이프라인 — allRows 기준, products.name SUM
@@ -206,7 +213,10 @@ export default function SupplyPage() {
       byDate[d][pName].amt += toN(r.확정수량) * toN(r.매입가)
     })
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
-      .map(([date, nameMap]) => [date, Object.values(nameMap)] as [string, {name:string;image_url:string;qty:number;amt:number}[]])
+      .map(([date, nameMap]) => [
+        date,
+        Object.values(nameMap).sort((a,b) => b.amt - a.amt)  // 공급액 내림차순
+      ] as [string, {name:string;image_url:string;qty:number;amt:number}[]])
   }, [allRows, prodMap])
 
   const kpiCards = [
@@ -228,6 +238,17 @@ export default function SupplyPage() {
 
   return (
     <div>
+      {/* 최상단 검색창 + 날짜 필터 */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+        <input className="si" placeholder="🔍 상품명/바코드 전체 검색" value={search} onChange={e => setSearch(e.target.value)}
+          style={{ flex:1, minWidth:200 }} />
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+          style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+        <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+          style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+      </div>
+
       {/* KPI 카드 */}
       <div className="krow" style={{ marginBottom: 16 }}>
         {kpiCards.map((c, i) => (
@@ -256,15 +277,8 @@ export default function SupplyPage() {
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📈</div><div>
             <div className="ch-title">발주 · 확정 · 입고 비교</div>
-            <div className="ch-sub">입고예정일 기준 수량 추이</div>
+            <div className="ch-sub">입고예정일 기준 수량 추이 · {dateFrom.slice(5)} ~ {dateTo.slice(5)}</div>
           </div></div>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
-            <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
-            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
-          </div>
         </div>
         <div className="cb">
           {chartData.length > 0 ? (
@@ -293,7 +307,6 @@ export default function SupplyPage() {
             <div className="ch-title">공급 현황</div>
             <div className="ch-sub">입고예정일 기준 집계 · {tableByDate.length}일 · 클릭하면 상세 펼침</div>
           </div></div>
-          <input className="si" placeholder="🔍 상품명/바코드" value={search} onChange={e => setSearch(e.target.value)} style={{ width:160 }} />
         </div>
         <div className="cb">
           {loading ? (
