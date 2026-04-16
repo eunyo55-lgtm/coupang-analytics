@@ -18,22 +18,55 @@ async function rpc(fn: string, params: Record<string,unknown> = {}) {
   return data
 }
 
+// ── 판매 추이 모달: 특정 상품의 3개년 일별 판매량을 RPC로 조회 ──
 function SalesTrendModal({ productName, onClose }: { productName: string; onClose: () => void }) {
-  const { state } = useApp()
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
-  const trendData = useMemo(() => {
-    const map26 = new Map<string,number>(), map25 = new Map<string,number>(), map24 = new Map<string,number>()
-    const end = new Date(), start = new Date(); start.setDate(start.getDate()-59)
-    const from26=toYMD(start), to26=toYMD(end)
-    const from25=from26.replace('2026','2025'), to25=to26.replace('2026','2025')
-    const from24=from26.replace('2026','2024'), to24=to26.replace('2026','2024')
-    state.daily26.filter(r=>r.date>=from26&&r.date<=to26).forEach(r=>map26.set(r.date,r.qty))
-    state.daily25.filter(r=>r.date>=from25&&r.date<=to25).forEach(r=>map25.set(r.date.replace('2025','2026'),r.qty))
-    state.daily24.filter(r=>r.date>=from24&&r.date<=to24).forEach(r=>map24.set(r.date.replace('2024','2026'),r.qty))
-    const dates:string[]=[], cur=new Date(start)
-    while(cur<=end){dates.push(toYMD(cur));cur.setDate(cur.getDate()+1)}
-    return dates.map(d=>({date:d.slice(5),'26년':map26.get(d)||0,'25년':map25.get(d)||0,'24년':map24.get(d)||0})).filter(d=>d['26년']||d['25년']||d['24년'])
-  },[state.daily26,state.daily25,state.daily24])
+  const [trendData, setTrendData] = useState<{date:string;'26년':number;'25년':number;'24년':number}[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!productName) return
+    setLoading(true)
+
+    const end = new Date()
+    const start = new Date(); start.setDate(start.getDate() - 59)
+    const from26 = toYMD(start), to26 = toYMD(end)
+    const from25 = from26.replace('2026','2025'), to25 = to26.replace('2026','2025')
+    const from24 = from26.replace('2026','2024'), to24 = to26.replace('2026','2024')
+
+    Promise.all([
+      rpc('get_daily_sales_by_name', { p_name: productName, p_from: from26, p_to: to26 }),
+      rpc('get_daily_sales_by_name', { p_name: productName, p_from: from25, p_to: to25 }),
+      rpc('get_daily_sales_by_name', { p_name: productName, p_from: from24, p_to: to24 }),
+    ]).then(([data26, data25, data24]) => {
+      const map26 = new Map<string,number>()
+      const map25 = new Map<string,number>()
+      const map24 = new Map<string,number>()
+
+      ;(Array.isArray(data26) ? data26 : []).forEach((r:{sale_date:string;total_qty:number}) =>
+        map26.set(r.sale_date, r.total_qty)
+      )
+      ;(Array.isArray(data25) ? data25 : []).forEach((r:{sale_date:string;total_qty:number}) =>
+        map25.set(r.sale_date.replace('2025','2026'), r.total_qty)
+      )
+      ;(Array.isArray(data24) ? data24 : []).forEach((r:{sale_date:string;total_qty:number}) =>
+        map24.set(r.sale_date.replace('2024','2026'), r.total_qty)
+      )
+
+      // 날짜 축 생성 (from26 ~ to26)
+      const dates: string[] = []
+      const cur = new Date(start)
+      while (cur <= end) { dates.push(toYMD(cur)); cur.setDate(cur.getDate() + 1) }
+
+      const result = dates
+        .map(d => ({ date: d.slice(5), '26년': map26.get(d)||0, '25년': map25.get(d)||0, '24년': map24.get(d)||0 }))
+        .filter(d => d['26년'] || d['25년'] || d['24년'])
+
+      setTrendData(result)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [productName])
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'#ffffff',borderRadius:'var(--r12)',padding:24,width:'min(720px,95vw)',boxShadow:'0 20px 60px rgba(0,0,0,0.4)'}} onClick={e=>e.stopPropagation()}>
@@ -41,7 +74,9 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
           <div><div style={{fontWeight:800,fontSize:15}}>📈 판매 추이</div><div style={{fontSize:12,color:'var(--t3)',marginTop:2}}>{productName}</div></div>
           <button onClick={onClose} style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:8,padding:'6px 12px',cursor:'pointer',fontSize:12}}>✕ 닫기</button>
         </div>
-        {trendData.length>0?(
+        {loading ? (
+          <div style={{textAlign:'center',padding:40,color:'var(--t3)'}}>로딩 중...</div>
+        ) : trendData.length>0?(
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={trendData} margin={{top:4,right:16,left:0,bottom:4}}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
@@ -189,7 +224,7 @@ export default function DashboardPage() {
   const kpiCards:{label:string;sub:string;qty:number|null;rev:number|null;yoy:number|null;color:string;isStock:boolean}[]=[
     {label:'판매량',sub:`전일 (${latestDate})`,qty:kpiYest?.qty??null,rev:kpiYest?.rev??null,yoy:kpiYest&&kpiYest25?pct(kpiYest.qty,kpiYest25.qty):null,color:'var(--blue)',isStock:false},
     {label:'주간 판매량',sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`,qty:kpiWeek?.qty??null,rev:kpiWeek?.rev??null,yoy:kpiWeek&&kpiWeek25?pct(kpiWeek.qty,kpiWeek25.qty):null,color:'var(--purple)',isStock:false},
-    {label:'누적 판매량',sub:`26년 (${cumRange.from.slice(5)} ~ ${latestDate.slice(5)})`,qty:kpiCum?.qty??null,rev:kpiCum?.rev??null,yoy:kpiCum&&kpiCum25?pct(kpiCum.qty,kpiCum25.qty):null,color:'var(--green)',isStock:false},
+    {label:'누적 판매량',sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`,qty:kpiCum?.qty??null,rev:kpiCum?.rev??null,yoy:kpiCum&&kpiCum25?pct(kpiCum.qty,kpiCum25.qty):null,color:'var(--green)',isStock:false},
     {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:s.stock_value||null,yoy:null,color:'var(--amber)',isStock:true},
   ]
 
