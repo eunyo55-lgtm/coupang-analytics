@@ -377,9 +377,9 @@ export default function DashboardPage() {
                 <YAxis tick={{ fontSize:10 }} width={40} />
                 <Tooltip formatter={(val: number, name: string) => [fmt(val)+'개', name]} labelFormatter={(l) => `날짜: ${l}`} />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:11 }} />
-                <Line type="monotone" dataKey="26년" stroke="#3B82F6" strokeWidth={2.5} dot={false} />
-                <Line type="monotone" dataKey="25년" stroke="#A855F7" strokeWidth={1.5} dot={false} strokeDasharray="5 3" />
-                <Line type="monotone" dataKey="24년" stroke="#10B981" strokeWidth={1.5} dot={false} strokeDasharray="2 2" />
+               <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false} />
+<Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={2} dot={false} />
+<Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
