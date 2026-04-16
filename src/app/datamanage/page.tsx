@@ -100,20 +100,26 @@ export default function DataManagePage() {
           '입고수량':   Number(r['입고수량'])  || 0,
         })).filter(r => r['SKU Barcode'] && r['입고예정일'])
 
+        let saved = 0
         for (let i = 0; i < supplyRows.length; i += 500) {
           const batch = supplyRows.slice(i, i + 500)
-          await fetch(`${SURL}/rest/v1/supply_status`, {
+          const res = await fetch(`${SURL}/rest/v1/supply_status`, {
             method: 'POST',
             headers: {
               'apikey': SKEY,
               'Authorization': `Bearer ${SKEY}`,
               'Content-Type': 'application/json',
-              'Prefer': 'resolution=merge-duplicates',
+              'Prefer': 'return=minimal,resolution=merge-duplicates',
             },
             body: JSON.stringify(batch),
           })
+          if (res.ok) { saved += batch.length }
+          else {
+            const errText = await res.text()
+            dispatch({ type: 'APPEND_LOG', payload: `⚠️ 발주서 저장 오류: ${errText.substring(0,100)}` })
+          }
         }
-        dispatch({ type: 'APPEND_LOG', payload: `✅ 발주서 Supabase 저장: ${supplyRows.length}건` })
+        dispatch({ type: 'APPEND_LOG', payload: `✅ 발주서 Supabase 저장: ${saved}건` })
         dispatch({ type: 'HYDRATE', payload: { ordersData: mergeRaw(state.ordersData, result.data), hasData: true } })
 
       } else if (key === 'supply') {
