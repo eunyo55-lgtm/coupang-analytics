@@ -98,16 +98,28 @@ async function upsertSupplyStatus(
     return 0
   }
 
+  // 파일 내 중복 제거 — 발주번호+SKU Barcode 기준 마지막 값 유지
+  const dedupMap = new Map<string, typeof mapped[0]>()
+  for (const row of mapped) {
+    const key = `${row['발주번호']}||${row['SKU Barcode']}`
+    dedupMap.set(key, row)
+  }
+  const deduped = Array.from(dedupMap.values())
+  const dupCount = mapped.length - deduped.length
+  if (dupCount > 0) {
+    dispatchFn({ type: 'APPEND_LOG', payload: `🔧 파일 내 중복 ${dupCount}건 제거 → ${deduped.length}건 업로드` })
+  }
+
   // 첫 행 확인 로그
-  const sample = mapped[0]
+  const sample = deduped[0]
   dispatchFn({ type: 'APPEND_LOG', payload: `🔍 supply 샘플: ${sample['SKU Barcode']} | 예정일:${sample['입고예정일']} | 확정:${sample['확정수량']} | 매입가:${sample['매입가']}` })
 
   const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' }
 
   // 발주번호 + SKU Barcode unique constraint 기준으로 중복 시 업데이트, 신규는 추가
   let total = 0
-  for (let i = 0; i < mapped.length; i += 500) {
-    const batch = mapped.slice(i, i + 500)
+  for (let i = 0; i < deduped.length; i += 500) {
+    const batch = deduped.slice(i, i + 500)
     const res = await fetch(`${SUPA_URL}/rest/v1/supply_status`, {
       method: 'POST',
       headers: {
@@ -118,8 +130,8 @@ async function upsertSupplyStatus(
     })
     if (res.ok || res.status === 201) {
       total += batch.length
-      if (i % 1000 === 0 || i + 500 >= mapped.length) {
-        dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${Math.min(total, mapped.length)}/${mapped.length}행 처리 중...` })
+      if (i % 1000 === 0 || i + 500 >= deduped.length) {
+        dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${Math.min(total, deduped.length)}/${deduped.length}행 처리 중...` })
       }
     } else {
       const err = await res.text().catch(() => 'unknown')
@@ -280,7 +292,7 @@ export default function DataManagePage() {
           </div>
         </div>
         <div className="cb">
-          <div className="up-grid2">
+          <div className="up-grid1" style={{ display:'flex', flexDirection:'column', gap:8 }}>
             {FILE_CONFIG.map(({ key, icon, title, sub }) => (
               <div key={key} className={`up-mini${done[key] ? ' done' : ''}`} onClick={() => inputRefs.current[key]?.click()}>
                 <input type="file" accept=".xlsx,.xls,.csv"
