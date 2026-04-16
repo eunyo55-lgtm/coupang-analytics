@@ -494,8 +494,9 @@ export default function DashboardPage() {
                          <span
   onClick={() => setSalesModal(item.product_name)}
   style={{ fontWeight:700, ...cursor:'pointer'... }}
-  title="클릭 시 판매 추이"
->{item.product_name}</span>
+  onClick={() => setSalesModal(item.product_name)}
+                              title="클릭 시 판매 추이"
+                            >{item.product_name}</span>
                           </td>
                           <td style={{ textAlign:'right', color:'var(--t3)', fontSize:11 }}>{item.qty_24 ? fmt(item.qty_24) : '-'}</td>
                           <td style={{ textAlign:'right', color:'var(--t3)', fontSize:11 }}>{item.qty_25 ? fmt(item.qty_25) : '-'}</td>
