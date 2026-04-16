@@ -52,10 +52,21 @@ export default function SupplyPage() {
   const [allRows, setAllRows] = useState<SupplyRow[]>([])
   const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>({})
   const [loading, setLoading] = useState(true)
-  const [dateFrom, setDateFrom] = useState(() => getOneMonthAgo())
-  const [dateTo, setDateTo] = useState(() => {
+
+  // 차트용 날짜 필터 (기본: 최근 1달 ~ 3달 후)
+  const [chartFrom, setChartFrom] = useState(() => getOneMonthAgo())
+  const [chartTo, setChartTo] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() + 3); return d.toISOString().slice(0,10)
   })
+  // 테이블용 날짜 필터 (기본: 최근 1달 ~ 3달 후)
+  const [tableFrom, setTableFrom] = useState(() => getOneMonthAgo())
+  const [tableTo, setTableTo] = useState(() => {
+    const d = new Date(); d.setMonth(d.getMonth() + 3); return d.toISOString().slice(0,10)
+  })
+  // DB 로드용 = 두 필터의 min/max
+  const dateFrom = useMemo(() => chartFrom < tableFrom ? chartFrom : tableFrom, [chartFrom, tableFrom])
+  const dateTo   = useMemo(() => chartTo > tableTo ? chartTo : tableTo, [chartTo, tableTo])
+
   const [search, setSearch] = useState('')
   const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set())
 
@@ -142,9 +153,21 @@ export default function SupplyPage() {
     load()
   }, [dateFrom, dateTo, prodMap])
 
+  // 검색어 적용된 rows (차트/테이블용)
   const filtered = useMemo(() => rows.filter(r => {
     return !search || (r.name||r['SKU 이름']).toLowerCase().includes(search.toLowerCase()) || r['SKU Barcode'].includes(search)
   }), [rows, search])
+
+  // 검색어 적용된 allRows (KPI/이동중용) — 검색 없으면 전체
+  const filteredAll = useMemo(() => {
+    if (!search) return allRows
+    const s = search.toLowerCase()
+    return allRows.filter(r => {
+      const name = (r.name || r['SKU 이름'] || '').toLowerCase()
+      const barcode = (r['SKU Barcode'] || '').toLowerCase()
+      return name.includes(s) || barcode.includes(s)
+    })
+  }, [allRows, search, prodMap])
 
   function calcKpi(rowSet: SupplyRow[]) {
     const ord = rowSet.reduce((s,r) => s + toN(r.발주수량), 0)
@@ -160,15 +183,15 @@ export default function SupplyPage() {
   const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1)
   const yesterdayStr = yesterday.toISOString().slice(0,10)
 
-  const kpiYest   = useMemo(() => calcKpi(allRows.filter(r => toD(r.입고예정일) === yesterdayStr)), [allRows])
-  const kpiWeek   = useMemo(() => calcKpi(allRows.filter(r => { const d=toD(r.입고예정일); return d>=weekRange.from&&d<=weekRange.to })), [allRows, weekRange])
-  const kpiCum    = useMemo(() => calcKpi(allRows.filter(r => toD(r.입고예정일) >= '2026-01-01')), [allRows])
-  const kpiMoving = useMemo(() => calcKpi(allRows.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)), [allRows])
+  const kpiYest   = useMemo(() => calcKpi(filteredAll.filter(r => toD(r.입고예정일) === yesterdayStr)), [filteredAll])
+  const kpiWeek   = useMemo(() => calcKpi(filteredAll.filter(r => { const d=toD(r.입고예정일); return d>=weekRange.from&&d<=weekRange.to })), [filteredAll, weekRange])
+  const kpiCum    = useMemo(() => calcKpi(filteredAll.filter(r => toD(r.입고예정일) >= '2026-01-01')), [filteredAll])
+  const kpiMoving = useMemo(() => calcKpi(filteredAll.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)), [filteredAll])
 
-  // 차트 — 날짜별 발주/확정/입고 수량
+  // 차트 — chartFrom~chartTo 필터
   const chartData = useMemo(() => {
     const byDate: Record<string, { ord: number; qty: number; rec: number }> = {}
-    filtered.forEach(r => {
+    filtered.filter(r => { const d=toD(r.입고예정일); return d>=chartFrom&&d<=chartTo }).forEach(r => {
       const d = toD(r.입고예정일)
       if (!byDate[d]) byDate[d] = { ord: 0, qty: 0, rec: 0 }
       byDate[d].ord += toN(r.발주수량)
@@ -177,12 +200,12 @@ export default function SupplyPage() {
     })
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
       .map(([date, v]) => ({ date: date.slice(5), ...v }))
-  }, [filtered])
+  }, [filtered, chartFrom, chartTo])
 
-  // 공급 현황 테이블 — 입고예정일 기준 집계
+  // 공급 현황 테이블 — tableFrom~tableTo 필터, 입고예정일 내림차순
   const tableByDate = useMemo(() => {
     const byDate: Record<string, { ord:number; qty:number; rec:number; unp:number; ordAmt:number; confAmt:number; recAmt:number; count:number }> = {}
-    filtered.forEach(r => {
+    filtered.filter(r => { const d=toD(r.입고예정일); return d>=tableFrom&&d<=tableTo }).forEach(r => {
       const d = toD(r.입고예정일)
       if (!byDate[d]) byDate[d] = { ord:0, qty:0, rec:0, unp:0, ordAmt:0, confAmt:0, recAmt:0, count:0 }
       const ord=toN(r.발주수량), qty=toN(r.확정수량), rec=toN(r.입고수량), mp=toN(r.매입가)
@@ -195,13 +218,12 @@ export default function SupplyPage() {
       byDate[d].recAmt  += rec * mp
       byDate[d].count   += 1
     })
-    // 입고예정일 내림차순 (최신이 위)
     return Object.entries(byDate).sort(([a],[b]) => b.localeCompare(a))
-  }, [filtered])
+  }, [filtered, tableFrom, tableTo])
 
-  // 이동중 파이프라인 — allRows 기준, products.name SUM
+  // 이동중 파이프라인 — filteredAll 기준 (검색 반영), products.name SUM
   const movingByDate = useMemo(() => {
-    const mv = allRows.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)
+    const mv = filteredAll.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)
     const byDate: Record<string, Record<string, { name:string; image_url:string; qty:number; amt:number }>> = {}
     mv.forEach(r => {
       const d = toD(r.입고예정일)
@@ -217,7 +239,7 @@ export default function SupplyPage() {
         date,
         Object.values(nameMap).sort((a,b) => b.amt - a.amt)  // 공급액 내림차순
       ] as [string, {name:string;image_url:string;qty:number;amt:number}[]])
-  }, [allRows, prodMap])
+  }, [filteredAll, prodMap])
 
   const kpiCards = [
     { label:'전일 확정수량', sub: yesterdayStr,   kpi: kpiYest,   color:'var(--blue)',   ico:'📦', cls:'kc-bl' },
@@ -238,15 +260,10 @@ export default function SupplyPage() {
 
   return (
     <div>
-      {/* 최상단 검색창 + 날짜 필터 */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+      {/* 최상단 검색창 */}
+      <div style={{ marginBottom:12 }}>
         <input className="si" placeholder="🔍 상품명/바코드 전체 검색" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ flex:1, minWidth:200 }} />
-        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-          style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
-        <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
-        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-          style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+          style={{ width:'100%' }} />
       </div>
 
       {/* KPI 카드 */}
@@ -277,8 +294,15 @@ export default function SupplyPage() {
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📈</div><div>
             <div className="ch-title">발주 · 확정 · 입고 비교</div>
-            <div className="ch-sub">입고예정일 기준 수량 추이 · {dateFrom.slice(5)} ~ {dateTo.slice(5)}</div>
+            <div className="ch-sub">입고예정일 기준 수량 추이</div>
           </div></div>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <input type="date" value={chartFrom} onChange={e => setChartFrom(e.target.value)}
+              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+            <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
+            <input type="date" value={chartTo} onChange={e => setChartTo(e.target.value)}
+              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+          </div>
         </div>
         <div className="cb">
           {chartData.length > 0 ? (
@@ -307,6 +331,13 @@ export default function SupplyPage() {
             <div className="ch-title">공급 현황</div>
             <div className="ch-sub">입고예정일 기준 집계 · {tableByDate.length}일 · 클릭하면 상세 펼침</div>
           </div></div>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <input type="date" value={tableFrom} onChange={e => setTableFrom(e.target.value)}
+              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+            <span style={{ fontSize:11, color:'var(--t3)' }}>~</span>
+            <input type="date" value={tableTo} onChange={e => setTableTo(e.target.value)}
+              style={{ fontSize:11, padding:'4px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)' }} />
+          </div>
         </div>
         <div className="cb">
           {loading ? (
