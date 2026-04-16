@@ -158,14 +158,15 @@ export default function SupplyPage() {
     return !search || (r.name||r['SKU 이름']).toLowerCase().includes(search.toLowerCase()) || r['SKU Barcode'].includes(search)
   }), [rows, search])
 
-  // 검색어 적용된 allRows (KPI/이동중용) — 검색 없으면 전체
+  // 검색어 적용된 allRows (KPI/이동중용) — prodMap으로 단축명 검색 포함
   const filteredAll = useMemo(() => {
     if (!search) return allRows
     const s = search.toLowerCase()
     return allRows.filter(r => {
-      const name = (r.name || r['SKU 이름'] || '').toLowerCase()
+      const skuName = (r['SKU 이름'] || '').toLowerCase()
+      const shortName = (prodMap[r['SKU Barcode']]?.name || '').toLowerCase()
       const barcode = (r['SKU Barcode'] || '').toLowerCase()
-      return name.includes(s) || barcode.includes(s)
+      return skuName.includes(s) || shortName.includes(s) || barcode.includes(s)
     })
   }, [allRows, search, prodMap])
 
