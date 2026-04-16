@@ -34,17 +34,19 @@ function getWeekLabel(dateStr: string): string {
   return `W${week}`
 }
 
+function getThreeMonthsAgo() {
+  const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0,10)
+}
+
 export default function SupplyPage() {
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
   const today = new Date().toISOString().slice(0, 10)
 
-  const threeMonthsAgo = useMemo(() => {
-    const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0,10)
-  }, [])
+  const threeMonthsAgo = getThreeMonthsAgo()
 
   const [rows, setRows] = useState<SupplyRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [dateFrom, setDateFrom] = useState(threeMonthsAgo)
+  const [dateFrom, setDateFrom] = useState(() => getThreeMonthsAgo())
   const [dateTo, setDateTo] = useState('2026-12-31')
   const [search, setSearch] = useState('')
   const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set())
@@ -61,14 +63,26 @@ export default function SupplyPage() {
       setLoading(true)
       try {
         const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
-        // 날짜 필터 적용해서 로드 (전체 로드 시 너무 무거움)
         const from = dateFrom || threeMonthsAgo
         const to   = dateTo   || '2099-12-31'
-        const r = await fetch(
-          `${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&입고예정일=gte.${from}&입고예정일=lte.${to}&limit=5000`,
-          { headers: h }
-        )
-        const data: SupplyRow[] = await r.json()
+
+        // 페이지네이션으로 전체 데이터 로드
+        let allData: SupplyRow[] = []
+        let offset = 0
+        const pageSize = 1000
+        while (true) {
+          const r = await fetch(
+            `${SUPA_URL}/rest/v1/supply_status?select=*&order=입고예정일.asc&입고예정일=gte.${from}&입고예정일=lte.${to}&limit=${pageSize}&offset=${offset}`,
+            { headers: h }
+          )
+          const page: SupplyRow[] = await r.json()
+          if (!Array.isArray(page) || page.length === 0) break
+          allData = allData.concat(page)
+          if (page.length < pageSize) break
+          offset += pageSize
+        }
+
+        const data = allData
         if (!Array.isArray(data)) { setLoading(false); return }
 
         // products에서 name, image_url 매핑
