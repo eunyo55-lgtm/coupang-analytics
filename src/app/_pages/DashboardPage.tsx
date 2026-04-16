@@ -492,9 +492,9 @@ export default function DashboardPage() {
   });
 }}
                          <span
-  onClick={() => setSalesModal(item.product_name)}
-  style={{ fontWeight:700, ...cursor:'pointer'... }}
-  onClick={() => setSalesModal(item.product_name)}
+ onClick={() => setSalesModal(item.product_name)}
+style={{ fontWeight:700, ...cursor:'pointer'... }}
+                              onClick={() => setSalesModal(item.product_name)}
                               title="클릭 시 판매 추이"
                             >{item.product_name}</span>
                           </td>
