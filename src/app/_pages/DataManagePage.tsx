@@ -3,11 +3,11 @@
 import { useRef, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { persistData } from '@/lib/storage'
-import { parseFile, normalizeSalesData } from '@/lib/fileParser'
+import { parseFile, normalizeSalesData, detectColumn, toNumber } from '@/lib/fileParser'
 import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
-  { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터',         sub: '상품코드 · 상품명 · 옵션 · 재고' },
+  { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터',         sub: '상품코드 · 상품명 · 옵션 · 재고 · 시즌 · 이미지' },
   { key: 'sales'  as const, icon: '🛒', title: '쿠팡 판매 데이터',              sub: '판매량 · 금액 · 날짜' },
   { key: 'supply' as const, icon: '🚚', title: '쿠팡 발주서 / 공급 중 수량',    sub: '발주번호 · 입고예정일 · 수량 · 매입가' },
 ]
@@ -15,8 +15,11 @@ const FILE_CONFIG = [
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
+// ── dispatch 타입 (Dispatch<Action>을 직접 받도록 넓힘) ──
+type LogDispatch = (a: { type: 'APPEND_LOG'; payload: string }) => void
+
 // ── 판매 데이터 upsert ──
-async function upsertDailySales(rows: SalesRow[], dispatchFn: (a: {type: string; payload: string}) => void) {
+async function upsertDailySales(rows: SalesRow[], dispatchFn: LogDispatch) {
   if (!rows.length) return 0
 
   const data = rows.map(r => ({
@@ -50,10 +53,85 @@ async function upsertDailySales(rows: SalesRow[], dispatchFn: (a: {type: string;
   return total
 }
 
+// ── 이지어드민 상품마스터 → products 테이블 upsert ──
+// 컬럼 매칭:
+//  barcode      ← 바코드/상품코드
+//  name         ← 상품명
+//  option_value ← 옵션
+//  cost         ← 원가
+//  season       ← 시즌
+//  image_url    ← 이미지(URL)
+//  category     ← 카테고리/분류
+async function upsertProducts(
+  rows: Record<string, unknown>[],
+  dispatchFn: LogDispatch
+) {
+  if (!rows.length) return 0
+
+  const s0 = rows[0] as Record<string, unknown>
+  const bcCol    = detectColumn(s0, ['바코드', 'barcode', 'SKU Barcode', '상품바코드'])
+  const nameCol  = detectColumn(s0, ['상품명', 'productname', '상품이름', 'item', '노출상품명', 'SKU 명', 'SKU명'])
+  const optCol   = detectColumn(s0, ['옵션', 'option', '옵션명', '옵션값', '속성'])
+  const costCol  = detectColumn(s0, ['원가', '매입원가', 'cost', '매입가', '공급가'])
+  const seasonCol   = detectColumn(s0, ['시즌', 'season', '시즌구분'])
+  const imageCol    = detectColumn(s0, ['이미지', 'image', '이미지URL', '이미지주소', 'image_url', '대표이미지'])
+  const categoryCol = detectColumn(s0, ['카테고리', 'category', '분류', '상품분류', '대분류', '품목'])
+
+  if (!bcCol && !nameCol) {
+    dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 바코드/상품명 컬럼을 찾지 못해 products 저장 스킵` })
+    return 0
+  }
+
+  dispatchFn({
+    type: 'APPEND_LOG',
+    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol}`
+  })
+
+  const toStr = (v: unknown) => v != null ? String(v).trim() : ''
+  const mapped = rows.map(r => ({
+    barcode:      bcCol    ? toStr(r[bcCol])    : '',
+    name:         nameCol  ? toStr(r[nameCol])  : '',
+    option_value: optCol   ? toStr(r[optCol])   : '',
+    cost:         costCol  ? toNumber(r[costCol]) : 0,
+    season:       seasonCol   ? toStr(r[seasonCol])   : '',
+    image_url:    imageCol    ? toStr(r[imageCol])    : '',
+    category:     categoryCol ? toStr(r[categoryCol]) : '',
+  })).filter(r => r.barcode)
+
+  if (!mapped.length) {
+    dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 바코드 있는 행이 없어 products 저장 스킵` })
+    return 0
+  }
+
+  // 중복 제거 — barcode 기준 마지막 값 유지
+  const dedupMap = new Map<string, typeof mapped[0]>()
+  for (const row of mapped) dedupMap.set(row.barcode, row)
+  const deduped = Array.from(dedupMap.values())
+
+  let total = 0
+  for (let i = 0; i < deduped.length; i += 500) {
+    const batch = deduped.slice(i, i + 500)
+    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_products`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: batch }),
+    })
+    if (res.ok) {
+      const cnt = await res.json().catch(() => batch.length)
+      total += Number(cnt) || batch.length
+    } else {
+      const err = await res.text().catch(() => 'unknown')
+      dispatchFn({ type: 'APPEND_LOG', payload: `❌ products 저장 에러 (${res.status}): ${err.substring(0,150)}` })
+      break
+    }
+  }
+  return total
+}
+
 // ── 공급 중 수량 → supply_status upsert ──
 async function upsertSupplyStatus(
   rows: Record<string, unknown>[],
-  dispatchFn: (a: {type: string; payload: string}) => void
+  dispatchFn: LogDispatch
 ) {
   if (!rows.length) return 0
 
@@ -113,8 +191,6 @@ async function upsertSupplyStatus(
   // 첫 행 확인 로그
   const sample = deduped[0]
   dispatchFn({ type: 'APPEND_LOG', payload: `🔍 supply 샘플: ${sample['SKU Barcode']} | 예정일:${sample['입고예정일']} | 확정:${sample['확정수량']} | 매입가:${sample['매입가']}` })
-
-  const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' }
 
   // upsert_supply_status RPC 사용 — ON CONFLICT ("발주번호","SKU Barcode") DO UPDATE
   let total = 0
@@ -207,9 +283,31 @@ export default function DataManagePage() {
           latestSaleDate: '', hasData: true, dateRangePreset: 'total',
         })
 
+      } else if (key === 'master') {
+        // 이지어드민 상품마스터: products 테이블에 시즌/이미지/카테고리까지 영구 저장
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [master] ${result.rows.toLocaleString()}행 | ${cols}` })
+        dispatch({ type: 'APPEND_LOG', payload: `📤 products 테이블에 업로드 중...` })
+        const saved = await upsertProducts(result.data, dispatch)
+        if (saved > 0) {
+          dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 products 저장 완료 (시즌/이미지 포함)` })
+        } else {
+          dispatch({ type: 'APPEND_LOG', payload: `⚠️ products 저장 0행 — 위 에러 확인 또는 SQL 마이그레이션(컬럼 추가) 필요` })
+        }
+        // 로컬 persistData도 유지
+        await persistData({
+          masterData:  result.data,
+          salesData:   [] as never[], salesData24: [] as never[], salesData25: [] as never[],
+          products:    [] as never[],
+          ordersData:  state.ordersData,
+          supplyData:  state.supplyData,
+          stockSummary: { total_stock: 0, stock_value: 0 },
+          daily26: [], daily25: [], daily24: [],
+          latestSaleDate: '', hasData: true, dateRangePreset: 'total',
+        })
+
       } else {
         await persistData({
-          masterData:  key === 'master' ? result.data : state.masterData as Record<string,unknown>[],
+          masterData:  state.masterData as Record<string,unknown>[],
           salesData:   [] as never[], salesData24: [] as never[], salesData25: [] as never[],
           products:    [] as never[],
           ordersData:  key === 'orders' ? result.data : state.ordersData,
@@ -330,12 +428,12 @@ export default function DataManagePage() {
           <div className="tw"><table>
             <thead><tr><th>파일</th><th>필수 컬럼</th><th>형식</th></tr></thead>
             <tbody>
-              <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>상품명, 옵션, 재고수량</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
+              <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>바코드, 상품명, 옵션, 원가, 시즌, 이미지(URL), 카테고리</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량/출고수량, 날짜/출고일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
               <tr><td style={{fontWeight:700}}>쿠팡 발주서 / 공급 중 수량</td><td style={{color:'var(--t2)'}}>SKU Barcode · 입고예정일 · 발주수량 · 확정수량 · 입고수량 · 매입가</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
             </tbody>
           </table></div>
-          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 쿠팡 발주서 = 공급 중 수량 파일은 동일해요. 발주번호+바코드 기준으로 중복 자동 처리되므로 매일 누적 업로드 가능합니다.</p>
+          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 상품마스터는 시즌/이미지/카테고리까지 products 테이블에 영구 저장됩니다. 한 번 업로드하면 모든 탭에서 사용 가능.</p>
         </div>
       </div>
     </div>
