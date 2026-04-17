@@ -1,9 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useApp } from '@/lib/store'
 import { supabase } from '@/lib/supabase'
-import { toYMD } from '@/lib/dateUtils'
 import type { NaverKeywordResult } from '@/types'
 
 /* ────────────────────────────────────────────────────────────
@@ -85,8 +83,13 @@ async function fetchAllPages<T = any>(
    Main Component
    ──────────────────────────────────────────────────────────── */
 export default function RankingPage() {
-  const { state } = useApp()
-  const { dateRange } = state
+  /* 랭킹 페이지 자체 날짜 필터 (기본: 최근 7일) */
+  const [filterFrom, setFilterFrom] = useState<string>(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 6)
+    return getKSTDateString(d)
+  })
+  const [filterTo, setFilterTo] = useState<string>(() => getKSTDateString(new Date()))
 
   /* state */
   const [keywords, setKeywords] = useState<Keyword[]>([])
@@ -111,8 +114,8 @@ export default function RankingPage() {
   const [naverResults, setNaverResults] = useState<NaverKeywordResult[]>([])
 
   /* 정렬 & 편집 */
-  const [sortKey, setSortKey] = useState<string>('category')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [sortKey, setSortKey] = useState<string>('rankTrend')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [editingCat, setEditingCat] = useState<{ id: string; value: string } | null>(null)
 
   /* 차트 모달 */
@@ -122,7 +125,7 @@ export default function RankingPage() {
   useEffect(() => {
     loadAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRange])
+  }, [filterFrom, filterTo])
 
   async function loadAll() {
     if (!supabase) {
@@ -160,9 +163,9 @@ export default function RankingPage() {
       })) as Keyword[]
       setKeywords(kws)
 
-      /* 3. 랭킹: dateRange 필터 적용 (pagination 지원) */
-      const fromStr = toYMD(dateRange.from)
-      const toStr = toYMD(dateRange.to)
+      /* 3. 랭킹: 필터 적용 (pagination 지원) */
+      const fromStr = filterFrom
+      const toStr = filterTo
       const rkAll = await fetchAllPages<Ranking>((from, to) =>
         supabase!
           .from('keyword_rankings')
@@ -345,7 +348,7 @@ export default function RankingPage() {
     return Array.from(s).sort((a, b) => (a < b ? -1 : 1))
   }, [rankings])
 
-  const displayDates = useMemo(() => allDates.slice(-14), [allDates])
+  const displayDates = useMemo(() => allDates.slice(-7), [allDates])
 
   /* 검색량 매핑: 키워드 → 최근순 배열 */
   const svMap = useMemo(() => {
@@ -399,11 +402,27 @@ export default function RankingPage() {
 
   /* 정렬된 키워드 */
   const sortedKeywords = useMemo(() => {
+    /* rankTrend 계산용: displayDates의 처음/마지막 */
+    const firstDate = displayDates[0]
+    const lastDate = displayDates[displayDates.length - 1]
+
+    const getTrendForKw = (kwId: string) => {
+      const kwRanks = rankingsByKw.get(kwId) || []
+      const last = kwRanks.find(r => r.date === lastDate)?.rank_position || 0
+      const first = kwRanks.find(r => r.date === firstDate)?.rank_position || 0
+      /* 순위는 숫자 작을수록 좋음 → 상승폭 = first - last (양수면 순위 상승) */
+      if (!last || !first) return 0
+      return first - last
+    }
+
     const arr = [...keywords]
     arr.sort((a, b) => {
       let av: any = ''
       let bv: any = ''
-      if (sortKey === 'category') {
+      if (sortKey === 'rankTrend') {
+        av = getTrendForKw(a.id)
+        bv = getTrendForKw(b.id)
+      } else if (sortKey === 'category') {
         av = (a.category || '').toLowerCase()
         bv = (b.category || '').toLowerCase()
       } else if (sortKey === 'keyword') {
@@ -434,7 +453,7 @@ export default function RankingPage() {
       return 0
     })
     return arr
-  }, [keywords, sortKey, sortDir, svMap, salesByBarcode])
+  }, [keywords, sortKey, sortDir, svMap, salesByBarcode, rankingsByKw, displayDates])
 
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
@@ -449,18 +468,50 @@ export default function RankingPage() {
     return <span className="sort-arrow active">{sortDir === 'asc' ? '▲' : '▼'}</span>
   }
 
-  /* ─── KPI 계산 ─── */
-  const latestDate = displayDates[displayDates.length - 1]
-  const latestRankings = rankings.filter(r => r.date === latestDate)
-  const top10Count = latestRankings.filter(r => r.rank_position > 0 && r.rank_position <= 10).length
-  const withRank = latestRankings.filter(r => r.rank_position > 0)
-  const avgRank = withRank.length
-    ? Math.round(withRank.reduce((s, r) => s + r.rank_position, 0) / withRank.length)
-    : 0
-  const totalVolLatest = keywords.reduce((sum, k) => {
-    const sv = svMap.get(k.keyword)?.[0]
-    return sum + (sv?.total_volume || 0)
-  }, 0)
+  /* 연결상품 컬럼 너비: 가장 긴 상품명에 맞춰 동적 계산 */
+  const productColWidth = useMemo(() => {
+    const longest = keywords.reduce((max, k) => {
+      const n = (k.products?.name || '').length
+      return n > max ? n : max
+    }, 0)
+    /* 이미지 30px + gap + 글자당 약 7.5px + padding 여유 */
+    const w = 48 + Math.ceil(longest * 7.5) + 16
+    /* 너무 좁거나 넓지 않게 제한 */
+    return Math.max(140, Math.min(w, 280))
+  }, [keywords])
+
+  /* sticky 컬럼 left offset 계산 */
+  const stickyLeft = {
+    category: 0,
+    keyword: 90,
+    product: 90 + 140,
+  }
+  const productRight = stickyLeft.product + productColWidth
+
+  /* ─── KPI 계산: 전일 기준 랭크 구간 집계 ─── */
+  const kpiData = useMemo(() => {
+    /* 전일(어제) 날짜 계산 */
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yStr = getKSTDateString(yesterday)
+
+    /* 전일자 랭킹: 없으면 allDates 중 가장 최근으로 fallback */
+    let targetDate = yStr
+    if (!rankings.some(r => r.date === yStr)) {
+      targetDate = allDates[allDates.length - 1] || yStr
+    }
+
+    const dayRanks = rankings.filter(r => r.date === targetDate && r.rank_position > 0)
+    const inRange = (lo: number, hi: number) =>
+      dayRanks.filter(r => r.rank_position >= lo && r.rank_position <= hi).length
+
+    return {
+      targetDate,
+      top10: inRange(1, 10),
+      mid: inRange(11, 27),
+      low: inRange(28, 54),
+    }
+  }, [rankings, allDates])
 
   /* ──────────────────────────────────────────────────────── */
   return (
@@ -475,21 +526,21 @@ export default function RankingPage() {
         </div>
         <div className="kpi kc-am">
           <div className="kpi-top"><div className="kpi-ico">🥇</div></div>
-          <div className="kpi-lbl">Top 10</div>
-          <div className="kpi-val">{top10Count}</div>
-          <div className="kpi-foot">최신 기준</div>
+          <div className="kpi-lbl">1~10위 랭킹</div>
+          <div className="kpi-val">{kpiData.top10}</div>
+          <div className="kpi-foot">전일 기준</div>
         </div>
         <div className="kpi kc-gr">
           <div className="kpi-top"><div className="kpi-ico">📍</div></div>
-          <div className="kpi-lbl">평균 순위</div>
-          <div className="kpi-val">{avgRank || '—'}</div>
-          <div className="kpi-foot">위</div>
+          <div className="kpi-lbl">11~27위 랭킹</div>
+          <div className="kpi-val">{kpiData.mid}</div>
+          <div className="kpi-foot">전일 기준</div>
         </div>
         <div className="kpi kc-pu">
-          <div className="kpi-top"><div className="kpi-ico">🔎</div></div>
-          <div className="kpi-lbl">네이버 검색량</div>
-          <div className="kpi-val">{totalVolLatest ? fmt(totalVolLatest) : '—'}</div>
-          <div className="kpi-foot">월간 합계</div>
+          <div className="kpi-top"><div className="kpi-ico">📊</div></div>
+          <div className="kpi-lbl">28~54위 랭킹</div>
+          <div className="kpi-val">{kpiData.low}</div>
+          <div className="kpi-foot">전일 기준</div>
         </div>
       </div>
 
@@ -678,12 +729,40 @@ export default function RankingPage() {
             <div>
               <div className="ch-title">키워드 순위 추이</div>
               <div className="ch-sub">
-                {loading ? '로딩 중...' : `${keywords.length}개 키워드 · ${rankings.length}건 · 최근 ${displayDates.length}일`}
+                {loading ? '로딩 중...' : `${keywords.length}개 키워드 · ${rankings.length}건 · ${displayDates.length}일 표시`}
               </div>
             </div>
           </div>
-          <div className="ch-r" style={{ fontSize: 11, color: 'var(--t3)' }}>
-            {dateRange.label}
+          <div className="ch-r" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="date"
+              className="fi"
+              style={{ width: 140, padding: '6px 8px', fontSize: 12 }}
+              value={filterFrom}
+              max={filterTo}
+              onChange={e => setFilterFrom(e.target.value)}
+            />
+            <span style={{ color: 'var(--t3)', fontSize: 12 }}>~</span>
+            <input
+              type="date"
+              className="fi"
+              style={{ width: 140, padding: '6px 8px', fontSize: 12 }}
+              value={filterTo}
+              min={filterFrom}
+              onChange={e => setFilterTo(e.target.value)}
+            />
+            <button
+              className="btn-p"
+              style={{ padding: '6px 10px', fontSize: 11 }}
+              onClick={() => {
+                const d = new Date()
+                setFilterTo(getKSTDateString(d))
+                d.setDate(d.getDate() - 6)
+                setFilterFrom(getKSTDateString(d))
+              }}
+            >
+              최근 7일
+            </button>
           </div>
         </div>
         <div className="cb" style={{ padding: 0 }}>
@@ -701,7 +780,7 @@ export default function RankingPage() {
                       키워드 <SortArrow k="keyword" />
                     </button>
                   </th>
-                  <th className="rk-sticky" style={{ left: 230, width: 220, zIndex: 31 }}>
+                  <th className="rk-sticky" style={{ left: stickyLeft.product, width: productColWidth, zIndex: 31 }}>
                     <button className="th-sort" onClick={() => toggleSort('product')}>
                       연결상품 <SortArrow k="product" />
                     </button>
@@ -809,7 +888,7 @@ export default function RankingPage() {
                         {/* 연결상품 */}
                         <td
                           className="rk-sticky rk-prod"
-                          style={{ left: 230, width: 220 }}
+                          style={{ left: stickyLeft.product, width: productColWidth }}
                         >
                           <div className="rk-prod-cell">
                             {kw.products?.image_url && (
@@ -991,7 +1070,7 @@ export default function RankingPage() {
         }
         .rk-prod-name {
           font-size: 11px; font-weight: 600; overflow: hidden;
-          text-overflow: ellipsis; white-space: nowrap; max-width: 170px;
+          text-overflow: ellipsis; white-space: nowrap;
         }
         .cat-tag {
           display: inline-block; padding: 2px 8px; border-radius: 4px;
