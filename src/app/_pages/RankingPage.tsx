@@ -114,7 +114,7 @@ export default function RankingPage() {
   const [naverResults, setNaverResults] = useState<NaverKeywordResult[]>([])
 
   /* 정렬 & 편집 */
-  const [sortKey, setSortKey] = useState<string>('rankTrend')
+  const [sortKey, setSortKey] = useState<string>('volLatest')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [editingCat, setEditingCat] = useState<{ id: string; value: string } | null>(null)
 
@@ -851,12 +851,11 @@ export default function RankingPage() {
                     }
                     const wow = salesInfo.thisWeek - salesInfo.lastWeek
                     return (
-                      <tr key={kw.id} className="rk-row" onClick={() => setChartKw(kw)}>
+                      <tr key={kw.id} className="rk-row">
                         {/* 분류 */}
                         <td
                           className="rk-sticky"
                           style={{ left: 0, width: 90 }}
-                          onClick={e => e.stopPropagation()}
                           onDoubleClick={() =>
                             setEditingCat({ id: kw.id, value: kw.category || '' })
                           }
@@ -885,10 +884,12 @@ export default function RankingPage() {
                         <td className="rk-sticky" style={{ left: 90, width: 140 }}>
                           <span className="kw-tag">{kw.keyword}</span>
                         </td>
-                        {/* 연결상품 */}
+                        {/* 연결상품 — 클릭 시 차트 열림 */}
                         <td
-                          className="rk-sticky rk-prod"
+                          className="rk-sticky rk-prod rk-prod-clickable"
                           style={{ left: stickyLeft.product, width: productColWidth }}
+                          onClick={() => setChartKw(kw)}
+                          title="클릭하면 순위 추이 차트가 열립니다"
                         >
                           <div className="rk-prod-cell">
                             {kw.products?.image_url && (
@@ -899,6 +900,7 @@ export default function RankingPage() {
                               />
                             )}
                             <span className="rk-prod-name">{kw.products?.name || '-'}</span>
+                            <span className="rk-prod-chart-ico">📈</span>
                           </div>
                         </td>
                         {/* 검색량 이전 */}
@@ -1041,7 +1043,25 @@ export default function RankingPage() {
           color: inherit; padding: 0; display: inline-flex; align-items: center;
         }
         .rk-scroll-wrap {
-          overflow-x: auto; overflow-y: visible; max-height: 70vh;
+          overflow-x: scroll;
+          overflow-y: auto;
+          max-height: 70vh;
+        }
+        /* 크롬/사파리: 가로 스크롤바 항상 보이게 */
+        .rk-scroll-wrap::-webkit-scrollbar {
+          height: 12px;
+          width: 10px;
+        }
+        .rk-scroll-wrap::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 6px;
+        }
+        .rk-scroll-wrap::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 6px;
+        }
+        .rk-scroll-wrap::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
         }
         .rk-tbl {
           width: max-content; min-width: 100%; border-collapse: separate;
@@ -1060,9 +1080,16 @@ export default function RankingPage() {
         .rk-tbl .rk-sticky { position: sticky; z-index: 15; background: #fff; }
         .rk-tbl thead th.rk-sticky { background: #fafafa; }
         .rk-tbl .rk-center { text-align: center; }
-        .rk-row { cursor: pointer; transition: background 0.15s; }
+        .rk-row { transition: background 0.15s; }
         .rk-row:hover td { background: #f8fafc; }
         .rk-row:hover td.rk-sticky { background: #f8fafc; }
+        .rk-prod-clickable { cursor: pointer; }
+        .rk-prod-clickable:hover { background: #eff6ff !important; }
+        .rk-prod-clickable:hover .rk-prod-chart-ico { opacity: 1; }
+        .rk-prod-chart-ico {
+          margin-left: auto; font-size: 12px; opacity: 0.3;
+          transition: opacity 0.15s; flex-shrink: 0;
+        }
         .rk-prod-cell { display: flex; align-items: center; gap: 6px; }
         .rk-prod-img {
           width: 28px; height: 28px; object-fit: cover; border-radius: 4px;
