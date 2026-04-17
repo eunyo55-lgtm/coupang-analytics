@@ -11,10 +11,16 @@ export interface SalesRow {
   date: string        // YYYY-MM-DD
   productName: string
   option: string
+  barcode?: string    // 바코드 (products JOIN 키)
   qty: number
   revenue: number
   isReturn: boolean
   stock?: number      // 현재재고수량 (쿠팡 허브)
+  // products에서 조인된 메타
+  season?: string
+  category?: string
+  imageUrl?: string
+  cost?: number
 }
 
 export interface SalesByProduct {
@@ -129,6 +135,7 @@ export interface Product {
   safetyStock: number
   incomingStock: number
   season: string
+  category: string
   imageUrl: string
 }
 
