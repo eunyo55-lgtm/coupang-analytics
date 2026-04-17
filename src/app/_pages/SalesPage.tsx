@@ -8,23 +8,22 @@ import { Chart, registerables } from 'chart.js'
 Chart.register(...registerables)
 
 // ─── 보조 타입 ───
-type Mode = 'qty' | 'rev'  // 수량 / 금액 토글
+type Mode = 'qty' | 'rev'
 
-// 상품(이지어드민 상품명) 단위 집계
 interface ProductAgg {
   productName:  string
   imageUrl:     string
   season:       string
-  category:     string                  // 상품명의 '-' 앞 부분에서 자동 추출
-  ytdQty:       number                  // 누적 (1/1 ~ 전일)
+  category:     string
+  ytdQty:       number
   ytdRev:       number
-  weekQty:      number                  // 최근 7일 (전일 포함)
+  weekQty:      number
   weekRev:      number
-  rangeDaily:   { date: string; qty: number; rev: number }[]  // 달력 필터 기간 내 날짜별
-  options:      OptionAgg[]             // 토글 펼침
+  chartDaily:   { date: string; qty: number; rev: number }[]  // 차트 필터 기간
+  tableDaily:   { date: string; qty: number; rev: number }[]  // 테이블 필터 기간
+  options:      OptionAgg[]
 }
 
-// 옵션(바코드) 단위 집계
 interface OptionAgg {
   barcode:    string
   option:     string
@@ -33,65 +32,94 @@ interface OptionAgg {
   ytdRev:     number
   weekQty:    number
   weekRev:    number
-  rangeDaily: { date: string; qty: number; rev: number }[]
+  tableDaily: { date: string; qty: number; rev: number }[]
 }
 
-// ─── 카테고리 추출: 상품명의 '-' 앞부분 ───
-// 예: '실내화-꾸꾸'  → '실내화'
-//     '상의-나이스' → '상의'
-//     '장화'        → '장화'
+// ─── 카테고리 추출 ───
+// 상품명의 '-' 앞부분. 단, 영숫자로만 이뤄진 코드 패턴(예: 045P01GIV130)은 '기타'로.
+const CODE_PATTERN = /^[A-Za-z0-9._-]+$/  // 영문+숫자+일부기호만 있는 경우
 function extractCategory(productName: string): string {
-  if (!productName) return '미지정'
+  if (!productName) return '기타'
   const idx = productName.indexOf('-')
+  // '-'가 없으면 상품명 전체가 카테고리 후보
   const head = idx > 0 ? productName.slice(0, idx) : productName
-  return head.trim() || '미지정'
+  const trimmed = head.trim()
+  if (!trimmed) return '기타'
+  // 한글이 하나도 없고 영숫자/기호만이면 코드로 간주 → 기타
+  const hasKorean = /[\uAC00-\uD7A3]/.test(trimmed)
+  if (!hasKorean && CODE_PATTERN.test(trimmed)) return '기타'
+  // '-'가 없는 상품 (ex: '장화')은 그대로 인정
+  // 다만 너무 긴 문자열(15자 이상)이고 한글도 없으면 기타
+  if (!hasKorean && trimmed.length > 15) return '기타'
+  return trimmed
 }
 
-// ─── 날짜 헤더 포맷: '03/29' ───
+// ─── 날짜 헤더 포맷 ───
 function formatMD(ymd: string): string {
   return ymd.length >= 10 ? ymd.slice(5).replace('-', '/') : ymd
 }
 
-// 주말(토/일) 컬러 강조
 function dayColor(ymd: string): string {
   const d = fromYMD(ymd)
-  const dow = d.getDay() // 0=일, 6=토
+  const dow = d.getDay()
   return dow === 0 ? '#F04438' : dow === 6 ? '#1570EF' : 'var(--t2)'
 }
+
+// ─── 기간 날짜 배열 생성 유틸 ───
+function buildRange(fromYmd: string, toYmd: string): string[] {
+  const arr: string[] = []
+  const f = fromYMD(fromYmd), t = fromYMD(toYmd)
+  const d = new Date(f)
+  while (d <= t) {
+    arr.push(toYMD(d))
+    d.setDate(d.getDate() + 1)
+  }
+  return arr
+}
+
+const PAGE_SIZE = 50
 
 export default function SalesPage() {
   const { state } = useApp()
   const { salesData, latestSaleDate } = state
 
-  // ─── 달력 필터 (페이지 전용 상태) ───
-  // 디폴트: 최근일 기준 30일
-  const defaultRange = useMemo(() => {
-    const anchor = latestSaleDate ? fromYMD(latestSaleDate) : (() => {
-      const y = new Date(); y.setHours(0,0,0,0); y.setDate(y.getDate() - 1); return y
-    })()
-    const from = new Date(anchor); from.setDate(from.getDate() - 29)  // 30일 (오늘 포함)
-    return { from: toYMD(from), to: toYMD(anchor) }
-  }, [latestSaleDate])
-
-  const [fromDate, setFromDate] = useState(defaultRange.from)
-  const [toDate,   setToDate]   = useState(defaultRange.to)
-
-  // latestSaleDate가 뒤늦게 hydrate되면 디폴트 반영
-  useEffect(() => {
-    setFromDate(defaultRange.from)
-    setToDate(defaultRange.to)
-  }, [defaultRange.from, defaultRange.to])
-
-  const [mode, setMode] = useState<Mode>('qty')
-  const [search, setSearch] = useState('')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-
-  // ─── 날짜 기준점들 ───
+  // ─── 최근 판매일 앵커 ───
   const todayAnchor = useMemo(() => latestSaleDate || (() => {
     const y = new Date(); y.setHours(0,0,0,0); y.setDate(y.getDate() - 1)
     return toYMD(y)
   })(), [latestSaleDate])
 
+  // ─── 차트 필터 (기본 30일) ───
+  const chartDefault = useMemo(() => {
+    const anchor = fromYMD(todayAnchor)
+    const from = new Date(anchor); from.setDate(from.getDate() - 29)
+    return { from: toYMD(from), to: todayAnchor }
+  }, [todayAnchor])
+
+  const [chartFrom, setChartFrom] = useState(chartDefault.from)
+  const [chartTo,   setChartTo]   = useState(chartDefault.to)
+
+  // ─── 테이블 필터 (기본 7일) ───
+  const tableDefault = useMemo(() => {
+    const anchor = fromYMD(todayAnchor)
+    const from = new Date(anchor); from.setDate(from.getDate() - 6)
+    return { from: toYMD(from), to: todayAnchor }
+  }, [todayAnchor])
+
+  const [tableFrom, setTableFrom] = useState(tableDefault.from)
+  const [tableTo,   setTableTo]   = useState(tableDefault.to)
+
+  useEffect(() => {
+    setChartFrom(chartDefault.from); setChartTo(chartDefault.to)
+    setTableFrom(tableDefault.from); setTableTo(tableDefault.to)
+  }, [chartDefault.from, chartDefault.to, tableDefault.from, tableDefault.to])
+
+  const [mode, setMode] = useState<Mode>('qty')
+  const [search, setSearch] = useState('')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+
+  // 주간 고정 (최근 7일)
   const weekFromYMD = useMemo(() => {
     const d = fromYMD(todayAnchor); d.setDate(d.getDate() - 6)
     return toYMD(d)
@@ -99,17 +127,8 @@ export default function SalesPage() {
 
   const yearStart = `${new Date().getFullYear()}-01-01`
 
-  // ─── 기간 내 날짜 배열 (0-fill용) ───
-  const rangeDates: string[] = useMemo(() => {
-    const arr: string[] = []
-    const f = fromYMD(fromDate), t = fromYMD(toDate)
-    const d = new Date(f)
-    while (d <= t) {
-      arr.push(toYMD(d))
-      d.setDate(d.getDate() + 1)
-    }
-    return arr
-  }, [fromDate, toDate])
+  const chartDates = useMemo(() => buildRange(chartFrom, chartTo), [chartFrom, chartTo])
+  const tableDates = useMemo(() => buildRange(tableFrom, tableTo), [tableFrom, tableTo])
 
   // ─── 상품별 집계 ───
   const products: ProductAgg[] = useMemo(() => {
@@ -124,15 +143,16 @@ export default function SalesPage() {
         barcode: string; option: string; cost: number
         ytdQty: number; ytdRev: number
         weekQty: number; weekRev: number
-        rangeDaily: Map<string, { qty: number; rev: number }>
+        tableDaily: Map<string, { qty: number; rev: number }>
       }>
       ytdQty: number; ytdRev: number
       weekQty: number; weekRev: number
-      rangeDaily: Map<string, { qty: number; rev: number }>
+      chartDaily: Map<string, { qty: number; rev: number }>
+      tableDaily: Map<string, { qty: number; rev: number }>
     }
     const map = new Map<string, ProdBuilder>()
 
-    const emptyDaily = () => new Map(rangeDates.map(d => [d, { qty: 0, rev: 0 }]))
+    const emptyMap = (dates: string[]) => new Map(dates.map(d => [d, { qty: 0, rev: 0 }]))
 
     for (const r of salesData) {
       if (r.isReturn) continue
@@ -143,11 +163,12 @@ export default function SalesPage() {
           productName: name,
           imageUrl:    r.imageUrl || '',
           season:      r.season || '',
-          category:    extractCategory(name),  // 상품명에서 추출
+          category:    extractCategory(name),
           optMap:      new Map(),
           ytdQty: 0, ytdRev: 0,
           weekQty: 0, weekRev: 0,
-          rangeDaily: emptyDaily(),
+          chartDaily: emptyMap(chartDates),
+          tableDaily: emptyMap(tableDates),
         }
         map.set(name, p)
       }
@@ -168,27 +189,30 @@ export default function SalesPage() {
           cost:    r.cost || 0,
           ytdQty: 0, ytdRev: 0,
           weekQty: 0, weekRev: 0,
-          rangeDaily: emptyDaily(),
+          tableDaily: emptyMap(tableDates),
         }
         p.optMap.set(optKey, o)
       }
 
-      // 누적
       if (r.date >= yearStart && r.date <= todayAnchor) {
         p.ytdQty += qty; p.ytdRev += rev
         o.ytdQty += qty; o.ytdRev += rev
       }
-      // 주간
       if (r.date >= weekFromYMD && r.date <= todayAnchor) {
         p.weekQty += qty; p.weekRev += rev
         o.weekQty += qty; o.weekRev += rev
       }
-      // 필터 기간
-      if (r.date >= fromDate && r.date <= toDate) {
-        const pSlot = p.rangeDaily.get(r.date)
-        if (pSlot) { pSlot.qty += qty; pSlot.rev += rev }
-        const oSlot = o.rangeDaily.get(r.date)
-        if (oSlot) { oSlot.qty += qty; oSlot.rev += rev }
+      // 차트 기간
+      if (r.date >= chartFrom && r.date <= chartTo) {
+        const s = p.chartDaily.get(r.date)
+        if (s) { s.qty += qty; s.rev += rev }
+      }
+      // 테이블 기간
+      if (r.date >= tableFrom && r.date <= tableTo) {
+        const s = p.tableDaily.get(r.date)
+        if (s) { s.qty += qty; s.rev += rev }
+        const os = o.tableDaily.get(r.date)
+        if (os) { os.qty += qty; os.rev += rev }
       }
     }
 
@@ -203,18 +227,23 @@ export default function SalesPage() {
           ytdRev:     o.ytdRev,
           weekQty:    o.weekQty,
           weekRev:    o.weekRev,
-          rangeDaily: rangeDates.map(d => ({
+          tableDaily: tableDates.map(d => ({
             date: d,
-            qty: o.rangeDaily.get(d)?.qty || 0,
-            rev: o.rangeDaily.get(d)?.rev || 0,
+            qty: o.tableDaily.get(d)?.qty || 0,
+            rev: o.tableDaily.get(d)?.rev || 0,
           })),
         }))
         .sort((a, b) => b.ytdQty - a.ytdQty)
 
-      const rangeDaily = rangeDates.map(d => ({
+      const chartDaily = chartDates.map(d => ({
         date: d,
-        qty: p.rangeDaily.get(d)?.qty || 0,
-        rev: p.rangeDaily.get(d)?.rev || 0,
+        qty: p.chartDaily.get(d)?.qty || 0,
+        rev: p.chartDaily.get(d)?.rev || 0,
+      }))
+      const tableDaily = tableDates.map(d => ({
+        date: d,
+        qty: p.tableDaily.get(d)?.qty || 0,
+        rev: p.tableDaily.get(d)?.rev || 0,
       }))
 
       result.push({
@@ -226,15 +255,18 @@ export default function SalesPage() {
         ytdRev:      p.ytdRev,
         weekQty:     p.weekQty,
         weekRev:     p.weekRev,
-        rangeDaily,
+        chartDaily,
+        tableDaily,
         options,
       })
     })
     result.sort((a, b) => b.ytdQty - a.ytdQty)
     return result
-  }, [salesData, fromDate, toDate, todayAnchor, weekFromYMD, yearStart, rangeDates])
+  }, [salesData, chartFrom, chartTo, tableFrom, tableTo, todayAnchor, weekFromYMD, yearStart, chartDates, tableDates])
 
-  // 검색 필터
+  // 검색 필터 + 더보기 리셋
+  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [search, tableFrom, tableTo])
+
   const filtered = useMemo(() => {
     if (!search.trim()) return products
     const s = search.toLowerCase()
@@ -246,53 +278,61 @@ export default function SalesPage() {
     )
   }, [products, search])
 
-  // 합계 계산
+  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
+
+  // 합계 (보이는 상품 기준)
   const totals = useMemo(() => {
     let ytdQty = 0, ytdRev = 0, weekQty = 0, weekRev = 0
     const dailyTotal = new Map<string, { qty: number; rev: number }>(
-      rangeDates.map(d => [d, { qty: 0, rev: 0 }])
+      tableDates.map(d => [d, { qty: 0, rev: 0 }])
     )
-    filtered.forEach(p => {
+    visible.forEach(p => {
       ytdQty += p.ytdQty; ytdRev += p.ytdRev
       weekQty += p.weekQty; weekRev += p.weekRev
-      p.rangeDaily.forEach(d => {
+      p.tableDaily.forEach(d => {
         const slot = dailyTotal.get(d.date)
         if (slot) { slot.qty += d.qty; slot.rev += d.rev }
       })
     })
-    const rangeDaily = rangeDates.map(d => ({
+    const rangeDaily = tableDates.map(d => ({
       date: d,
       qty: dailyTotal.get(d)?.qty || 0,
       rev: dailyTotal.get(d)?.rev || 0,
     }))
     return { ytdQty, ytdRev, weekQty, weekRev, rangeDaily }
-  }, [filtered, rangeDates])
+  }, [visible, tableDates])
 
-  // ─── 시즌별 / 카테고리별 집계 (필터 기간 기준) ───
+  // ─── 차트용 시즌별 / 카테고리별 ───
   const bySeason = useMemo(() => {
     const m = new Map<string, { qty: number; rev: number }>()
     products.forEach(p => {
       const key = p.season || '미지정'
       const cur = m.get(key) || { qty: 0, rev: 0 }
-      p.rangeDaily.forEach(d => { cur.qty += d.qty; cur.rev += d.rev })
+      p.chartDaily.forEach(d => { cur.qty += d.qty; cur.rev += d.rev })
       m.set(key, cur)
     })
     return Array.from(m.entries())
       .map(([k, v]) => ({ label: k, ...v }))
+      .filter(s => (mode === 'qty' ? s.qty : s.rev) > 0)
       .sort((a, b) => (mode === 'qty' ? b.qty - a.qty : b.rev - a.rev))
   }, [products, mode])
 
   const byCategory = useMemo(() => {
     const m = new Map<string, { qty: number; rev: number }>()
     products.forEach(p => {
-      const key = p.category || '미지정'
+      const key = p.category || '기타'
       const cur = m.get(key) || { qty: 0, rev: 0 }
-      p.rangeDaily.forEach(d => { cur.qty += d.qty; cur.rev += d.rev })
+      p.chartDaily.forEach(d => { cur.qty += d.qty; cur.rev += d.rev })
       m.set(key, cur)
     })
-    return Array.from(m.entries())
+    // 정렬 후, '기타'는 항상 맨 뒤로 보냄
+    const arr = Array.from(m.entries())
       .map(([k, v]) => ({ label: k, ...v }))
+      .filter(c => (mode === 'qty' ? c.qty : c.rev) > 0)
       .sort((a, b) => (mode === 'qty' ? b.qty - a.qty : b.rev - a.rev))
+    const others = arr.filter(x => x.label === '기타')
+    const rest   = arr.filter(x => x.label !== '기타')
+    return [...rest, ...others]
   }, [products, mode])
 
   // ─── 차트 렌더링 ───
@@ -344,7 +384,7 @@ export default function SalesPage() {
         datasets: [{
           label: mode === 'qty' ? '판매량' : '금액',
           data: byCategory.map(s => (mode === 'qty' ? s.qty : Math.round(s.rev))),
-          backgroundColor: '#12B76A',
+          backgroundColor: byCategory.map(s => s.label === '기타' ? '#98A2B3' : '#12B76A'),
           borderRadius: 6,
           barThickness: 32,
         }],
@@ -357,7 +397,7 @@ export default function SalesPage() {
           tooltip: { callbacks: { label: ctx => ' ' + Number(ctx.parsed.y).toLocaleString('ko-KR') } },
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 11, weight: 'bold' as const }, color: '#56606E' } },
+          x: { grid: { display: false }, ticks: { font: { size: 11, weight: 'bold' as const }, color: '#56606E', autoSkip: false, maxRotation: 45, minRotation: 45 } },
           y: { grid: { color: '#F3F4F6' }, ticks: { font: { size: 10 }, color: '#56606E', callback: (v) => Number(v).toLocaleString('ko-KR') } },
         },
       },
@@ -373,7 +413,6 @@ export default function SalesPage() {
     setExpanded(next)
   }
 
-  // 숫자 셀 스타일 (0은 흐리게)
   const numCellStyle = (v: number): React.CSSProperties => ({
     textAlign: 'right',
     padding: '6px 8px',
@@ -392,25 +431,32 @@ export default function SalesPage() {
     color: dayColor(ymd),
     background: '#F9FAFB',
     borderBottom: '1px solid #E4E7EC',
-    minWidth: 48,
+    minWidth: 54,
   })
+
+  // 빠른 프리셋 - 테이블 전용
+  const applyTablePreset = (days: number) => {
+    const anchor = fromYMD(todayAnchor)
+    const f = new Date(anchor); f.setDate(f.getDate() - (days - 1))
+    setTableFrom(toYMD(f))
+    setTableTo(todayAnchor)
+  }
 
   return (
     <div>
-      {/* ─── 페이지 전용 필터 바 ─── */}
+      {/* ─── 공통 모드 토글 + 차트 필터 ─── */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="cb" style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 기간</span>
-            <input type="date" className="date-input" value={fromDate} onChange={e => setFromDate(e.target.value)} />
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📊 차트 기간</span>
+            <input type="date" className="date-input" value={chartFrom} onChange={e => setChartFrom(e.target.value)} />
             <span className="date-range-sep">~</span>
-            <input type="date" className="date-input" value={toDate} onChange={e => setToDate(e.target.value)} />
+            <input type="date" className="date-input" value={chartTo} onChange={e => setChartTo(e.target.value)} />
           </div>
           <span className="date-label-txt" style={{ fontSize: 11, color: 'var(--t3)' }}>
-            {rangeDates.length}일 · 최근 판매일 {todayAnchor || '—'}
+            {chartDates.length}일 · 최근 판매일 {todayAnchor || '—'}
           </span>
           <div style={{ flex: 1 }} />
-          {/* 수량 / 금액 토글 */}
           <div style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #E4E7EC' }}>
             <button
               onClick={() => setMode('qty')}
@@ -440,12 +486,12 @@ export default function SalesPage() {
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">🗓️</div><div>
               <div className="ch-title">시즌별 판매 ({mode === 'qty' ? '수량' : '금액'})</div>
-              <div className="ch-sub">{fromDate} ~ {toDate}</div>
+              <div className="ch-sub">{chartFrom} ~ {chartTo}</div>
             </div></div>
           </div>
           <div className="cb">
             {bySeason.length > 0
-              ? <div style={{ position: 'relative', height: 240 }}><canvas ref={seasonRef} /></div>
+              ? <div style={{ position: 'relative', height: 260 }}><canvas ref={seasonRef} /></div>
               : <div className="empty-st"><div className="es-ico">🗓️</div><div className="es-t">기간 내 시즌 데이터가 없어요</div></div>
             }
           </div>
@@ -454,12 +500,12 @@ export default function SalesPage() {
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">📦</div><div>
               <div className="ch-title">카테고리별 판매 ({mode === 'qty' ? '수량' : '금액'})</div>
-              <div className="ch-sub">상품명 앞부분 기준 · {fromDate} ~ {toDate}</div>
+              <div className="ch-sub">상품명 앞부분 기준 · 매칭 안되면 &apos;기타&apos; · {chartFrom} ~ {chartTo}</div>
             </div></div>
           </div>
           <div className="cb">
             {byCategory.length > 0
-              ? <div style={{ position: 'relative', height: 240 }}><canvas ref={catRef} /></div>
+              ? <div style={{ position: 'relative', height: 260 }}><canvas ref={catRef} /></div>
               : <div className="empty-st"><div className="es-ico">📦</div><div className="es-t">기간 내 카테고리 데이터가 없어요</div></div>
             }
           </div>
@@ -471,10 +517,28 @@ export default function SalesPage() {
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📝</div><div>
             <div className="ch-title">상품별 판매 상세</div>
-            <div className="ch-sub">상품명 클릭 → 옵션별 펼치기 · 날짜는 가로 스크롤로 확인</div>
+            <div className="ch-sub">상품명 클릭 → 옵션별 펼치기 · 50개씩 보기</div>
           </div></div>
         </div>
         <div className="cb">
+          {/* 테이블 전용 필터 바 */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 10, padding: '10px 2px' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 테이블 기간</span>
+              <input type="date" className="date-input" value={tableFrom} onChange={e => setTableFrom(e.target.value)} />
+              <span className="date-range-sep">~</span>
+              <input type="date" className="date-input" value={tableTo} onChange={e => setTableTo(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="dp" onClick={() => applyTablePreset(7)}>7일</button>
+              <button className="dp" onClick={() => applyTablePreset(14)}>14일</button>
+              <button className="dp" onClick={() => applyTablePreset(30)}>30일</button>
+            </div>
+            <span className="date-label-txt" style={{ fontSize: 11, color: 'var(--t3)' }}>
+              {tableDates.length}일
+            </span>
+          </div>
+
           <div className="frow">
             <input className="si" placeholder="🔍 상품명 · 옵션 · 시즌 · 카테고리 검색..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
@@ -506,13 +570,13 @@ export default function SalesPage() {
                     주간
                     <div style={{ fontWeight: 500, color: 'var(--t3)', fontSize: 10 }}>최근 7일</div>
                   </th>
-                  {rangeDates.map(d => (
+                  {tableDates.map(d => (
                     <th key={d} style={dateHeaderStyle(d)}>{formatMD(d)}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filtered.length > 0 ? filtered.map((p) => {
+                {visible.length > 0 ? visible.map((p) => {
                   const isOpen = expanded.has(p.productName)
                   return (
                     <React.Fragment key={p.productName}>
@@ -549,7 +613,7 @@ export default function SalesPage() {
                         <td style={{ fontWeight: 700, textAlign: 'right', padding: '6px 10px', borderRight: '2px solid #E4E7EC' }}>
                           {fmt(mode === 'qty' ? p.weekQty : p.weekRev)}
                         </td>
-                        {p.rangeDaily.map(d => {
+                        {p.tableDaily.map(d => {
                           const v = mode === 'qty' ? d.qty : d.rev
                           return <td key={d.date} style={numCellStyle(v)}>{v > 0 ? fmt(v) : '·'}</td>
                         })}
@@ -578,7 +642,7 @@ export default function SalesPage() {
                           <td style={{ textAlign: 'right', fontSize: 12, padding: '6px 10px', borderRight: '2px solid #E4E7EC' }}>
                             {fmt(mode === 'qty' ? o.weekQty : o.weekRev)}
                           </td>
-                          {o.rangeDaily.map(d => {
+                          {o.tableDaily.map(d => {
                             const v = mode === 'qty' ? d.qty : d.rev
                             return <td key={d.date} style={numCellStyle(v)}>{v > 0 ? fmt(v) : '·'}</td>
                           })}
@@ -588,7 +652,7 @@ export default function SalesPage() {
                   )
                 }) : (
                   <tr>
-                    <td colSpan={5 + rangeDates.length}>
+                    <td colSpan={5 + tableDates.length}>
                       <div className="empty-st">
                         <div className="es-ico">🛒</div>
                         <div className="es-t">{salesData.length ? '검색 결과 없음' : '판매 데이터를 업로드해주세요'}</div>
@@ -597,13 +661,13 @@ export default function SalesPage() {
                   </tr>
                 )}
               </tbody>
-              {filtered.length > 0 && (
+              {visible.length > 0 && (
                 <tfoot>
                   <tr style={{ background: '#F3F7FF', fontWeight: 800, borderTop: '2px solid var(--blue)' }}>
                     <td style={{ position: 'sticky', left: 0, background: '#F3F7FF', zIndex: 2 }}></td>
                     <td style={{ position: 'sticky', left: 28, background: '#F3F7FF', zIndex: 2 }}></td>
                     <td style={{ fontWeight: 800, padding: '8px 10px', position: 'sticky', left: 80, background: '#F3F7FF', zIndex: 2, borderRight: '1px solid #DBE4F5' }}>
-                      합계 ({filtered.length}개 상품)
+                      합계 ({visible.length}개 표시)
                     </td>
                     <td style={{ textAlign: 'right', color: 'var(--blue)', padding: '8px 10px' }}>
                       {fmt(mode === 'qty' ? totals.ytdQty : totals.ytdRev)}
@@ -625,6 +689,27 @@ export default function SalesPage() {
               )}
             </table>
           </div>
+
+          {/* 더 보기 */}
+          {filtered.length > visibleCount && (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '14px 0 4px' }}>
+              <button
+                onClick={() => setVisibleCount(c => c + PAGE_SIZE)}
+                style={{
+                  padding: '10px 20px', fontSize: 13, fontWeight: 800,
+                  background: '#fff', color: 'var(--blue)',
+                  border: '1.5px solid var(--blue)', borderRadius: 8, cursor: 'pointer',
+                }}
+              >
+                더 보기 ({visibleCount.toLocaleString()} / {filtered.length.toLocaleString()})
+              </button>
+            </div>
+          )}
+          {filtered.length > 0 && filtered.length <= visibleCount && (
+            <div style={{ textAlign: 'center', padding: '14px 0 4px', fontSize: 11, color: 'var(--t3)' }}>
+              전체 {filtered.length.toLocaleString()}개 상품 모두 표시됨
+            </div>
+          )}
         </div>
       </div>
     </div>
