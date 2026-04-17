@@ -1,441 +1,192 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { useApp } from '@/lib/store'
-import { persistData } from '@/lib/storage'
-import { parseFile, normalizeSalesData, detectColumn, toNumber } from '@/lib/fileParser'
-import type { ParseResult, SalesRow } from '@/types'
-
-const FILE_CONFIG = [
-  { key: 'master' as const, icon: '📋', title: '이지어드민 상품마스터',         sub: '상품코드 · 상품명 · 옵션 · 재고 · 시즌 · 이미지' },
-  { key: 'sales'  as const, icon: '🛒', title: '쿠팡 판매 데이터',              sub: '판매량 · 금액 · 날짜' },
-  { key: 'supply' as const, icon: '🚚', title: '쿠팡 발주서 / 공급 중 수량',    sub: '발주번호 · 입고예정일 · 수량 · 매입가' },
-]
+import { supabase } from '@/lib/supabase'
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
-const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
 
-// ── dispatch 타입 (Dispatch<Action>을 직접 받도록 넓힘) ──
-type LogDispatch = (a: { type: 'APPEND_LOG'; payload: string }) => void
-
-// ── 판매 데이터 upsert ──
-async function upsertDailySales(rows: SalesRow[], dispatchFn: LogDispatch) {
-  if (!rows.length) return 0
-
-  const data = rows.map(r => ({
-    date:        r.date,
-    barcode:     (r.option && r.option.length > 3) ? r.option : r.productName,
-    quantity:    r.qty,
-    stock:       r.stock ?? 0,
-    fc_quantity: 0,
-    vf_quantity: 0,
-  })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode)
-
-  if (!data.length) return 0
-
-  let total = 0
-  for (let i = 0; i < data.length; i += 500) {
-    const batch = data.slice(i, i + 500)
-    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
-      method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: batch }),
-    })
-    if (res.ok) {
-      const cnt = await res.json().catch(() => batch.length)
-      total += Number(cnt) || batch.length
-    } else {
-      const err = await res.text().catch(() => 'unknown error')
-      dispatchFn({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${err.substring(0,100)}` })
-      break
-    }
-  }
-  return total
+export interface PersistedData {
+  masterData:   Record<string, unknown>[]
+  salesData:    {
+    date:string; productName:string; option:string; barcode?:string;
+    qty:number; revenue:number; isReturn:boolean;
+    season?:string; category?:string; imageUrl?:string; cost?:number
+  }[]
+  salesData24:  never[]
+  salesData25:  never[]
+  ordersData:   Record<string, unknown>[]
+  supplyData:   Record<string, unknown>[]
+  products:     never[]
+  dateRangePreset?: string
+  hasData: boolean
+  stockSummary: { total_stock: number; stock_value: number }
+  daily26: { date: string; qty: number }[]
+  daily25: { date: string; qty: number }[]
+  daily24: { date: string; qty: number }[]
+  latestSaleDate: string
 }
 
-// ── 이지어드민 상품마스터 → products 테이블 upsert ──
-// 컬럼 매칭:
-//  barcode      ← 바코드/상품코드
-//  name         ← 상품명
-//  option_value ← 옵션
-//  cost         ← 원가
-//  season       ← 시즌
-//  image_url    ← 이미지(URL)
-//  category     ← 카테고리/분류
-async function upsertProducts(
-  rows: Record<string, unknown>[],
-  dispatchFn: LogDispatch
-) {
-  if (!rows.length) return 0
-
-  const s0 = rows[0] as Record<string, unknown>
-  const bcCol    = detectColumn(s0, ['바코드', 'barcode', 'SKU Barcode', '상품바코드'])
-  const nameCol  = detectColumn(s0, ['상품명', 'productname', '상품이름', 'item', '노출상품명', 'SKU 명', 'SKU명'])
-  const optCol   = detectColumn(s0, ['옵션', 'option', '옵션명', '옵션값', '속성'])
-  const costCol  = detectColumn(s0, ['원가', '매입원가', 'cost', '매입가', '공급가'])
-  const seasonCol   = detectColumn(s0, ['시즌', 'season', '시즌구분'])
-  const imageCol    = detectColumn(s0, ['이미지', 'image', '이미지URL', '이미지주소', 'image_url', '대표이미지'])
-  const categoryCol = detectColumn(s0, ['카테고리', 'category', '분류', '상품분류', '대분류', '품목'])
-
-  if (!bcCol && !nameCol) {
-    dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 바코드/상품명 컬럼을 찾지 못해 products 저장 스킵` })
-    return 0
-  }
-
-  dispatchFn({
-    type: 'APPEND_LOG',
-    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol}`
-  })
-
-  const toStr = (v: unknown) => v != null ? String(v).trim() : ''
-  const mapped = rows.map(r => ({
-    barcode:      bcCol    ? toStr(r[bcCol])    : '',
-    name:         nameCol  ? toStr(r[nameCol])  : '',
-    option_value: optCol   ? toStr(r[optCol])   : '',
-    cost:         costCol  ? toNumber(r[costCol]) : 0,
-    season:       seasonCol   ? toStr(r[seasonCol])   : '',
-    image_url:    imageCol    ? toStr(r[imageCol])    : '',
-    category:     categoryCol ? toStr(r[categoryCol]) : '',
-  })).filter(r => r.barcode)
-
-  if (!mapped.length) {
-    dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 바코드 있는 행이 없어 products 저장 스킵` })
-    return 0
-  }
-
-  // 중복 제거 — barcode 기준 마지막 값 유지
-  const dedupMap = new Map<string, typeof mapped[0]>()
-  for (const row of mapped) dedupMap.set(row.barcode, row)
-  const deduped = Array.from(dedupMap.values())
-
-  let total = 0
-  for (let i = 0; i < deduped.length; i += 500) {
-    const batch = deduped.slice(i, i + 500)
-    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_products`, {
+// fetch로 RPC 호출 — 일반용
+async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
+  if (typeof window === 'undefined') return []
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
       method: 'POST',
       headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: batch }),
+      body: JSON.stringify(params),
     })
-    if (res.ok) {
-      const cnt = await res.json().catch(() => batch.length)
-      total += Number(cnt) || batch.length
-    } else {
-      const err = await res.text().catch(() => 'unknown')
-      dispatchFn({ type: 'APPEND_LOG', payload: `❌ products 저장 에러 (${res.status}): ${err.substring(0,150)}` })
-      break
-    }
-  }
-  return total
+    if (!res.ok) { console.warn(`[storage] RPC ${fn} error:`, res.status); return [] }
+    return await res.json()
+  } catch(e) { console.warn(`[storage] RPC ${fn}:`, e); return [] }
 }
 
-// ── 공급 중 수량 → supply_status upsert ──
-async function upsertSupplyStatus(
-  rows: Record<string, unknown>[],
-  dispatchFn: LogDispatch
-) {
-  if (!rows.length) return 0
-
-  const toN = (v: unknown) => Number(String(v ?? '').replace(/[,\s]/g, '')) || 0
-  const toS = (v: unknown) => v != null ? String(v).trim() : ''
-  const toD = (v: unknown) => {
-    const s = toS(v)
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
-    if (/^\d{4}\/\d{2}\/\d{2}/.test(s)) return s.slice(0, 10).replace(/\//g, '-')
-    if (/^\d{8}$/.test(s)) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`
-    return s.slice(0, 10)
-  }
-
-  const mapped = rows.map(r => ({
-    '발주번호':     toN(r['발주번호']),
-    'SKU ID':       toN(r['SKU ID']),
-    'SKU 이름':     toS(r['SKU 이름']),
-    'SKU Barcode':  toS(r['SKU Barcode']),
-    '물류센터':     toS(r['물류센터']),
-    '입고예정일':   toD(r['입고예정일']),
-    '발주일':       toS(r['발주일']),
-    '발주수량':     toN(r['발주수량']),
-    '확정수량':     toN(r['확정수량']),
-    '입고수량':     toN(r['입고수량']),
-    '발주유형':     toS(r['발주유형']),
-    '발주현황':     toS(r['발주현황']),
-    '매입유형':     toS(r['매입유형']),
-    '면세여부':     toS(r['면세여부']),
-    '생산연도':     toS(r['생산연도']),
-    '제조일자':     toS(r['제조일자']),
-    '유통기한':     toS(r['유통(소비)기한'] ?? r['유통기한'] ?? ''),
-    '매입가':       toN(r['매입가']),
-    '공급가':       toN(r['공급가']),
-    '부가세':       toN(r['부가세']),
-    '총발주매입금': toN(r['총발주 매입금'] ?? r['총발주매입금'] ?? 0),
-    '입고금액':     toN(r['입고금액']),
-    'xdock':        toS(r['Xdock'] ?? r['xdock'] ?? ''),
-  })).filter(r => r['SKU Barcode'] && r['입고예정일'])
-
-  if (!mapped.length) {
-    dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 유효한 supply 데이터 없음 (SKU Barcode, 입고예정일 필수)` })
-    return 0
-  }
-
-  // 파일 내 중복 제거 — 발주번호+SKU Barcode 기준 마지막 값 유지
-  const dedupMap = new Map<string, typeof mapped[0]>()
-  for (const row of mapped) {
-    const key = `${row['발주번호']}||${row['SKU Barcode']}`
-    dedupMap.set(key, row)
-  }
-  const deduped = Array.from(dedupMap.values())
-  const dupCount = mapped.length - deduped.length
-  if (dupCount > 0) {
-    dispatchFn({ type: 'APPEND_LOG', payload: `🔧 파일 내 중복 ${dupCount}건 제거 → ${deduped.length}건 업로드` })
-  }
-
-  // 첫 행 확인 로그
-  const sample = deduped[0]
-  dispatchFn({ type: 'APPEND_LOG', payload: `🔍 supply 샘플: ${sample['SKU Barcode']} | 예정일:${sample['입고예정일']} | 확정:${sample['확정수량']} | 매입가:${sample['매입가']}` })
-
-  // upsert_supply_status RPC 사용 — ON CONFLICT ("발주번호","SKU Barcode") DO UPDATE
-  let total = 0
-  for (let i = 0; i < deduped.length; i += 500) {
-    const batch = deduped.slice(i, i + 500)
-    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_supply_status`, {
-      method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: batch }),
+// 테이블 직접 페이지네이션 (1000행 제한 우회)
+async function fetchAllPages(path: string, extraHeaders: Record<string,string> = {}) {
+  if (typeof window === 'undefined') return []
+  const all: Record<string,unknown>[] = []
+  let offset = 0
+  const PAGE = 1000
+  while (true) {
+    const sep = path.includes('?') ? '&' : '?'
+    const url = `${SUPA_URL}/rest/v1/${path}${sep}offset=${offset}&limit=${PAGE}`
+    const res = await fetch(url, {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, ...extraHeaders }
     })
-    if (res.ok) {
-      const cnt = await res.json().catch(() => batch.length)
-      total += Number(cnt) || batch.length
-      if (i % 1000 === 0 || i + 500 >= deduped.length) {
-        dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${Math.min(total, deduped.length)}/${deduped.length}행 처리 중...` })
+    console.log('[fetchAllPages]', path.substring(0,30), 'offset:', offset, 'status:', res.status)
+    if (!res.ok) { console.warn('[fetchAllPages] not ok:', res.status, await res.text().catch(()=>'')); break }
+    const data = await res.json()
+    console.log('[fetchAllPages] data type:', typeof data, 'isArray:', Array.isArray(data), 'length:', Array.isArray(data) ? data.length : 'N/A')
+    if (!Array.isArray(data) || !data.length) break
+    all.push(...data)
+    if (data.length < PAGE) break
+    offset += PAGE
+    if (all.length > 300000) break
+  }
+  return all
+}
+
+export async function loadData(): Promise<PersistedData | null> {
+  if (typeof window === 'undefined') return null
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const yearStart = `${new Date().getFullYear()}-01-01`  // 누적(1/1~전일) 계산용
+    const ninetyAgo = new Date()
+    ninetyAgo.setDate(ninetyAgo.getDate() - 90)
+    const from90 = ninetyAgo.toISOString().slice(0, 10)
+    // 누적은 올해 전체 데이터가 필요하므로 max(yearStart, from90)보다 이른 날짜로
+    const fromLoad = yearStart < from90 ? yearStart : from90
+
+    // 모든 데이터 병렬 로드
+    const [stock, daily26, daily25, daily24, salesRaw, supplyRes, ordersRes] = await Promise.all([
+      rpcFetch('get_stock_summary'),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2026 }),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2025 }),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2024 }),
+      // daily_sales — 올해 1/1 ~ 오늘 (누적, 주간, 일별 모두 계산 가능하도록)
+      fetchAllPages(
+        `daily_sales?select=date,barcode,quantity&date=gte.${fromLoad}&date=lte.${today}&quantity=gt.0&order=date.asc`
+      ),
+      supabase.from('supply_status')
+        .select('"발주번호","SKU 이름","SKU Barcode","입고예정일","발주일","발주수량","확정수량","입고수량"')
+        .limit(5000),
+      supabase.from('coupang_orders')
+        .select('order_date,barcode,order_qty,confirmed_qty,received_qty,center')
+        .order('order_date', { ascending: false })
+        .limit(5000),
+    ])
+
+    // products 페이지네이션으로 전체 로드 (barcode→name/season/image_url 매핑용)
+    // season/image_url/category는 존재하지 않을 수도 있음 → 실패 시 fallback
+    let productsRaw: Record<string,unknown>[] = []
+    try {
+      productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category&barcode=not.is.null&name=not.is.null')
+    } catch {
+      // season/image_url/category 컬럼이 없는 경우 대비
+      productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost&barcode=not.is.null&name=not.is.null')
+    }
+
+    interface ProductInfo {
+      name: string; option: string; cost: number;
+      season: string; imageUrl: string; category: string
+    }
+    const barcodeMap = new Map<string, ProductInfo>()
+    productsRaw.forEach(r => {
+      const bc = String(r['barcode'] || '')
+      if (bc) barcodeMap.set(bc, {
+        name:     String(r['name'] || bc),
+        option:   String(r['option_value'] || ''),
+        cost:     Number(r['cost'] || 0),
+        season:   String(r['season'] || ''),
+        imageUrl: String(r['image_url'] || ''),
+        category: String(r['category'] || ''),
+      })
+    })
+
+    // SalesRow 변환 — season/image/category도 함께 실어서 저장
+    const salesData = (salesRaw as Record<string,unknown>[]).map(r => {
+      const bc   = String(r['barcode'] || '')
+      const info = barcodeMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
+      const qty  = Number(r['quantity'] || 0)
+      return {
+        date:        String(r['date']),
+        productName: info.name,
+        option:      info.option,
+        barcode:     bc,
+        qty,
+        revenue:     info.cost * qty,
+        isReturn:    false,
+        season:      info.season,
+        imageUrl:    info.imageUrl,
+        category:    info.category,
+        cost:        info.cost,
       }
-    } else {
-      const err = await res.text().catch(() => 'unknown')
-      dispatchFn({ type: 'APPEND_LOG', payload: `❌ supply 저장 에러 (${res.status}): ${err.substring(0,150)}` })
-      break
-    }
-  }
-  return total
-}
+    })
 
-export default function DataManagePage() {
-  const { state, dispatch } = useApp()
-  const [uploading, setUploading] = useState<Record<string,boolean>>({})
-  const [fileNames, setFileNames] = useState<Record<string,string>>({})
-  const [done, setDone]           = useState<Record<string,boolean>>({})
-  const [analyzing, setAnalyzing] = useState(false)
-  const inputRefs = useRef<Record<string, HTMLInputElement|null>>({})
+    const stockSummary = (stock as Record<string,unknown>[])[0] ?? { total_stock: 0, stock_value: 0 }
+    const d26 = (daily26 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d25 = (daily25 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d24 = (daily24 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    const latestSaleDate = d26.length > 0 ? d26[d26.length - 1].date : ''
 
-  const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
-
-  async function handleFile(file: File, key: ParseResult['key']) {
-    setUploading(u => ({ ...u, [key]: true }))
-    const result = await parseFile(file, key)
-
-    if (result.error) {
-      dispatch({ type: 'APPEND_LOG', payload: `❌ [${key}] ${result.error}` })
-    } else {
-      const cols = result.columns.slice(0,5).join(' · ') + (result.columns.length > 5 ? '…' : '')
-
-      if (key === 'sales') {
-        const rawKeys = result.data[0] ? Object.keys(result.data[0]).slice(0,8).join(' | ') : 'empty'
-        dispatch({ type: 'APPEND_LOG', payload: `🔍 원본컬럼: ${rawKeys}` })
-        const normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
-        if (normalized.length > 0) {
-          const s = normalized[0] as Record<string,unknown>
-          dispatch({ type: 'APPEND_LOG', payload: `🔍 파싱결과: date=${s.date} barcode=${s.option} qty=${s.qty}` })
-        } else {
-          dispatch({ type: 'APPEND_LOG', payload: `⚠️ 파싱결과: 0행 (날짜/수량 필터에 걸림)` })
-        }
-        result.data = normalized
-        dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${result.rows.toLocaleString()}행 | ${cols}` })
-        dispatch({ type: 'APPEND_LOG', payload: `📤 Supabase에 업로드 중...` })
-        const salesRows = result.data as unknown as SalesRow[]
-        const saved = await upsertDailySales(salesRows, dispatch)
-        if (saved > 0) {
-          dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 Supabase 저장 완료` })
-          fetch(`${SUPA_URL}/rest/v1/rpc/refresh_analytics_mv`, {
-            method: 'POST',
-            headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-            body: '{}',
-          }).then(() => dispatch({ type: 'APPEND_LOG', payload: `🔄 대시보드 데이터 갱신 완료` }))
-            .catch(() => {})
-        } else {
-          dispatch({ type: 'APPEND_LOG', payload: `⚠️ Supabase 저장 실패 — 위 에러 메시지 확인` })
-        }
-
-      } else if (key === 'supply') {
-        dispatch({ type: 'APPEND_LOG', payload: `✅ [supply] ${result.rows.toLocaleString()}행 | ${cols}` })
-        dispatch({ type: 'APPEND_LOG', payload: `📤 supply_status 테이블에 업로드 중...` })
-        const saved = await upsertSupplyStatus(result.data, dispatch)
-        if (saved > 0) {
-          dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 supply_status 저장 완료` })
-        } else {
-          dispatch({ type: 'APPEND_LOG', payload: `⚠️ supply_status 저장 실패 — 로그 확인` })
-        }
-        // store에도 보관
-        await persistData({
-          masterData:   state.masterData as Record<string,unknown>[],
-          salesData:    [] as never[], salesData24: [] as never[], salesData25: [] as never[],
-          products:     [] as never[],
-          ordersData:   state.ordersData,
-          supplyData:   result.data,
-          stockSummary: { total_stock: 0, stock_value: 0 },
-          daily26: [], daily25: [], daily24: [],
-          latestSaleDate: '', hasData: true, dateRangePreset: 'total',
-        })
-
-      } else if (key === 'master') {
-        // 이지어드민 상품마스터: products 테이블에 시즌/이미지/카테고리까지 영구 저장
-        dispatch({ type: 'APPEND_LOG', payload: `✅ [master] ${result.rows.toLocaleString()}행 | ${cols}` })
-        dispatch({ type: 'APPEND_LOG', payload: `📤 products 테이블에 업로드 중...` })
-        const saved = await upsertProducts(result.data, dispatch)
-        if (saved > 0) {
-          dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 products 저장 완료 (시즌/이미지 포함)` })
-        } else {
-          dispatch({ type: 'APPEND_LOG', payload: `⚠️ products 저장 0행 — 위 에러 확인 또는 SQL 마이그레이션(컬럼 추가) 필요` })
-        }
-        // 로컬 persistData도 유지
-        await persistData({
-          masterData:  result.data,
-          salesData:   [] as never[], salesData24: [] as never[], salesData25: [] as never[],
-          products:    [] as never[],
-          ordersData:  state.ordersData,
-          supplyData:  state.supplyData,
-          stockSummary: { total_stock: 0, stock_value: 0 },
-          daily26: [], daily25: [], daily24: [],
-          latestSaleDate: '', hasData: true, dateRangePreset: 'total',
-        })
-
-      } else {
-        await persistData({
-          masterData:  state.masterData as Record<string,unknown>[],
-          salesData:   [] as never[], salesData24: [] as never[], salesData25: [] as never[],
-          products:    [] as never[],
-          ordersData:  key === 'orders' ? result.data : state.ordersData,
-          supplyData:  state.supplyData,
-          stockSummary: { total_stock: 0, stock_value: 0 },
-          daily26: [], daily25: [], daily24: [],
-          latestSaleDate: '', hasData: true, dateRangePreset: 'total',
-        })
-        dispatch({ type: 'APPEND_LOG', payload: `✅ [${key}] ${result.rows.toLocaleString()}행 | ${cols}` })
+    // masterData: 재고현황용 상품 목록
+    const seen = new Set<string>()
+    const masterData = salesData.reduce((acc: Record<string,unknown>[], r) => {
+      if (!seen.has(r.productName)) {
+        seen.add(r.productName)
+        acc.push({ 상품명: r.productName, 옵션: r.option, 바코드: r.barcode || '' })
       }
+      return acc
+    }, [])
 
-      setDone(d => ({ ...d, [key]: true }))
-      setFileNames(f => ({ ...f, [key]: file.name }))
+    console.log('[CA] ✅ Supabase 로드 완료:', {
+      salesYTD: salesData.length,
+      daily26: d26.length,
+      daily25: d25.length,
+      daily24: d24.length,
+      stock: (stockSummary as Record<string,unknown>).total_stock,
+      latestSaleDate,
+      products: productsRaw.length,
+    })
+
+    return {
+      salesData,
+      salesData24: [] as never[],
+      salesData25: [] as never[],
+      masterData,
+      products: [] as never[],
+      ordersData: (ordersRes.data || []) as Record<string,unknown>[],
+      supplyData: (supplyRes.data  || []) as Record<string,unknown>[],
+      hasData: salesData.length > 0,
+      dateRangePreset: 'yesterday',
+      stockSummary: stockSummary as { total_stock: number; stock_value: number },
+      daily26: d26, daily25: d25, daily24: d24,
+      latestSaleDate,
     }
-    setUploading(u => ({ ...u, [key]: false }))
+  } catch (e) {
+    console.warn('[storage] loadData error:', e)
+    return null
   }
-
-  function runAnalysis() {
-    setAnalyzing(true)
-    dispatch({ type: 'APPEND_LOG', payload: '→ 분석 완료! 대시보드로 이동합니다.' })
-    setTimeout(() => {
-      setAnalyzing(false)
-      const nav = (window as unknown as Record<string,unknown>).navigateTo as ((p:string)=>void)|undefined
-      if (nav) { nav('/') } else { window.location.href = '/' }
-    }, 600)
-  }
-
-  function reset() {
-    dispatch({ type: 'RESET' })
-    setFileNames({}); setDone({})
-    FILE_CONFIG.forEach(({ key }) => { if (inputRefs.current[key]) inputRefs.current[key]!.value = '' })
-  }
-
-  const hasAny = Object.keys(done).length > 0
-
-  return (
-    <div>
-      <div className="krow">
-        <div className="kpi kc-bl">
-          <div className="kpi-top"><div className="kpi-ico">🗂️</div></div>
-          <div className="kpi-lbl">분석 상태</div>
-          <div className="kpi-val" style={{ fontSize:14, fontWeight:800, color: hasAny ? 'var(--green)' : 'var(--t3)' }}>
-            {analyzing ? '분석 중...' : hasAny ? '업로드 완료' : '대기'}
-          </div>
-          <div className="kpi-foot">파일 업로드 후</div>
-        </div>
-        <div className="kpi kc-pu">
-          <div className="kpi-top"><div className="kpi-ico">🏷️</div></div>
-          <div className="kpi-lbl">상품 수</div>
-          <div className="kpi-val">—</div>
-          <div className="kpi-foot">마스터 기준</div>
-        </div>
-        <div className="kpi kc-gr">
-          <div className="kpi-top"><div className="kpi-ico">🛒</div></div>
-          <div className="kpi-lbl">업로드 파일</div>
-          <div className="kpi-val">{Object.keys(done).length}</div>
-          <div className="kpi-foot">개 완료</div>
-        </div>
-        <div className="kpi kc-am">
-          <div className="kpi-top"><div className="kpi-ico">📋</div></div>
-          <div className="kpi-lbl">발주 행</div>
-          <div className="kpi-val">{state.ordersData.length ? fmt(state.ordersData.length) : '—'}</div>
-          <div className="kpi-foot">발주서 기준</div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="ch">
-          <div className="ch-l"><div className="ch-ico">📂</div><div>
-            <div className="ch-title">파일 업로드</div>
-            <div className="ch-sub">xlsx · xls · csv — 컬럼명 자동 인식 — EUC-KR 한글 처리</div>
-          </div></div>
-          <div style={{ display:'flex', gap:8 }}>
-            <button className="btn-g" onClick={reset}>🔄 초기화</button>
-            <button className="btn-p" disabled={!hasAny||analyzing} onClick={runAnalysis}>
-              {analyzing ? '분석 중...' : '✨ 분석 시작'}
-            </button>
-          </div>
-        </div>
-        <div className="cb">
-          <div className="up-grid1" style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {FILE_CONFIG.map(({ key, icon, title, sub }) => (
-              <div key={key} className={`up-mini${done[key] ? ' done' : ''}`} onClick={() => inputRefs.current[key]?.click()}>
-                <input type="file" accept=".xlsx,.xls,.csv"
-                  ref={el => { inputRefs.current[key] = el }}
-                  style={{ display:'none' }}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f, key) }}
-                />
-                <div className="up-mini-ico">{uploading[key] ? <span className="spinner"/> : icon}</div>
-                <div className="up-mini-body">
-                  <div className="up-mini-title">{title}</div>
-                  <div className="up-mini-sub">{sub}</div>
-                  {fileNames[key] && <div className="up-mini-fname">✅ {fileNames[key]}</div>}
-                </div>
-                <span style={{ color:'var(--t3)', fontSize:14 }}>›</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {state.parseLog.length > 0 && (
-        <div className="card">
-          <div className="ch"><div className="ch-l"><div className="ch-ico">🔍</div><div className="ch-title">업로드 로그</div></div></div>
-          <div className="cb" style={{ padding:'10px 14px' }}>
-            <div className="log-box">
-              {state.parseLog.map((line, i) => (
-                <div key={i} className={line.startsWith('✅') ? 'log-ok' : line.startsWith('❌') ? 'log-err' : 'log-info'}>{line}</div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="card">
-        <div className="ch"><div className="ch-l"><div className="ch-ico">📖</div><div className="ch-title">파일 컬럼 가이드</div></div></div>
-        <div className="cb">
-          <div className="tw"><table>
-            <thead><tr><th>파일</th><th>필수 컬럼</th><th>형식</th></tr></thead>
-            <tbody>
-              <tr><td style={{fontWeight:700}}>이지어드민 상품마스터</td><td style={{color:'var(--t2)'}}>바코드, 상품명, 옵션, 원가, 시즌, 이미지(URL), 카테고리</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 판매 데이터</td><td style={{color:'var(--t2)'}}>상품명, 수량/출고수량, 날짜/출고일</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-              <tr><td style={{fontWeight:700}}>쿠팡 발주서 / 공급 중 수량</td><td style={{color:'var(--t2)'}}>SKU Barcode · 입고예정일 · 발주수량 · 확정수량 · 입고수량 · 매입가</td><td><span className="badge b-bl">xlsx/csv</span></td></tr>
-            </tbody>
-          </table></div>
-          <p style={{fontSize:11,color:'var(--t3)',marginTop:12}}>💡 상품마스터는 시즌/이미지/카테고리까지 products 테이블에 영구 저장됩니다. 한 번 업로드하면 모든 탭에서 사용 가능.</p>
-        </div>
-      </div>
-    </div>
-  )
 }
+
+export async function persistData(_data: PersistedData): Promise<void> {}
+export async function clearData(): Promise<void> { console.log('[CA] clearData') }
