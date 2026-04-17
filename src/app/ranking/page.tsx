@@ -3,11 +3,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useApp } from '@/lib/store'
 import { supabase } from '@/lib/supabase'
-import { toYMD, fromYMD } from '@/lib/dateUtils'
+import { toYMD } from '@/lib/dateUtils'
 import type { NaverKeywordResult } from '@/types'
 
 /* ────────────────────────────────────────────────────────────
-   Types (기존 앱 스키마 기반 - keywords + keyword_rankings 조인)
+   Types (기존 앱 스키마 기반 - keywords + keyword_rankings)
    ──────────────────────────────────────────────────────────── */
 type ProductLite = {
   barcode: string
@@ -60,6 +60,27 @@ const getKSTDateString = (dateObj: Date = new Date()) => {
 
 const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 
+/** Supabase 페이지네이션 처리 (1000건 초과 시 자동 분할 조회) */
+async function fetchAllPages<T = any>(
+  buildQuery: (from: number, to: number) => any,
+  pageSize = 1000,
+): Promise<T[]> {
+  const all: T[] = []
+  for (let page = 0; page < 20; page++) {
+    const from = page * pageSize
+    const to = from + pageSize - 1
+    const { data, error } = await buildQuery(from, to)
+    if (error) {
+      console.error('[ranking] fetchAllPages error', error)
+      break
+    }
+    if (!data || data.length === 0) break
+    all.push(...(data as T[]))
+    if (data.length < pageSize) break
+  }
+  return all
+}
+
 /* ────────────────────────────────────────────────────────────
    Main Component
    ──────────────────────────────────────────────────────────── */
@@ -104,52 +125,84 @@ export default function RankingPage() {
   }, [dateRange])
 
   async function loadAll() {
-    if (!supabase) return
+    if (!supabase) {
+      console.warn('[ranking] supabase client not ready')
+      return
+    }
     setLoading(true)
     try {
-      /* 키워드 + 연결상품 (products는 barcode로 join) */
-      const { data: kwData } = await supabase
+      /* 1. keywords 단독 조회 (products join 없이) */
+      const { data: kwData, error: kwErr } = await supabase
         .from('keywords')
-        .select('*, products(barcode, name, image_url)')
+        .select('*')
         .order('created_at', { ascending: false })
+      if (kwErr) console.error('[ranking] keywords error', kwErr)
+      console.log('[ranking] keywords loaded:', (kwData || []).length)
 
-      const kws = (kwData || []) as Keyword[]
+      /* 2. 관련 products 별도 조회 + 클라이언트에서 조합 */
+      const barcodes = Array.from(
+        new Set((kwData || []).map((k: any) => k.barcode).filter(Boolean)),
+      ) as string[]
+      const prodMap = new Map<string, ProductLite>()
+      if (barcodes.length) {
+        const { data: prodData, error: prodErr } = await supabase
+          .from('products')
+          .select('barcode, name, image_url')
+          .in('barcode', barcodes)
+        if (prodErr) console.error('[ranking] products error', prodErr)
+        ;(prodData || []).forEach((p: any) => prodMap.set(p.barcode, p as ProductLite))
+        console.log('[ranking] products loaded:', (prodData || []).length)
+      }
+
+      const kws = ((kwData || []) as any[]).map(k => ({
+        ...k,
+        products: k.barcode ? prodMap.get(k.barcode) || null : null,
+      })) as Keyword[]
       setKeywords(kws)
 
-      /* 랭킹: dateRange 필터 적용 */
+      /* 3. 랭킹: dateRange 필터 적용 (pagination 지원) */
       const fromStr = toYMD(dateRange.from)
       const toStr = toYMD(dateRange.to)
-      const { data: rkData } = await supabase
-        .from('keyword_rankings')
-        .select('id, keyword_id, date, rank_position, rating, review_count')
-        .gte('date', fromStr)
-        .lte('date', toStr)
-        .order('date', { ascending: true })
-      setRankings((rkData || []) as Ranking[])
+      const rkAll = await fetchAllPages<Ranking>((from, to) =>
+        supabase!
+          .from('keyword_rankings')
+          .select('id, keyword_id, date, rank_position, rating, review_count')
+          .gte('date', fromStr)
+          .lte('date', toStr)
+          .order('date', { ascending: true })
+          .range(from, to),
+      )
+      console.log('[ranking] keyword_rankings loaded:', rkAll.length, `(${fromStr} ~ ${toStr})`)
+      setRankings(rkAll)
 
-      /* 검색량 (최근 순) */
-      const { data: svData } = await supabase
-        .from('keyword_search_volumes')
-        .select('*')
-        .order('target_date', { ascending: false })
-      setSearchVolumes((svData || []) as SearchVolume[])
+      /* 4. 검색량 (최근 순) */
+      const svAll = await fetchAllPages<SearchVolume>((from, to) =>
+        supabase!
+          .from('keyword_search_volumes')
+          .select('*')
+          .order('target_date', { ascending: false })
+          .range(from, to),
+      )
+      console.log('[ranking] search_volumes loaded:', svAll.length)
+      setSearchVolumes(svAll)
 
-      /* 주간 판매량 비교용 daily_sales - 최근 14일분 */
+      /* 5. 주간 판매량 비교용 daily_sales (최근 14일, 등록된 바코드만) */
       const twoWeeksAgo = new Date()
       twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14)
-      const barcodes = Array.from(
-        new Set(kws.map(k => k.barcode).filter(Boolean)),
-      ) as string[]
       if (barcodes.length) {
-        const { data: dsData } = await supabase
-          .from('daily_sales')
-          .select('date, barcode, quantity')
-          .in('barcode', barcodes)
-          .gte('date', getKSTDateString(twoWeeksAgo))
-        setDailySales((dsData || []) as DailySale[])
+        const dsAll = await fetchAllPages<DailySale>((from, to) =>
+          supabase!
+            .from('daily_sales')
+            .select('date, barcode, quantity')
+            .in('barcode', barcodes)
+            .gte('date', getKSTDateString(twoWeeksAgo))
+            .range(from, to),
+        )
+        console.log('[ranking] daily_sales loaded:', dsAll.length)
+        setDailySales(dsAll)
       }
     } catch (e) {
-      console.error('[ranking] loadAll error', e)
+      console.error('[ranking] loadAll fatal error', e)
     }
     setLoading(false)
   }
@@ -294,7 +347,7 @@ export default function RankingPage() {
 
   const displayDates = useMemo(() => allDates.slice(-14), [allDates])
 
-  /* 검색량 매핑: 키워드 → { latest, prev } */
+  /* 검색량 매핑: 키워드 → 최근순 배열 */
   const svMap = useMemo(() => {
     const byKw = new Map<string, SearchVolume[]>()
     searchVolumes.forEach(sv => {
@@ -302,7 +355,6 @@ export default function RankingPage() {
       arr.push(sv)
       byKw.set(sv.keyword, arr)
     })
-    // 각 배열을 날짜 내림차순 정렬
     byKw.forEach(arr =>
       arr.sort((a, b) => (a.target_date < b.target_date ? 1 : -1)),
     )
@@ -626,7 +678,7 @@ export default function RankingPage() {
             <div>
               <div className="ch-title">키워드 순위 추이</div>
               <div className="ch-sub">
-                {loading ? '로딩 중...' : `${keywords.length}개 키워드 · 최근 ${displayDates.length}일`}
+                {loading ? '로딩 중...' : `${keywords.length}개 키워드 · ${rankings.length}건 · 최근 ${displayDates.length}일`}
               </div>
             </div>
           </div>
@@ -1006,7 +1058,6 @@ function ChartModal({
   const validPoints = data.filter(d => d.rank !== null) as { label: string; rank: number }[]
   const hasData = validPoints.length > 0
 
-  /* SVG 차트 (recharts 없이 순수 SVG) */
   const W = 720
   const H = 320
   const PAD_L = 40
@@ -1023,7 +1074,6 @@ function ChartModal({
 
   const xFor = (i: number) =>
     PAD_L + (data.length > 1 ? (i * plotW) / (data.length - 1) : plotW / 2)
-  // rank는 낮을수록 위(= y가 작음)
   const yFor = (r: number) => PAD_T + ((r - yMin) / (yMax - yMin)) * plotH
 
   const pathD = data
@@ -1049,7 +1099,6 @@ function ChartModal({
         <div className="modal-body">
           {hasData ? (
             <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
-              {/* 격자 */}
               {[0, 0.25, 0.5, 0.75, 1].map((t, i) => (
                 <line
                   key={i}
@@ -1061,7 +1110,6 @@ function ChartModal({
                   strokeDasharray="3 3"
                 />
               ))}
-              {/* Y축 라벨 */}
               {[yMin, Math.round((yMin + yMax) / 2), yMax].map((v, i) => (
                 <text
                   key={i}
@@ -1075,7 +1123,6 @@ function ChartModal({
                   {v}
                 </text>
               ))}
-              {/* X축 라벨 (띄엄띄엄) */}
               {data.map((p, i) => {
                 if (data.length > 10 && i % Math.ceil(data.length / 10) !== 0 && i !== data.length - 1) return null
                 return (
@@ -1092,7 +1139,6 @@ function ChartModal({
                   </text>
                 )
               })}
-              {/* 라인 */}
               <path
                 d={pathD}
                 fill="none"
@@ -1101,7 +1147,6 @@ function ChartModal({
                 strokeLinejoin="round"
                 strokeLinecap="round"
               />
-              {/* 점 */}
               {data.map((p, i) =>
                 p.rank !== null ? (
                   <circle
