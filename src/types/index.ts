@@ -16,6 +16,7 @@ export interface SalesRow {
   revenue: number
   isReturn: boolean
   stock?: number      // 현재재고수량 (쿠팡 허브)
+  coupangCost?: number // 쿠팡 허브 파일의 매입원가 (재고액 계산용)
   // products에서 조인된 메타
   season?: string
   category?: string
