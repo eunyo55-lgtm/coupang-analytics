@@ -94,6 +94,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('')
   const [deadFrom, setDeadFrom] = useState(defaultFrom)
   const [deadTo, setDeadTo] = useState(defaultTo)
+  const [deadSeason, setDeadSeason] = useState('전체')
   const [viewMode, setViewMode] = useState<'qty' | 'amt'>('qty')
   const [costSource, setCostSource] = useState<'master' | 'coupang'>('coupang')
   const [sortBy, setSortBy] = useState<string>('daily_sales')
@@ -236,6 +237,14 @@ export default function InventoryPage() {
       .slice(0, 15)
   }, [summaries, viewMode, costSource])
 
+  // 미운동 재고용 시즌 옵션 (deadSummaries 또는 summaries 기반)
+  const deadSeasonOptions = useMemo(() => {
+    const set = new Set<string>()
+    const src = deadSummaries.length > 0 ? deadSummaries : summaries
+    src.forEach(r => set.add(r.season || '미지정'))
+    return ['전체', ...Array.from(set).sort()]
+  }, [deadSummaries, summaries])
+
   const deadStock = useMemo(() => {
     const source = deadSummaries.length > 0
       ? (search
@@ -245,6 +254,8 @@ export default function InventoryPage() {
     return source
       // 쿠팡재고 기준: 기간 내 판매 0 & 쿠팡재고 > 0
       .filter(r => r.total_qty_range === 0 && r.coupang_stock > 0)
+      // 시즌 필터
+      .filter(r => deadSeason === '전체' || (r.season || '미지정') === deadSeason)
       .map(r => ({
         ...r,
         total_stock: r.coupang_stock,   // 쿠팡 재고만 표시
@@ -255,7 +266,7 @@ export default function InventoryPage() {
       .sort((a, b) => viewMode === 'qty'
         ? b.total_stock - a.total_stock
         : b.stock_value - a.stock_value)
-  }, [deadSummaries, filtered, search, viewMode, costSource])
+  }, [deadSummaries, filtered, search, viewMode, costSource, deadSeason])
 
   const deadStockTotal = useMemo(() =>
     deadStock.reduce((s, d) => s + (viewMode === 'qty' ? d.total_stock : d.stock_value), 0),
@@ -403,7 +414,12 @@ export default function InventoryPage() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 기간</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>🎨 시즌</span>
+            <select value={deadSeason} onChange={e => setDeadSeason(e.target.value)}
+              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+              {deadSeasonOptions.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)', marginLeft: 6 }}>📅 기간</span>
             <input type="date" className="date-input" value={deadFrom} onChange={e => setDeadFrom(e.target.value)} />
             <span className="date-range-sep">~</span>
             <input type="date" className="date-input" value={deadTo} onChange={e => setDeadTo(e.target.value)} />
@@ -416,7 +432,7 @@ export default function InventoryPage() {
                 <thead>
                   <tr>
                     <th style={{ width: 44 }}>이미지</th>
-                    <th>상품명</th>
+                    <th style={{ width: 180 }}>상품명</th>
                     <th>시즌</th>
                     <th>카테고리</th>
                     <th style={{ textAlign: 'right' }}>본사재고</th>
@@ -473,7 +489,7 @@ export default function InventoryPage() {
                 <thead>
                   <tr>
                     <th style={{ width: 44 }}>이미지</th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('name')}>상품명 {sortBy === 'name' ? (sortDesc ? '▼' : '▲') : ''}</th>
+                    <th style={{ width: 180, cursor: 'pointer' }} onClick={() => toggleSort('name')}>상품명 {sortBy === 'name' ? (sortDesc ? '▼' : '▲') : ''}</th>
                     <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('hq_stock')}>본사재고 {sortBy === 'hq_stock' ? (sortDesc ? '▼' : '▲') : ''}</th>
                     <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('coupang_stock')}>쿠팡재고 {sortBy === 'coupang_stock' ? (sortDesc ? '▼' : '▲') : ''}</th>
                     <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('supply_qty')}>공급중 {sortBy === 'supply_qty' ? (sortDesc ? '▼' : '▲') : ''}</th>
