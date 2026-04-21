@@ -119,6 +119,15 @@ export default function SalesPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
 
+  // 정렬: 'ytd' | 'week' | 날짜 문자열(YYYY-MM-DD) | 'name'
+  const [sortKey, setSortKey] = useState<string>('ytd')
+  const [sortDesc, setSortDesc] = useState(true)
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDesc(!sortDesc)
+    else { setSortKey(key); setSortDesc(true) }
+  }
+  const sortIcon = (key: string) => sortKey === key ? (sortDesc ? ' ▼' : ' ▲') : ''
+
   // 주간 고정 (최근 7일)
   const weekFromYMD = useMemo(() => {
     const d = fromYMD(todayAnchor); d.setDate(d.getDate() - 6)
@@ -260,7 +269,7 @@ export default function SalesPage() {
         options,
       })
     })
-    result.sort((a, b) => b.ytdQty - a.ytdQty)
+    // 정렬은 sorted useMemo에서 처리
     return result
   }, [salesData, chartFrom, chartTo, tableFrom, tableTo, todayAnchor, weekFromYMD, yearStart, chartDates, tableDates])
 
@@ -278,7 +287,31 @@ export default function SalesPage() {
     )
   }, [products, search])
 
-  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
+  // 정렬: sortKey에 따라 판매량/매출 정렬
+  const sorted = useMemo(() => {
+    const arr = [...filtered]
+    const getVal = (p: ProductAgg): number | string => {
+      if (sortKey === 'name') return p.productName
+      if (sortKey === 'ytd')  return mode === 'qty' ? p.ytdQty  : p.ytdRev
+      if (sortKey === 'week') return mode === 'qty' ? p.weekQty : p.weekRev
+      // 날짜 키 (YYYY-MM-DD)
+      const d = p.tableDaily.find(x => x.date === sortKey)
+      if (d) return mode === 'qty' ? d.qty : d.rev
+      return 0
+    }
+    arr.sort((a, b) => {
+      const va = getVal(a), vb = getVal(b)
+      if (typeof va === 'number' && typeof vb === 'number') {
+        return sortDesc ? vb - va : va - vb
+      }
+      return sortDesc
+        ? String(vb).localeCompare(String(va), 'ko')
+        : String(va).localeCompare(String(vb), 'ko')
+    })
+    return arr
+  }, [filtered, sortKey, sortDesc, mode])
+
+  const visible = useMemo(() => sorted.slice(0, visibleCount), [sorted, visibleCount])
 
   // 합계 (보이는 상품 기준)
   const totals = useMemo(() => {
@@ -384,14 +417,18 @@ export default function SalesPage() {
         datasets: [{
           label: mode === 'qty' ? '판매량' : '금액',
           data: byCategory.map(s => (mode === 'qty' ? s.qty : Math.round(s.rev))),
-          backgroundColor: byCategory.map(s => s.label === '기타' ? '#98A2B3' : '#12B76A'),
+          backgroundColor: byCategory.map(s => s.label === '기타' ? '#98A2B3' : '#1570EF'),
           borderRadius: 6,
-          barThickness: 32,
+          // barThickness 제거 → 자동 폭 사용으로 공간 더 잘 활용
+          maxBarThickness: 48,
+          categoryPercentage: 0.85,
+          barPercentage: 0.9,
         }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        layout: { padding: { top: 12, bottom: 0, left: 4, right: 4 } },
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { label: ctx => ' ' + Number(ctx.parsed.y).toLocaleString('ko-KR') } },
@@ -433,14 +470,6 @@ export default function SalesPage() {
     borderBottom: '1px solid #E4E7EC',
     minWidth: 54,
   })
-
-  // 빠른 프리셋 - 테이블 전용
-  const applyTablePreset = (days: number) => {
-    const anchor = fromYMD(todayAnchor)
-    const f = new Date(anchor); f.setDate(f.getDate() - (days - 1))
-    setTableFrom(toYMD(f))
-    setTableTo(todayAnchor)
-  }
 
   return (
     <div>
@@ -505,7 +534,7 @@ export default function SalesPage() {
           </div>
           <div className="cb">
             {byCategory.length > 0
-              ? <div style={{ position: 'relative', height: 260 }}><canvas ref={catRef} /></div>
+              ? <div style={{ position: 'relative', height: 320 }}><canvas ref={catRef} /></div>
               : <div className="empty-st"><div className="es-ico">📦</div><div className="es-t">기간 내 카테고리 데이터가 없어요</div></div>
             }
           </div>
@@ -519,26 +548,18 @@ export default function SalesPage() {
             <div className="ch-title">상품별 판매 상세</div>
             <div className="ch-sub">상품명 클릭 → 옵션별 펼치기 · 50개씩 보기</div>
           </div></div>
-        </div>
-        <div className="cb">
-          {/* 테이블 전용 필터 바 */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 10, padding: '10px 2px' }}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 테이블 기간</span>
-              <input type="date" className="date-input" value={tableFrom} onChange={e => setTableFrom(e.target.value)} />
-              <span className="date-range-sep">~</span>
-              <input type="date" className="date-input" value={tableTo} onChange={e => setTableTo(e.target.value)} />
-            </div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <button className="dp" onClick={() => applyTablePreset(7)}>7일</button>
-              <button className="dp" onClick={() => applyTablePreset(14)}>14일</button>
-              <button className="dp" onClick={() => applyTablePreset(30)}>30일</button>
-            </div>
-            <span className="date-label-txt" style={{ fontSize: 11, color: 'var(--t3)' }}>
+          {/* 헤더 우측의 테이블 기간 필터 */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 기간</span>
+            <input type="date" className="date-input" value={tableFrom} onChange={e => setTableFrom(e.target.value)} />
+            <span className="date-range-sep">~</span>
+            <input type="date" className="date-input" value={tableTo} onChange={e => setTableTo(e.target.value)} />
+            <span className="date-label-txt" style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 4 }}>
               {tableDates.length}일
             </span>
           </div>
-
+        </div>
+        <div className="cb">
           <div className="frow">
             <input className="si" placeholder="🔍 상품명 · 옵션 · 시즌 · 카테고리 검색..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
@@ -550,28 +571,41 @@ export default function SalesPage() {
                 <tr>
                   <th style={{ width: 28, position: 'sticky', left: 0, background: '#F9FAFB', zIndex: 4, borderBottom: '1px solid #E4E7EC' }}></th>
                   <th style={{ width: 52, position: 'sticky', left: 28, background: '#F9FAFB', zIndex: 4, borderBottom: '1px solid #E4E7EC' }}></th>
-                  <th style={{
-                    minWidth: 260, textAlign: 'left', padding: '8px 10px',
-                    position: 'sticky', left: 80, background: '#F9FAFB', zIndex: 4,
-                    borderBottom: '1px solid #E4E7EC', fontSize: 12,
-                  }}>상품명</th>
-                  <th style={{
-                    width: 90, textAlign: 'right', padding: '8px 10px', background: '#F9FAFB',
-                    borderBottom: '1px solid #E4E7EC', fontSize: 12,
-                  }}>
-                    누적
+                  <th
+                    onClick={() => toggleSort('name')}
+                    style={{
+                      minWidth: 130, textAlign: 'left', padding: '8px 10px',
+                      position: 'sticky', left: 80, background: '#F9FAFB', zIndex: 4,
+                      borderBottom: '1px solid #E4E7EC', fontSize: 12, cursor: 'pointer',
+                    }}
+                  >상품명{sortIcon('name')}</th>
+                  <th
+                    onClick={() => toggleSort('ytd')}
+                    style={{
+                      width: 90, textAlign: 'right', padding: '8px 10px', background: '#F9FAFB',
+                      borderBottom: '1px solid #E4E7EC', fontSize: 12, cursor: 'pointer',
+                    }}
+                  >
+                    누적{sortIcon('ytd')}
                     <div style={{ fontWeight: 500, color: 'var(--t3)', fontSize: 10 }}>1/1~{todayAnchor.slice(5)}</div>
                   </th>
-                  <th style={{
-                    width: 80, textAlign: 'right', padding: '8px 10px', background: '#F9FAFB',
-                    borderBottom: '1px solid #E4E7EC', fontSize: 12,
-                    borderRight: '2px solid #E4E7EC',
-                  }}>
-                    주간
+                  <th
+                    onClick={() => toggleSort('week')}
+                    style={{
+                      width: 80, textAlign: 'right', padding: '8px 10px', background: '#F9FAFB',
+                      borderBottom: '1px solid #E4E7EC', fontSize: 12,
+                      borderRight: '2px solid #E4E7EC', cursor: 'pointer',
+                    }}
+                  >
+                    주간{sortIcon('week')}
                     <div style={{ fontWeight: 500, color: 'var(--t3)', fontSize: 10 }}>최근 7일</div>
                   </th>
                   {tableDates.map(d => (
-                    <th key={d} style={dateHeaderStyle(d)}>{formatMD(d)}</th>
+                    <th
+                      key={d}
+                      onClick={() => toggleSort(d)}
+                      style={{ ...dateHeaderStyle(d), cursor: 'pointer' }}
+                    >{formatMD(d)}{sortIcon(d)}</th>
                   ))}
                 </tr>
               </thead>
@@ -600,7 +634,7 @@ export default function SalesPage() {
                           )}
                         </td>
                         <td style={{ fontWeight: 700, padding: '6px 10px', position: 'sticky', left: 80, background: '#fff', zIndex: 2, borderRight: '1px solid #F3F4F6' }}>
-                          <div style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.productName}</div>
+                          <div style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.productName}</div>
                           <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>
                             {p.category && <span className="badge b-gr" style={{ fontSize: 10 }}>{p.category}</span>}
                             {p.season   && <span className="badge b-bl" style={{ fontSize: 10 }}>{p.season}</span>}
@@ -691,7 +725,7 @@ export default function SalesPage() {
           </div>
 
           {/* 더 보기 */}
-          {filtered.length > visibleCount && (
+          {sorted.length > visibleCount && (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '14px 0 4px' }}>
               <button
                 onClick={() => setVisibleCount(c => c + PAGE_SIZE)}
@@ -701,13 +735,13 @@ export default function SalesPage() {
                   border: '1.5px solid var(--blue)', borderRadius: 8, cursor: 'pointer',
                 }}
               >
-                더 보기 ({visibleCount.toLocaleString()} / {filtered.length.toLocaleString()})
+                더 보기 ({visibleCount.toLocaleString()} / {sorted.length.toLocaleString()})
               </button>
             </div>
           )}
-          {filtered.length > 0 && filtered.length <= visibleCount && (
+          {sorted.length > 0 && sorted.length <= visibleCount && (
             <div style={{ textAlign: 'center', padding: '14px 0 4px', fontSize: 11, color: 'var(--t3)' }}>
-              전체 {filtered.length.toLocaleString()}개 상품 모두 표시됨
+              전체 {sorted.length.toLocaleString()}개 상품 모두 표시됨
             </div>
           )}
         </div>
