@@ -19,6 +19,9 @@ async function rpc(fn: string, params: Record<string, unknown> = {}) {
       apikey: SUPA_KEY,
       Authorization: `Bearer ${SUPA_KEY}`,
       'Content-Type': 'application/json',
+      // Supabase PostgREST 기본 반환 제한 1000행 → 상한 확장 (재고 바코드 8천+ 대응)
+      'Range-Unit': 'items',
+      'Range': '0-49999',
     },
     body: JSON.stringify(params),
   })
