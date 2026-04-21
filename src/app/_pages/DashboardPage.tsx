@@ -220,12 +220,16 @@ export default function DashboardPage() {
   const totalStock=useMemo(()=>topStock.reduce((s,r)=>s+r.total_stock,0),[topStock])
   const pct=(now:number,prev:number)=>prev?Math.round((now-prev)/prev*100):0
   const s=state.stockSummary
+  const stockValueMaster  = (s as {stock_value_master?:number}).stock_value_master  ?? s.stock_value
+  const stockValueCoupang = (s as {stock_value_coupang?:number}).stock_value_coupang ?? 0
+  const [stockCostSrc, setStockCostSrc] = useState<'master'|'coupang'>('coupang')
+  const displayedStockValue = stockCostSrc === 'master' ? stockValueMaster : (stockValueCoupang || stockValueMaster)
 
   const kpiCards:{label:string;sub:string;qty:number|null;rev:number|null;yoy:number|null;color:string;isStock:boolean}[]=[
     {label:'판매량',sub:`전일 (${latestDate})`,qty:kpiYest?.qty??null,rev:kpiYest?.rev??null,yoy:kpiYest&&kpiYest25?pct(kpiYest.qty,kpiYest25.qty):null,color:'var(--blue)',isStock:false},
     {label:'주간 판매량',sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`,qty:kpiWeek?.qty??null,rev:kpiWeek?.rev??null,yoy:kpiWeek&&kpiWeek25?pct(kpiWeek.qty,kpiWeek25.qty):null,color:'var(--purple)',isStock:false},
     {label:'누적 판매량',sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`,qty:kpiCum?.qty??null,rev:kpiCum?.rev??null,yoy:kpiCum&&kpiCum25?pct(kpiCum.qty,kpiCum25.qty):null,color:'var(--green)',isStock:false},
-    {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:s.stock_value||null,yoy:null,color:'var(--amber)',isStock:true},
+    {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:displayedStockValue||null,yoy:null,color:'var(--amber)',isStock:true},
   ]
 
   return (
@@ -239,6 +243,18 @@ export default function DashboardPage() {
             <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}}>
               {c.isStock?`재고액 ${c.rev!==null?Math.round((c.rev||0)/100000000*10)/10+'억':'—'}`:`매출 ${c.rev!==null?fmt(c.rev||0)+'원':'—'}`}
             </div>
+            {c.isStock && (
+              <div style={{display:'flex',gap:3,marginTop:4}}>
+                <button onClick={()=>setStockCostSrc('master')}
+                  style={{fontSize:9,padding:'2px 6px',borderRadius:4,cursor:'pointer',fontWeight:700,border:'1px solid var(--border)',
+                    background:stockCostSrc==='master'?'var(--amber)':'var(--bg)',color:stockCostSrc==='master'?'#fff':'var(--t3)'}}
+                  title="상품마스터(이지어드민) 원가 기준">마스터</button>
+                <button onClick={()=>setStockCostSrc('coupang')}
+                  style={{fontSize:9,padding:'2px 6px',borderRadius:4,cursor:'pointer',fontWeight:700,border:'1px solid var(--border)',
+                    background:stockCostSrc==='coupang'?'var(--amber)':'var(--bg)',color:stockCostSrc==='coupang'?'#fff':'var(--t3)'}}
+                  title="쿠팡 허브 매입가 기준">쿠팡</button>
+              </div>
+            )}
             {c.yoy!==null&&<div className={c.yoy>=0?'diff-up':'diff-dn'} style={{fontSize:10}}>전년비 {c.yoy>=0?'▲':'▼'}{Math.abs(c.yoy)}%</div>}
           </div>
         ))}
