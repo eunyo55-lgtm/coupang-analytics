@@ -1,131 +1,95 @@
-# 🚀 Coupang Analytics
+# 🛒 Coupang Analytics - 재고 현황 개선 (최종)
 
-쿠팡 채널 통합 관리 대시보드 — Next.js + Supabase + Vercel
+## 🐛 수정된 문제
 
----
+| # | 문제 | 원인 | 해결 |
+|---|---|---|---|
+| 1 | 대시보드 '전일 재고' 숫자 오류 | `fileParser.ts`에서 같은 날짜+바코드의 FC/VF164 재고를 **덮어쓰기**해서 센터 중 하나의 재고만 남음 | 재고값도 `+=` SUM 집계로 수정 |
+| 2 | 재고 현황 탭 데이터 전혀 맞지 않음 | `useAnalytics.ts`가 `masterData.slice(0, 200)`으로 200개만 계산하고 쿠팡재고와 연결 안 됨 | `get_inventory_detail` RPC 신규 작성, 프론트 직접 호출 |
+| 3 | 본사재고(이지어드민 가용재고) 저장 필드 없음 | products 테이블 스키마에 필드 없음 | `hq_stock` 컬럼 추가 + 업로드 매핑 추가 |
+| 4 | 쿠팡 매입가와 상품마스터 원가 혼재 | 두 원가가 분리 저장되지 않고 `revenue` 계산에만 사용됨 | `daily_sales.coupang_cost` 컬럼 분리 저장, UI에 [마스터]/[쿠팡] 토글 추가 |
 
-## 🗂 프로젝트 구조
+## 📁 파일 배치
+
+Git repo의 다음 경로에 덮어쓰기:
 
 ```
-src/
-├── app/
-│   ├── api/
-│   │   └── naver-keywords/route.ts   # 네이버 검색량 API 프록시
-│   ├── dashboard/                    # 대시보드 페이지
-│   ├── sales/                        # 판매 현황
-│   ├── inventory/                    # 재고 현황
-│   ├── supply/                       # 공급 현황
-│   ├── ranking/                      # 랭킹 현황
-│   ├── ad/                           # 광고 현황
-│   ├── datamanage/                   # 데이터 관리
-│   ├── layout.tsx                    # 루트 레이아웃 (Sidebar + DateFilterBar)
-│   └── globals.css                   # 전역 스타일
-├── components/
-│   ├── layout/
-│   │   ├── Sidebar.tsx               # 좌측 네비게이션
-│   │   └── DateFilterBar.tsx         # 날짜 필터 바 (전체 탭 공통)
-│   ├── charts/
-│   │   └── SalesLineChart.tsx        # 꺾은선 차트 컴포넌트
-│   └── ui/                           # 공통 UI 컴포넌트
-├── hooks/
-│   └── useAnalytics.ts               # 핵심 데이터 계산 훅
-├── lib/
-│   ├── store.tsx                     # 전역 상태 (React Context)
-│   ├── supabase.ts                   # Supabase 클라이언트
-│   ├── fileParser.ts                 # 파일 파싱 (xlsx/csv)
-│   └── dateUtils.ts                  # 날짜 유틸
-└── types/
-    └── index.ts                      # TypeScript 타입 정의
+coupang-analytics/
+├── migration_inventory_fix.sql              ← Supabase SQL Editor에서 먼저 실행
+└── src/
+    ├── types/index.ts                       ← (types_index.ts 를 여기로)
+    ├── lib/
+    │   ├── fileParser.ts
+    │   └── storage.ts
+    └── app/_pages/
+        ├── DashboardPage.tsx
+        ├── DataManagePage.tsx
+        └── InventoryPage.tsx
 ```
 
----
+## 🚀 적용 순서
 
-## ⚡ 빠른 시작
+### 1️⃣ Supabase SQL Editor에서 마이그레이션 실행
+`migration_inventory_fix.sql` 전체 내용 복사 → SQL Editor에서 실행. 포함 내용:
+- `products.hq_stock` 컬럼 (본사재고)
+- `daily_sales.coupang_cost` 컬럼 (쿠팡 매입가)
+- `upsert_products`, `upsert_daily_sales` RPC 재정의
+- `get_stock_summary` 재정의 (재고액 2종 동시 반환)
+- `get_inventory_detail(p_from, p_to)` 신규 추가 (재고 현황 탭 전용)
 
-### 1. 저장소 클론 & 패키지 설치
-```bash
-git clone https://github.com/your-repo/coupang-analytics
-cd coupang-analytics
-npm install
+검증 쿼리:
+```sql
+SELECT * FROM get_stock_summary();
 ```
 
-### 2. 환경 변수 설정
-```bash
-cp .env.local.example .env.local
-# .env.local 파일을 열어 Supabase / Naver API 키 입력
-```
+### 2️⃣ 코드 파일 7개 교체 후 Git push → Vercel 자동 배포
 
-### 3. Supabase 테이블 생성
-Supabase 대시보드 → SQL Editor → `supabase-schema.sql` 내용 붙여넣고 실행
+### 3️⃣ **중요: 쿠팡 허브 파일 재업로드**
+기존 `daily_sales.stock` 은 버그 있는 파서로 저장된 값이라 SUM 집계가 안 되어 있어. 그리고 `coupang_cost` 컬럼은 이제 막 만들어진 상태라 기존 행에는 모두 0이 들어있어.
 
-### 4. 개발 서버 실행
-```bash
-npm run dev
-# http://localhost:3000
-```
+**최소한 최신 1일치** (2026-04-20 파일) 를 `데이터 관리` 탭에서 재업로드하면 대시보드 전일 재고가 정상화됨. 기대값:
+- 총 재고 ≈ **74,280개**
+- 재고액(쿠팡 기준) ≈ **11.67억**
 
----
+재고 추이나 과거 차트 정확도를 원하면 그 날짜까지 거슬러 재업로드 필요.
 
-## 🗄 Supabase 설정
+### 4️⃣ 이지어드민 상품마스터 업로드
+가용재고 컬럼 후보: `가용재고`, `본사재고`, `hq_stock`, `가용수량`, `현재고`, `재고수량`. 업로드 후 로그에 `가용재고=[컬럼명]` 이 찍히는지 확인. 다르면 `DataManagePage.tsx:85`의 `hqStockCol` 후보 배열에 추가.
 
-1. [supabase.com](https://supabase.com) 에서 새 프로젝트 생성
-2. Settings → API 에서 URL, anon key, service_role key 복사
-3. SQL Editor에서 `supabase-schema.sql` 실행
+## 🎯 새 기능 사용법
 
-**저장되는 데이터:**
-| 테이블 | 설명 |
-|--------|------|
-| `rankings` | 쿠팡 랭킹 (날짜별 수동 입력) |
-| `ad_entries` | 광고 성과 (날짜별 수동 입력) |
-| `supply_items` | 공급 중 수량 |
+### 대시보드 - 전일 재고 카드
+- 기본: 쿠팡 매입가 기준 재고액
+- 카드 하단 작은 **[마스터] [쿠팡]** 버튼으로 전환 가능
 
----
+### 재고 현황 탭
+- 상단 KPI 제거, 시즌 파이 + 카테고리 막대 차트
+- 기간 필터 (7/14/30일 프리셋) + 카테고리 드롭다운
+- **판매되지 않은 재고** 섹션 (기간 내 판매 0 & 재고 보유)
+- 메인 테이블: 이미지 / 상품명(▶ 옵션 토글) / 본사재고 / 쿠팡재고 / 공급중 / 일평균판매 / 소진예상
+- 오른쪽 상단 **[수량] [금액]** 토글 + 금액 모드일 때 **[마스터] [쿠팡]** 원가 소스 토글
+- 50개 단위 페이지네이션, 컬럼 헤더 클릭 정렬
 
-## 🔍 네이버 검색 API 설정
+### 폴백 로직
+원가 0 처리가 똑똑해서 한쪽 데이터만 있어도 깨지지 않음:
+- 쿠팡 선택했는데 `coupang_cost=0`이면 → `products.cost`로 폴백
+- 마스터 선택했는데 `products.cost=0`이면 → `coupang_cost`로 폴백
 
-1. [네이버 검색광고 API](https://searchad.naver.com) 접속
-2. API 관리 → 액세스 라이선스 발급
-3. `.env.local`에 `NAVER_CUSTOMER_ID`, `NAVER_ACCESS_LICENSE`, `NAVER_SECRET_KEY` 입력
+## 📐 get_inventory_detail RPC 계산 로직
 
-> API 키가 없으면 랭킹 탭에서 데모 데이터로 동작합니다.
+| 필드 | 계산 |
+|---|---|
+| **쿠팡재고** | `daily_sales` 중 MAX(date) 행의 `stock` (센터별 SUM 됨) |
+| **본사재고** | `products.hq_stock` |
+| **공급중** | `supply_status`에서 `확정수량 - 입고수량` 바코드별 SUM (양수만) |
+| **일평균판매** | 기간 내 `quantity` SUM ÷ 기간일수 |
+| **소진예상일** | `(쿠팡재고 + 본사재고 + 공급중) ÷ 일평균판매` |
+| **색상** | `<7일` 🔴 / `<14일` 🟡 / `이상` 🟢 / 판매 0 `—` |
 
----
-
-## 📁 파일 업로드 지원 형식
-
-| 파일 | 필수 컬럼 (자동 감지) |
-|------|----------------------|
-| 이지어드민 상품마스터 | 상품명, 옵션, 재고 |
-| 쿠팡 판매 데이터 | 상품명, 수량, 금액, 날짜 |
-| 쿠팡 발주서 | 상품명, 수량 |
-| 공급 중 수량 | 상품명, 수량 |
-
-- xlsx / xls / csv 모두 지원
-- 한글 EUC-KR 인코딩 자동 처리 (codepage 949)
-- 컬럼명 자동 감지 (다양한 표기 지원)
-
----
-
-## 🚀 Vercel 배포
-
-```bash
-# Vercel CLI 설치
-npm i -g vercel
-
-# 배포
-vercel
-
-# 환경 변수는 Vercel 대시보드 → Settings → Environment Variables에 추가
-```
-
----
-
-## 📊 주요 기능
-
-- **전체 탭 공통 날짜 필터** — 오늘 / 전일 / 전주(금~목) / 이번 달 / 최근 30일 / 전체 / 직접 입력
-- **대시보드** — 판매량, 매출, 재고, 공급 중 KPI + 꺾은선 차트 + TOP5
-- **판매 현황** — 일별 추이 (꺾은선), 상품별 매출 비중 (도넛), 상세 테이블
-- **재고 현황** — 소진 예상일 자동 계산, 발주 권장량, 긴급/주의/정상 상태 분류
-- **공급 현황** — 입고 대기 현황
-- **랭킹 현황** — 쿠팡 랭킹 수동 입력 + 네이버 키워드 검색량 API
-- **광고 현황** — ROAS, ACoS, CTR 자동 계산
+## ✅ 작동 확인 체크리스트
+- [ ] `SELECT * FROM get_stock_summary()` 결과가 `total_stock≈74280`, `stock_value_coupang≈11.67억`
+- [ ] 대시보드 전일 재고 카드에 [마스터] [쿠팡] 버튼 표시
+- [ ] 재고 현황 탭에 KPI 카드 없음, 시즌 파이 + 카테고리 막대 표시
+- [ ] 금액 모드 선택 시 원가 소스 토글 노출
+- [ ] 상품명 ▶ 클릭 시 옵션별 상세 펼쳐짐
+- [ ] 판매되지 않은 재고 섹션에 데이터 채워짐
