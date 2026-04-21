@@ -19,7 +19,12 @@ export interface PersistedData {
   products:     never[]
   dateRangePreset?: string
   hasData: boolean
-  stockSummary: { total_stock: number; stock_value: number }
+  stockSummary: {
+    total_stock: number
+    stock_value: number            // 호환용 (= stock_value_master)
+    stock_value_master?: number    // 상품마스터 원가 기준
+    stock_value_coupang?: number   // 쿠팡 매입가 기준
+  }
   daily26: { date: string; qty: number }[]
   daily25: { date: string; qty: number }[]
   daily24: { date: string; qty: number }[]
@@ -96,18 +101,22 @@ export async function loadData(): Promise<PersistedData | null> {
     ])
 
     // products 페이지네이션으로 전체 로드 (barcode→name/season/image_url 매핑용)
-    // season/image_url/category는 존재하지 않을 수도 있음 → 실패 시 fallback
+    // season/image_url/category/hq_stock 는 존재하지 않을 수도 있음 → 실패 시 fallback
     let productsRaw: Record<string,unknown>[] = []
     try {
-      productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category&barcode=not.is.null&name=not.is.null')
+      productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category,hq_stock&barcode=not.is.null&name=not.is.null')
     } catch {
-      // season/image_url/category 컬럼이 없는 경우 대비
-      productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost&barcode=not.is.null&name=not.is.null')
+      try {
+        productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category&barcode=not.is.null&name=not.is.null')
+      } catch {
+        // season/image_url/category 컬럼이 없는 경우 대비
+        productsRaw = await fetchAllPages('products?select=barcode,name,option_value,cost&barcode=not.is.null&name=not.is.null')
+      }
     }
 
     interface ProductInfo {
       name: string; option: string; cost: number;
-      season: string; imageUrl: string; category: string
+      season: string; imageUrl: string; category: string; hqStock: number
     }
     const barcodeMap = new Map<string, ProductInfo>()
     productsRaw.forEach(r => {
@@ -119,6 +128,7 @@ export async function loadData(): Promise<PersistedData | null> {
         season:   String(r['season'] || ''),
         imageUrl: String(r['image_url'] || ''),
         category: String(r['category'] || ''),
+        hqStock:  Number(r['hq_stock'] || 0),
       })
     })
 
@@ -178,7 +188,12 @@ export async function loadData(): Promise<PersistedData | null> {
       supplyData: (supplyRes.data  || []) as Record<string,unknown>[],
       hasData: salesData.length > 0,
       dateRangePreset: 'yesterday',
-      stockSummary: stockSummary as { total_stock: number; stock_value: number },
+      stockSummary: stockSummary as {
+        total_stock: number
+        stock_value: number
+        stock_value_master?: number
+        stock_value_coupang?: number
+      },
       daily26: d26, daily25: d25, daily24: d24,
       latestSaleDate,
     }
