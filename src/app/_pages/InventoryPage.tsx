@@ -243,11 +243,14 @@ export default function InventoryPage() {
           : deadSummaries)
       : filtered
     return source
-      .filter(r => r.total_qty_range === 0 && (r.hq_stock + r.coupang_stock) > 0)
+      // 쿠팡재고 기준: 기간 내 판매 0 & 쿠팡재고 > 0
+      .filter(r => r.total_qty_range === 0 && r.coupang_stock > 0)
       .map(r => ({
         ...r,
-        total_stock: r.hq_stock + r.coupang_stock,
-        stock_value: stockValueOf(r),
+        total_stock: r.coupang_stock,   // 쿠팡 재고만 표시
+        stock_value: r.coupang_stock * (costSource === 'master'
+          ? (r.cost_avg > 0 ? r.cost_avg : r.coupang_cost_avg)
+          : (r.coupang_cost_avg > 0 ? r.coupang_cost_avg : r.cost_avg)),
       }))
       .sort((a, b) => viewMode === 'qty'
         ? b.total_stock - a.total_stock
