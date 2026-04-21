@@ -44,13 +44,19 @@ type InventoryRow = {
   total_qty_range: number
 }
 
-// 카테고리 자동 추출: 상품명 맨 앞 - 전까지. 영숫자만이면 '기타'
-function extractCategory(name: string): string {
-  if (!name) return '기타'
-  const idx = name.indexOf('-')
-  const head = (idx > 0 ? name.slice(0, idx) : name).trim()
-  if (!head || /^[A-Za-z0-9_]+$/.test(head)) return '기타'
-  return head
+// 카테고리 자동 추출: 판매현황 탭과 동일한 규칙 사용
+// 상품명의 '-' 앞부분. 단, 한글 없고 영숫자 코드 패턴이면 '기타'
+const CODE_PATTERN = /^[A-Za-z0-9._-]+$/
+function extractCategory(productName: string): string {
+  if (!productName) return '기타'
+  const idx = productName.indexOf('-')
+  const head = idx > 0 ? productName.slice(0, idx) : productName
+  const trimmed = head.trim()
+  if (!trimmed) return '기타'
+  const hasKorean = /[\uAC00-\uD7A3]/.test(trimmed)
+  if (!hasKorean && CODE_PATTERN.test(trimmed)) return '기타'
+  if (!hasKorean && trimmed.length > 15) return '기타'
+  return trimmed
 }
 
 const SEASON_COLORS = ['#3B82F6', '#8B5CF6', '#F59E0B', '#10B981', '#EF4444', '#6B7280', '#EC4899']
@@ -73,8 +79,10 @@ export default function InventoryPage() {
 
   const [from, setFrom] = useState(defaultFrom)
   const [to, setTo] = useState(defaultTo)
-  const [category, setCategory] = useState('전체')
   const [search, setSearch] = useState('')
+  // 미운동 재고용 별도 기간 (기본 상단과 동일하게 시작)
+  const [deadFrom, setDeadFrom] = useState(defaultFrom)
+  const [deadTo, setDeadTo] = useState(defaultTo)
   const [viewMode, setViewMode] = useState<'qty' | 'amt'>('qty')
   const [costSource, setCostSource] = useState<'master' | 'coupang'>('coupang')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -88,12 +96,14 @@ export default function InventoryPage() {
   useEffect(() => {
     if (state.latestSaleDate) {
       setTo(state.latestSaleDate)
+      setDeadTo(state.latestSaleDate)
       const d = new Date(state.latestSaleDate); d.setDate(d.getDate() - 6)
       setFrom(toYMD(d))
+      setDeadFrom(toYMD(d))
     }
   }, [state.latestSaleDate])
 
-  // ── 데이터 로드 ──
+  // ── 데이터 로드 (메인 테이블 / 차트용) ──
   useEffect(() => {
     if (!from || !to) return
     setLoading(true)
@@ -110,13 +120,42 @@ export default function InventoryPage() {
           daily_sales:   Number(r.daily_sales || 0),
           total_qty_range: Number(r.total_qty_range || 0),
           days_left:     r.days_left == null ? null : Number(r.days_left),
-          category:      r.category && r.category.trim() ? r.category : extractCategory(r.name),
+          category:      extractCategory(r.name),  // 상품명 앞부분 기준으로 통일 (판매현황과 동일)
           season:        r.season && r.season.trim() ? r.season : '미지정',
         })))
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [from, to])
+
+  // ── 미운동 재고 별도 로드 (deadFrom/deadTo 기간 판매 기준) ──
+  const [deadRows, setDeadRows] = useState<InventoryRow[]>([])
+  useEffect(() => {
+    if (!deadFrom || !deadTo) return
+    // 메인 기간과 같으면 rows 재사용 → 불필요한 RPC 호출 방지
+    if (deadFrom === from && deadTo === to) {
+      setDeadRows([])  // rows 사용 신호
+      return
+    }
+    rpc('get_inventory_detail', { p_from: deadFrom, p_to: deadTo })
+      .then((data: unknown) => {
+        const arr = Array.isArray(data) ? (data as InventoryRow[]) : []
+        setDeadRows(arr.map(r => ({
+          ...r,
+          coupang_stock: Number(r.coupang_stock || 0),
+          supply_qty:    Number(r.supply_qty || 0),
+          hq_stock:      Number(r.hq_stock || 0),
+          cost:          Number(r.cost || 0),
+          coupang_cost:  Number(r.coupang_cost || 0),
+          daily_sales:   Number(r.daily_sales || 0),
+          total_qty_range: Number(r.total_qty_range || 0),
+          days_left:     r.days_left == null ? null : Number(r.days_left),
+          category:      extractCategory(r.name),
+          season:        r.season && r.season.trim() ? r.season : '미지정',
+        })))
+      })
+      .catch(() => {})
+  }, [deadFrom, deadTo, from, to])
 
   // ── 원가 선택 헬퍼 ──
   // costSource에 따라 master 원가 또는 쿠팡 매입가 반환
@@ -126,23 +165,15 @@ export default function InventoryPage() {
     return r.coupang_cost > 0 ? r.coupang_cost : r.cost
   }
 
-  // ── 카테고리 옵션 목록 ──
-  const categoryOptions = useMemo(() => {
-    const set = new Set<string>()
-    rows.forEach(r => set.add(r.category || '기타'))
-    return ['전체', ...Array.from(set).sort()]
-  }, [rows])
-
-  // ── 검색/카테고리 필터 적용 ──
+  // ── 검색 필터 적용 ──
   const filtered = useMemo(() => {
-    return rows.filter(r => {
-      const matchCat = category === '전체' || r.category === category
-      const matchSearch = !search ||
-        (r.name + r.option_value + r.barcode + r.season + r.category)
-          .toLowerCase().includes(search.toLowerCase())
-      return matchCat && matchSearch
-    })
-  }, [rows, category, search])
+    if (!search) return rows
+    const s = search.toLowerCase()
+    return rows.filter(r =>
+      (r.name + r.option_value + r.barcode + r.season + r.category)
+        .toLowerCase().includes(s)
+    )
+  }, [rows, search])
 
   // ── 상품명 기준 그룹핑 ──
   type ProductGroup = {
@@ -226,7 +257,7 @@ export default function InventoryPage() {
   const totalPages = Math.max(1, Math.ceil(sortedGroups.length / PAGE_SIZE))
   const pagedGroups = sortedGroups.slice(0, page * PAGE_SIZE)
 
-  useEffect(() => { setPage(1) }, [from, to, category, search, sortBy, sortDesc, viewMode])
+  useEffect(() => { setPage(1) }, [from, to, search, sortBy, sortDesc, viewMode])
 
   // ── 시즌별 재고 비중 ──
   const seasonChart = useMemo(() => {
@@ -262,9 +293,18 @@ export default function InventoryPage() {
       .slice(0, 10)
   }, [rows, viewMode, costSource])
 
-  // ── Dead Stock ──
+  // ── 미운동 재고 ──
+  // deadRows가 있으면 그걸 쓰고 (별도 기간), 없으면 filtered(메인 기간)를 사용
   const deadStock = useMemo(() => {
-    return filtered
+    // deadRows가 비어있다는 건 "메인 기간과 동일" 신호 → filtered 사용
+    const source = deadRows.length > 0
+      ? (search
+          ? deadRows.filter(r =>
+              (r.name + r.option_value + r.barcode + r.season + r.category)
+                .toLowerCase().includes(search.toLowerCase()))
+          : deadRows)
+      : filtered
+    return source
       .filter(r => r.total_qty_range === 0 && (r.hq_stock + r.coupang_stock) > 0)
       .map(r => ({
         ...r,
@@ -276,7 +316,7 @@ export default function InventoryPage() {
           ? b.total_stock - a.total_stock
           : b.stock_value - a.stock_value,
       )
-  }, [filtered, viewMode, costSource])
+  }, [deadRows, filtered, search, viewMode, costSource])
 
   const deadStockTotal = useMemo(() => {
     return deadStock.reduce((s, d) => s + (viewMode === 'qty' ? d.total_stock : d.stock_value), 0)
@@ -299,67 +339,48 @@ export default function InventoryPage() {
     <div>
       {/* ── 필터 바 ── */}
       <div className="card" style={{ marginBottom: 12 }}>
-        <div className="cb" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+        <div className="cb" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '12px 14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 기간</span>
-            <input type="date" value={from} onChange={e => setFrom(e.target.value)}
-              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)' }} />
-            <span style={{ fontSize: 11, color: 'var(--t3)' }}>~</span>
-            <input type="date" value={to} onChange={e => setTo(e.target.value)}
-              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)' }} />
-            {[7, 14, 30].map(d => (
-              <button key={d} onClick={() => {
-                const end = new Date(state.latestSaleDate || new Date())
-                const start = new Date(end); start.setDate(end.getDate() - (d - 1))
-                setFrom(toYMD(start)); setTo(toYMD(end))
-              }} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontWeight: 600 }}>
-                {d}일
-              </button>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>🏷️ 카테고리</span>
-            <select value={category} onChange={e => setCategory(e.target.value)}
-              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-              {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <input type="date" className="date-input" value={from} onChange={e => setFrom(e.target.value)} />
+            <span className="date-range-sep">~</span>
+            <input type="date" className="date-input" value={to} onChange={e => setTo(e.target.value)} />
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button onClick={() => setViewMode('qty')}
-              style={{
-                fontSize: 12, padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 700,
-                border: '1px solid var(--border)',
-                background: viewMode === 'qty' ? 'var(--blue)' : 'var(--bg)',
-                color: viewMode === 'qty' ? '#fff' : 'var(--t2)',
-              }}>수량</button>
-            <button onClick={() => setViewMode('amt')}
-              style={{
-                fontSize: 12, padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 700,
-                border: '1px solid var(--border)',
-                background: viewMode === 'amt' ? 'var(--blue)' : 'var(--bg)',
-                color: viewMode === 'amt' ? '#fff' : 'var(--t2)',
-              }}>금액</button>
+            <div style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #E4E7EC' }}>
+              <button onClick={() => setViewMode('qty')}
+                style={{
+                  padding: '8px 14px', fontSize: 12, fontWeight: 800, border: 'none', cursor: 'pointer',
+                  background: viewMode === 'qty' ? 'var(--blue)' : '#fff',
+                  color: viewMode === 'qty' ? '#fff' : 'var(--t2)',
+                }}>수량 보기</button>
+              <button onClick={() => setViewMode('amt')}
+                style={{
+                  padding: '8px 14px', fontSize: 12, fontWeight: 800, border: 'none', cursor: 'pointer',
+                  background: viewMode === 'amt' ? 'var(--blue)' : '#fff',
+                  color: viewMode === 'amt' ? '#fff' : 'var(--t2)',
+                }}>금액 보기</button>
+            </div>
 
             {viewMode === 'amt' && (
               <>
                 <div style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 4px' }} />
                 <span style={{ fontSize: 11, color: 'var(--t3)', fontWeight: 600 }}>원가</span>
-                <button onClick={() => setCostSource('master')}
-                  style={{
-                    fontSize: 11, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', fontWeight: 700,
-                    border: '1px solid var(--border)',
-                    background: costSource === 'master' ? 'var(--purple)' : 'var(--bg)',
-                    color: costSource === 'master' ? '#fff' : 'var(--t2)',
-                  }} title="상품마스터(이지어드민) 원가 기준">마스터</button>
-                <button onClick={() => setCostSource('coupang')}
-                  style={{
-                    fontSize: 11, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', fontWeight: 700,
-                    border: '1px solid var(--border)',
-                    background: costSource === 'coupang' ? 'var(--purple)' : 'var(--bg)',
-                    color: costSource === 'coupang' ? '#fff' : 'var(--t2)',
-                  }} title="쿠팡 허브 파일의 매입원가 기준">쿠팡</button>
+                <div style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #E4E7EC' }}>
+                  <button onClick={() => setCostSource('master')}
+                    style={{
+                      padding: '7px 12px', fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
+                      background: costSource === 'master' ? 'var(--purple)' : '#fff',
+                      color: costSource === 'master' ? '#fff' : 'var(--t2)',
+                    }} title="상품마스터(이지어드민) 원가 기준">마스터</button>
+                  <button onClick={() => setCostSource('coupang')}
+                    style={{
+                      padding: '7px 12px', fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
+                      background: costSource === 'coupang' ? 'var(--purple)' : '#fff',
+                      color: costSource === 'coupang' ? '#fff' : 'var(--t2)',
+                    }} title="쿠팡 허브 매입가 기준">쿠팡</button>
+                </div>
               </>
             )}
           </div>
@@ -424,14 +445,20 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* ── Dead Stock ── */}
+      {/* ── 미운동 재고 ── */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">💤</div>
-            <div><div className="ch-title">판매되지 않은 재고</div>
-              <div className="ch-sub">{from} ~ {to} 기간 판매 0 · 재고 보유 {deadStock.length}개 상품
+            <div><div className="ch-title">미운동 재고</div>
+              <div className="ch-sub">{deadFrom} ~ {deadTo} 기간 판매 0 · 재고 보유 {deadStock.length}개 상품
                 {viewMode === 'qty' ? ` · 총 ${fmt(deadStockTotal)}개` : ` · 총 ${fmtMoney(deadStockTotal)}원`}</div>
             </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📅 기간</span>
+            <input type="date" className="date-input" value={deadFrom} onChange={e => setDeadFrom(e.target.value)} />
+            <span className="date-range-sep">~</span>
+            <input type="date" className="date-input" value={deadTo} onChange={e => setDeadTo(e.target.value)} />
           </div>
         </div>
         <div className="cb">
@@ -458,7 +485,7 @@ export default function InventoryPage() {
                             onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
                         : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
                       </td>
-                      <td style={{ fontWeight: 700, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
+                      <td style={{ fontWeight: 700, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
                       <td style={{ color: 'var(--t3)', fontSize: 11 }}>{r.option_value || '—'}</td>
                       <td style={{ fontSize: 11 }}>{r.season}</td>
                       <td style={{ fontSize: 11 }}>{r.category}</td>
@@ -530,10 +557,18 @@ export default function InventoryPage() {
                               onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
                           : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
                         </td>
-                        <td style={{ fontWeight: 700, maxWidth: 260 }}>
-                          <span style={{ marginRight: 6, color: 'var(--t3)', fontSize: 10 }}>{isOpen ? '▼' : '▶'}</span>
-                          {g.name}
-                          <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--t3)' }}>({g.options.length}옵션)</span>
+                        <td style={{ fontWeight: 700 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ color: 'var(--t3)', fontSize: 10 }}>{isOpen ? '▼' : '▶'}</span>
+                            <div style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {g.name}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>
+                            {g.category && <span className="badge b-gr" style={{ fontSize: 10 }}>{g.category}</span>}
+                            {g.season   && <span className="badge b-bl" style={{ fontSize: 10 }}>{g.season}</span>}
+                            <span style={{ fontSize: 10, color: 'var(--t3)' }}>옵션 {g.options.length}개</span>
+                          </div>
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>
                           {valueFor(g.hq_stock_sum, g.cost_avg)}
