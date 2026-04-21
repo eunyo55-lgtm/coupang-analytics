@@ -7,15 +7,29 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Responsi
 const SUPABASE_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
 
-async function rpc(fn: string, params: Record<string,unknown> = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: 'POST',
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-  const data = await res.json()
-  if (data?.code) { console.warn('[RPC]', fn, data.message); return [] }
-  return data
+async function rpc(fn: string, params: Record<string,unknown> = {}, timeoutMs = 15000) {
+  const ctrl = new AbortController()
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) {
+      console.warn(`[RPC] ${fn} HTTP ${res.status}`, await res.text().catch(()=>''))
+      return []
+    }
+    const data = await res.json()
+    if (data?.code) { console.warn('[RPC]', fn, data.message); return [] }
+    return data
+  } catch (e) {
+    console.warn(`[RPC] ${fn} network error:`, e)
+    return []
+  } finally {
+    clearTimeout(tid)
+  }
 }
 
 // ── 판매 추이 모달: 특정 상품의 3개년 일별 판매량을 RPC로 조회 ──
@@ -156,7 +170,19 @@ export default function DashboardPage() {
     const d25=latestDate.replace('2026','2025')
     const w25f=weekRange.from.replace('2026','2025'), w25t=weekRange.to.replace('2026','2025')
     const c25t=cumRange.to.replace('2026','2025')
-    Promise.all([
+
+    // Promise.allSettled 사용: 하나가 실패해도 나머지는 표시
+    // 각 RPC 실패 시 콘솔 경고 + 해당 카드만 null 유지
+    const pickRow = (res: PromiseSettledResult<unknown>): {total_qty?:number;total_revenue?:number} | null => {
+      if (res.status !== 'fulfilled') { console.warn('[KPI] RPC rejected:', res.reason); return null }
+      const v = res.value as unknown
+      if (!Array.isArray(v) || v.length === 0) return null
+      return v[0] as {total_qty?:number;total_revenue?:number}
+    }
+    const toKpi = (row: {total_qty?:number;total_revenue?:number}|null) =>
+      row ? { qty: Number(row.total_qty||0), rev: Number(row.total_revenue||0) } : null
+
+    Promise.allSettled([
       rpc('get_kpi_by_date',{target_date:latestDate}),
       rpc('get_kpi_range',{date_from:weekRange.from,date_to:weekRange.to}),
       rpc('get_kpi_range',{date_from:cumRange.from,date_to:cumRange.to}),
@@ -164,12 +190,20 @@ export default function DashboardPage() {
       rpc('get_kpi_range',{date_from:w25f,date_to:w25t}),
       rpc('get_kpi_range',{date_from:'2025-01-01',date_to:c25t}),
     ]).then(([y,w,c,y25,w25,c25])=>{
-      setKpiYest({qty:Number(y[0]?.total_qty||0),rev:Number(y[0]?.total_revenue||0)})
-      setKpiWeek({qty:Number(w[0]?.total_qty||0),rev:Number(w[0]?.total_revenue||0)})
-      setKpiCum({qty:Number(c[0]?.total_qty||0),rev:Number(c[0]?.total_revenue||0)})
-      setKpiYest25({qty:Number(y25[0]?.total_qty||0),rev:Number(y25[0]?.total_revenue||0)})
-      setKpiWeek25({qty:Number(w25[0]?.total_qty||0),rev:Number(w25[0]?.total_revenue||0)})
-      setKpiCum25({qty:Number(c25[0]?.total_qty||0),rev:Number(c25[0]?.total_revenue||0)})
+      // null 체크 후 state 업데이트. 실패한 카드는 이전 값 유지 (또는 null)
+      const yKpi = toKpi(pickRow(y))
+      const wKpi = toKpi(pickRow(w))
+      const cKpi = toKpi(pickRow(c))
+      const y25Kpi = toKpi(pickRow(y25))
+      const w25Kpi = toKpi(pickRow(w25))
+      const c25Kpi = toKpi(pickRow(c25))
+      // 실패한 경우 0이 아닌 null 유지 → "로딩..." 표시
+      setKpiYest(yKpi ?? {qty:0,rev:0})
+      setKpiWeek(wKpi ?? {qty:0,rev:0})
+      setKpiCum(cKpi ?? {qty:0,rev:0})
+      setKpiYest25(y25Kpi ?? {qty:0,rev:0})
+      setKpiWeek25(w25Kpi ?? {qty:0,rev:0})
+      setKpiCum25(c25Kpi ?? {qty:0,rev:0})
     })
   },[latestDate,weekRange.from,weekRange.to])
 
@@ -178,16 +212,24 @@ export default function DashboardPage() {
     setLoadingTop(true)
     const from24=topFrom.replace('2026','2024'), to24=topTo.replace('2026','2024')
     const from25=topFrom.replace('2026','2025'), to25=topTo.replace('2026','2025')
-    Promise.all([
+    const arr = <T,>(r: PromiseSettledResult<unknown>): T[] => {
+      if (r.status !== 'fulfilled') { console.warn('[TOP] rejected:', r.reason); return [] }
+      return Array.isArray(r.value) ? (r.value as T[]) : []
+    }
+    Promise.allSettled([
       rpc('get_top_products',{date_from:topFrom,date_to:topTo,top_n:10}),
       rpc('get_top_products',{date_from:from25,date_to:to25,top_n:30}),
       rpc('get_top_products',{date_from:from24,date_to:to24,top_n:30}),
       rpc('get_top_stock',{top_n:10}),
-    ]).then(([p26,p25,p24,stocks])=>{
-      const map25=new Map<string,number>(); (p25||[]).forEach((r:TopProduct)=>map25.set(r.product_name,r.total_qty))
-      const map24=new Map<string,number>(); (p24||[]).forEach((r:TopProduct)=>map24.set(r.product_name,r.total_qty))
-      setTopProducts((p26||[]).map((r:TopProduct)=>({...r,qty_26:r.total_qty,qty_25:map25.get(r.product_name)||0,qty_24:map24.get(r.product_name)||0})))
-      setTopStock(stocks||[])
+    ]).then(([r26,r25,r24,rs])=>{
+      const p26 = arr<TopProduct>(r26)
+      const p25 = arr<TopProduct>(r25)
+      const p24 = arr<TopProduct>(r24)
+      const stocks = arr<{product_name:string;image_url:string;total_stock:number;stock_value:number;prev_week_stock?:number}>(rs)
+      const map25=new Map<string,number>(); p25.forEach(r=>map25.set(r.product_name,r.total_qty))
+      const map24=new Map<string,number>(); p24.forEach(r=>map24.set(r.product_name,r.total_qty))
+      setTopProducts(p26.map(r=>({...r,qty_26:r.total_qty,qty_25:map25.get(r.product_name)||0,qty_24:map24.get(r.product_name)||0})))
+      setTopStock(stocks)
       setLoadingTop(false)
     })
   },[topFrom,topTo])
