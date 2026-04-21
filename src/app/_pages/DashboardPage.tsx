@@ -152,10 +152,10 @@ export default function DashboardPage() {
   const [kpiYest25,setKpiYest25]=useState<{qty:number,rev:number}|null>(null)
   const [kpiWeek25,setKpiWeek25]=useState<{qty:number,rev:number}|null>(null)
   const [kpiCum25,setKpiCum25]=useState<{qty:number,rev:number}|null>(null)
-  const [chartFrom,setChartFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return toYMD(d)})
-  const [chartTo,setChartTo]=useState(latestDate||toYMD(new Date()))
-  const [topFrom,setTopFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return toYMD(d)})
-  const [topTo,setTopTo]=useState(latestDate||toYMD(new Date()))
+  const [chartFrom,setChartFrom]=useState('')
+  const [chartTo,setChartTo]=useState('')
+  const [topFrom,setTopFrom]=useState('')
+  const [topTo,setTopTo]=useState('')
   type TopProduct={product_name:string;image_url:string;total_qty:number;total_revenue:number;qty_24?:number;qty_25?:number;qty_26?:number}
   const [topProducts,setTopProducts]=useState<TopProduct[]>([])
   const [topStock,setTopStock]=useState<{product_name:string;image_url:string;total_stock:number;stock_value:number;prev_week_stock?:number}[]>([])
@@ -163,16 +163,22 @@ export default function DashboardPage() {
   const [salesModal,setSalesModal]=useState<string|null>(null)
   const [stockModal,setStockModal]=useState<{name:string;history:{week:string;qty:number}[]}|null>(null)
 
-  useEffect(()=>{if(latestDate){setChartTo(latestDate);setTopTo(latestDate)}},[latestDate])
+  // latestDate 로드 후 차트/TOP 기간 초기화 (30일 전 ~ latestDate)
+  useEffect(()=>{
+    if(!latestDate) return
+    const d=new Date(latestDate); d.setDate(d.getDate()-30)
+    const from30 = toYMD(d)
+    setChartFrom(from30); setChartTo(latestDate)
+    setTopFrom(from30); setTopTo(latestDate)
+  },[latestDate])
 
   useEffect(()=>{
     if(!latestDate) return
+    let cancelled = false
     const d25=latestDate.replace('2026','2025')
     const w25f=weekRange.from.replace('2026','2025'), w25t=weekRange.to.replace('2026','2025')
     const c25t=cumRange.to.replace('2026','2025')
 
-    // Promise.allSettled 사용: 하나가 실패해도 나머지는 표시
-    // 각 RPC 실패 시 콘솔 경고 + 해당 카드만 null 유지
     const pickRow = (res: PromiseSettledResult<unknown>): {total_qty?:number;total_revenue?:number} | null => {
       if (res.status !== 'fulfilled') { console.warn('[KPI] RPC rejected:', res.reason); return null }
       const v = res.value as unknown
@@ -190,14 +196,13 @@ export default function DashboardPage() {
       rpc('get_kpi_range',{date_from:w25f,date_to:w25t}),
       rpc('get_kpi_range',{date_from:'2025-01-01',date_to:c25t}),
     ]).then(([y,w,c,y25,w25,c25])=>{
-      // null 체크 후 state 업데이트. 실패한 카드는 이전 값 유지 (또는 null)
+      if (cancelled) return  // 이미 재호출 시작됨 → 이전 응답 무시
       const yKpi = toKpi(pickRow(y))
       const wKpi = toKpi(pickRow(w))
       const cKpi = toKpi(pickRow(c))
       const y25Kpi = toKpi(pickRow(y25))
       const w25Kpi = toKpi(pickRow(w25))
       const c25Kpi = toKpi(pickRow(c25))
-      // 실패한 경우 0이 아닌 null 유지 → "로딩..." 표시
       setKpiYest(yKpi ?? {qty:0,rev:0})
       setKpiWeek(wKpi ?? {qty:0,rev:0})
       setKpiCum(cKpi ?? {qty:0,rev:0})
@@ -205,10 +210,14 @@ export default function DashboardPage() {
       setKpiWeek25(w25Kpi ?? {qty:0,rev:0})
       setKpiCum25(c25Kpi ?? {qty:0,rev:0})
     })
+    return () => { cancelled = true }
   },[latestDate,weekRange.from,weekRange.to])
 
   useEffect(()=>{
+    // latestDate 로드되기 전에는 호출 스킵 (race condition 방지)
+    if(!latestDate) return
     if(!topFrom||!topTo) return
+    let cancelled = false
     setLoadingTop(true)
     const from24=topFrom.replace('2026','2024'), to24=topTo.replace('2026','2024')
     const from25=topFrom.replace('2026','2025'), to25=topTo.replace('2026','2025')
@@ -222,6 +231,7 @@ export default function DashboardPage() {
       rpc('get_top_products',{date_from:from24,date_to:to24,top_n:30}),
       rpc('get_top_stock',{top_n:10}),
     ]).then(([r26,r25,r24,rs])=>{
+      if (cancelled) return  // 최신 요청이 아니면 무시
       const p26 = arr<TopProduct>(r26)
       const p25 = arr<TopProduct>(r25)
       const p24 = arr<TopProduct>(r24)
@@ -232,7 +242,8 @@ export default function DashboardPage() {
       setTopStock(stocks)
       setLoadingTop(false)
     })
-  },[topFrom,topTo])
+    return () => { cancelled = true }
+  },[latestDate,topFrom,topTo])
 
   const yoyChartData=useMemo(()=>{
     const m26=new Map<string,number>(), m25=new Map<string,number>(), m24=new Map<string,number>()
