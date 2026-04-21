@@ -170,14 +170,18 @@ export function normalizeSalesData(
         qty:         qty || 0,
         revenue:     price * (qty || 1),
         isReturn,
-        stock,  // 현재재고수량
+        stock,              // 현재재고수량
+        coupangCost: price, // 쿠팡 매입원가 (재고액 계산용)
       }
     })
     .filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/))  // 날짜 형식 유효한 행만
 
   // ── Step 2: 날짜 + 바코드(option) 기준으로 집계 ──
   // 쿠팡 허브 파일은 동일 날짜에 같은 바코드가 여러 row로 나올 수 있음
-  // 출고수량(qty)은 SUM, 현재재고수량(stock)은 최신값(마지막 row) 사용
+  //  - 센터가 여러 개(FC/VF164 등) → 센터별로 각각 row가 생성됨
+  //  - 따라서 출고수량(qty)과 현재재고수량(stock) 모두 누적 합산(SUM)해야 함
+  //    예: O37A14UBR00F → FC=3 + VF164=15 = 18개가 실제 총 재고
+  //  - 매입원가(coupangCost)는 센터 무관하게 동일 → 0이 아닌 값으로 유지
   const aggMap = new Map<string, SalesRow>()
   for (const row of parsed) {
     const key = `${row.date}||${row.option}||${String(row.isReturn)}`
@@ -185,7 +189,9 @@ export function normalizeSalesData(
     if (existing) {
       existing.qty     += row.qty                     // 출고수량 누적 합산
       existing.revenue += row.revenue                 // 매출 누적 합산
-      existing.stock    = row.stock                   // 재고는 최신값(마지막 row)으로 덮어씀
+      existing.stock   = (existing.stock || 0) + row.stock  // 재고도 센터별 누적 합산
+      // 매입원가: 이미 값이 있으면 유지, 없을 때만 새 값으로 채움 (0 덮어씀 방지)
+      if (!existing.coupangCost && row.coupangCost) existing.coupangCost = row.coupangCost
     } else {
       aggMap.set(key, { ...row })
     }
