@@ -594,7 +594,7 @@ export default function SalesPage() {
                     style={{
                       width: 80, textAlign: 'right', padding: '8px 10px', background: '#F9FAFB',
                       borderBottom: '1px solid #E4E7EC', fontSize: 12,
-                      borderRight: '2px solid #E4E7EC', cursor: 'pointer',
+                      cursor: 'pointer',
                     }}
                   >
                     주간{sortIcon('week')}
@@ -644,7 +644,7 @@ export default function SalesPage() {
                         <td style={{ fontWeight: 800, color: 'var(--blue)', textAlign: 'right', padding: '6px 10px' }}>
                           {fmt(mode === 'qty' ? p.ytdQty : p.ytdRev)}
                         </td>
-                        <td style={{ fontWeight: 700, textAlign: 'right', padding: '6px 10px', borderRight: '2px solid #E4E7EC' }}>
+                        <td style={{ fontWeight: 700, textAlign: 'right', padding: '6px 10px' }}>
                           {fmt(mode === 'qty' ? p.weekQty : p.weekRev)}
                         </td>
                         {p.tableDaily.map(d => {
@@ -673,7 +673,7 @@ export default function SalesPage() {
                           <td style={{ textAlign: 'right', fontSize: 12, padding: '6px 10px' }}>
                             {fmt(mode === 'qty' ? o.ytdQty : o.ytdRev)}
                           </td>
-                          <td style={{ textAlign: 'right', fontSize: 12, padding: '6px 10px', borderRight: '2px solid #E4E7EC' }}>
+                          <td style={{ textAlign: 'right', fontSize: 12, padding: '6px 10px' }}>
                             {fmt(mode === 'qty' ? o.weekQty : o.weekRev)}
                           </td>
                           {o.tableDaily.map(d => {
@@ -706,7 +706,7 @@ export default function SalesPage() {
                     <td style={{ textAlign: 'right', color: 'var(--blue)', padding: '8px 10px' }}>
                       {fmt(mode === 'qty' ? totals.ytdQty : totals.ytdRev)}
                     </td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', borderRight: '2px solid #E4E7EC' }}>
+                    <td style={{ textAlign: 'right', padding: '8px 10px' }}>
                       {fmt(mode === 'qty' ? totals.weekQty : totals.weekRev)}
                     </td>
                     {totals.rangeDaily.map(d => {
