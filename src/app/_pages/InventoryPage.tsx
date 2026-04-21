@@ -19,36 +19,45 @@ async function rpc(fn: string, params: Record<string, unknown> = {}) {
       apikey: SUPA_KEY,
       Authorization: `Bearer ${SUPA_KEY}`,
       'Content-Type': 'application/json',
-      // Supabase PostgREST 기본 반환 제한 1000행 → 상한 확장 (재고 바코드 8천+ 대응)
-      'Range-Unit': 'items',
-      'Range': '0-49999',
     },
     body: JSON.stringify(params),
   })
   const data = await res.json()
   if (data?.code) { console.warn('[inventory RPC]', fn, data.message); return [] }
-  return data
+  return Array.isArray(data) ? data : []
 }
 
-type InventoryRow = {
-  barcode: string
+type SummaryRow = {
   name: string
-  option_value: string
+  image_url: string
   season: string
   category: string
-  image_url: string
-  cost: number          // 상품마스터 원가
-  coupang_cost: number  // 쿠팡 매입가
+  option_count: number
+  cost_avg: number
+  coupang_cost_avg: number
   hq_stock: number
   coupang_stock: number
   supply_qty: number
   daily_sales: number
   days_left: number | null
   total_qty_range: number
+  stock_value_master: number
+  stock_value_coupang: number
 }
 
-// 카테고리 자동 추출: 판매현황 탭과 동일한 규칙 사용
-// 상품명의 '-' 앞부분. 단, 한글 없고 영숫자 코드 패턴이면 '기타'
+type OptionRow = {
+  barcode: string
+  option_value: string
+  cost: number
+  coupang_cost: number
+  hq_stock: number
+  coupang_stock: number
+  supply_qty: number
+  daily_sales: number
+  days_left: number | null
+}
+
+// 카테고리 자동 추출 (판매현황과 동일 로직)
 const CODE_PATTERN = /^[A-Za-z0-9._-]+$/
 function extractCategory(productName: string): string {
   if (!productName) return '기타'
@@ -64,6 +73,7 @@ function extractCategory(productName: string): string {
 
 const SEASON_COLORS = ['#3B82F6', '#8B5CF6', '#F59E0B', '#10B981', '#EF4444', '#6B7280', '#EC4899']
 const CAT_COLOR = '#3B82F6'
+const PAGE_SIZE = 50
 
 export default function InventoryPage() {
   const { state } = useApp()
@@ -74,7 +84,6 @@ export default function InventoryPage() {
     return Math.round(n).toLocaleString('ko-KR')
   }
 
-  // ── 필터 state ──
   const defaultTo = state.latestSaleDate || toYMD(new Date(Date.now() - 86400000))
   const defaultFrom = useMemo(() => {
     const d = new Date(defaultTo); d.setDate(d.getDate() - 6); return toYMD(d)
@@ -83,18 +92,19 @@ export default function InventoryPage() {
   const [from, setFrom] = useState(defaultFrom)
   const [to, setTo] = useState(defaultTo)
   const [search, setSearch] = useState('')
-  // 미운동 재고용 별도 기간 (기본 상단과 동일하게 시작)
   const [deadFrom, setDeadFrom] = useState(defaultFrom)
   const [deadTo, setDeadTo] = useState(defaultTo)
   const [viewMode, setViewMode] = useState<'qty' | 'amt'>('qty')
   const [costSource, setCostSource] = useState<'master' | 'coupang'>('coupang')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [rows, setRows] = useState<InventoryRow[]>([])
-  const [loading, setLoading] = useState(false)
   const [sortBy, setSortBy] = useState<string>('daily_sales')
   const [sortDesc, setSortDesc] = useState(true)
   const [page, setPage] = useState(1)
-  const PAGE_SIZE = 50
+
+  const [summaries, setSummaries] = useState<SummaryRow[]>([])
+  const [deadSummaries, setDeadSummaries] = useState<SummaryRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [optionsCache, setOptionsCache] = useState<Record<string, OptionRow[]>>({})
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (state.latestSaleDate) {
@@ -106,241 +116,183 @@ export default function InventoryPage() {
     }
   }, [state.latestSaleDate])
 
-  // ── 데이터 로드 (메인 테이블 / 차트용) ──
+  const normalizeSummary = (r: SummaryRow): SummaryRow => ({
+    ...r,
+    hq_stock: Number(r.hq_stock || 0),
+    coupang_stock: Number(r.coupang_stock || 0),
+    supply_qty: Number(r.supply_qty || 0),
+    cost_avg: Number(r.cost_avg || 0),
+    coupang_cost_avg: Number(r.coupang_cost_avg || 0),
+    daily_sales: Number(r.daily_sales || 0),
+    days_left: r.days_left == null ? null : Number(r.days_left),
+    total_qty_range: Number(r.total_qty_range || 0),
+    stock_value_master: Number(r.stock_value_master || 0),
+    stock_value_coupang: Number(r.stock_value_coupang || 0),
+    option_count: Number(r.option_count || 0),
+    season: r.season && r.season.trim() ? r.season : '미지정',
+    category: extractCategory(r.name),
+  })
+
   useEffect(() => {
     if (!from || !to) return
     setLoading(true)
-    rpc('get_inventory_detail', { p_from: from, p_to: to })
-      .then((data: unknown) => {
-        const arr = Array.isArray(data) ? (data as InventoryRow[]) : []
-        setRows(arr.map(r => ({
-          ...r,
-          coupang_stock: Number(r.coupang_stock || 0),
-          supply_qty:    Number(r.supply_qty || 0),
-          hq_stock:      Number(r.hq_stock || 0),
-          cost:          Number(r.cost || 0),
-          coupang_cost:  Number(r.coupang_cost || 0),
-          daily_sales:   Number(r.daily_sales || 0),
-          total_qty_range: Number(r.total_qty_range || 0),
-          days_left:     r.days_left == null ? null : Number(r.days_left),
-          category:      extractCategory(r.name),  // 상품명 앞부분 기준으로 통일 (판매현황과 동일)
-          season:        r.season && r.season.trim() ? r.season : '미지정',
-        })))
+    rpc('get_inventory_summary', { p_from: from, p_to: to })
+      .then((data) => {
+        setSummaries((data as SummaryRow[]).map(normalizeSummary))
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [from, to])
 
-  // ── 미운동 재고 별도 로드 (deadFrom/deadTo 기간 판매 기준) ──
-  const [deadRows, setDeadRows] = useState<InventoryRow[]>([])
   useEffect(() => {
     if (!deadFrom || !deadTo) return
-    // 메인 기간과 같으면 rows 재사용 → 불필요한 RPC 호출 방지
     if (deadFrom === from && deadTo === to) {
-      setDeadRows([])  // rows 사용 신호
+      setDeadSummaries([])
       return
     }
-    rpc('get_inventory_detail', { p_from: deadFrom, p_to: deadTo })
-      .then((data: unknown) => {
-        const arr = Array.isArray(data) ? (data as InventoryRow[]) : []
-        setDeadRows(arr.map(r => ({
-          ...r,
-          coupang_stock: Number(r.coupang_stock || 0),
-          supply_qty:    Number(r.supply_qty || 0),
-          hq_stock:      Number(r.hq_stock || 0),
-          cost:          Number(r.cost || 0),
-          coupang_cost:  Number(r.coupang_cost || 0),
-          daily_sales:   Number(r.daily_sales || 0),
-          total_qty_range: Number(r.total_qty_range || 0),
-          days_left:     r.days_left == null ? null : Number(r.days_left),
-          category:      extractCategory(r.name),
-          season:        r.season && r.season.trim() ? r.season : '미지정',
-        })))
-      })
+    rpc('get_inventory_summary', { p_from: deadFrom, p_to: deadTo })
+      .then((data) => setDeadSummaries((data as SummaryRow[]).map(normalizeSummary)))
       .catch(() => {})
   }, [deadFrom, deadTo, from, to])
 
-  // ── 원가 선택 헬퍼 ──
-  // costSource에 따라 master 원가 또는 쿠팡 매입가 반환
-  // master가 0이면 쿠팡 매입가로 폴백 (그 반대도 마찬가지)
-  const priceOf = (r: InventoryRow) => {
-    if (costSource === 'master') return r.cost > 0 ? r.cost : r.coupang_cost
-    return r.coupang_cost > 0 ? r.coupang_cost : r.cost
+  const priceOfSummary = (r: SummaryRow): number => {
+    if (costSource === 'master') return r.cost_avg > 0 ? r.cost_avg : r.coupang_cost_avg
+    return r.coupang_cost_avg > 0 ? r.coupang_cost_avg : r.cost_avg
+  }
+  const stockValueOf = (r: SummaryRow): number =>
+    costSource === 'master'
+      ? (r.stock_value_master > 0 ? r.stock_value_master : r.stock_value_coupang)
+      : (r.stock_value_coupang > 0 ? r.stock_value_coupang : r.stock_value_master)
+  const priceOfOption = (o: OptionRow): number => {
+    if (costSource === 'master') return o.cost > 0 ? o.cost : o.coupang_cost
+    return o.coupang_cost > 0 ? o.coupang_cost : o.cost
   }
 
-  // ── 검색 필터 적용 ──
   const filtered = useMemo(() => {
-    if (!search) return rows
+    if (!search) return summaries
     const s = search.toLowerCase()
-    return rows.filter(r =>
-      (r.name + r.option_value + r.barcode + r.season + r.category)
-        .toLowerCase().includes(s)
-    )
-  }, [rows, search])
+    return summaries.filter(r => (r.name + r.season + r.category).toLowerCase().includes(s))
+  }, [summaries, search])
 
-  // ── 상품명 기준 그룹핑 ──
-  type ProductGroup = {
-    name: string
-    image_url: string
-    options: InventoryRow[]
-    hq_stock_sum: number
-    coupang_stock_sum: number
-    supply_qty_sum: number
-    daily_sales_sum: number
-    total_qty_sum: number
-    cost_avg: number
-    category: string
-    season: string
-    days_left_min: number | null
-  }
-
-  const grouped = useMemo<ProductGroup[]>(() => {
-    const map = new Map<string, ProductGroup>()
-    filtered.forEach(r => {
-      const g = map.get(r.name)
-      if (g) {
-        g.options.push(r)
-        g.hq_stock_sum      += r.hq_stock
-        g.coupang_stock_sum += r.coupang_stock
-        g.supply_qty_sum    += r.supply_qty
-        g.daily_sales_sum   += r.daily_sales
-        g.total_qty_sum     += r.total_qty_range
-        if (r.days_left != null) {
-          g.days_left_min = g.days_left_min == null
-            ? r.days_left
-            : Math.min(g.days_left_min, r.days_left)
-        }
-      } else {
-        map.set(r.name, {
-          name: r.name,
-          image_url: r.image_url,
-          options: [r],
-          hq_stock_sum: r.hq_stock,
-          coupang_stock_sum: r.coupang_stock,
-          supply_qty_sum: r.supply_qty,
-          daily_sales_sum: r.daily_sales,
-          total_qty_sum: r.total_qty_range,
-          cost_avg: priceOf(r),
-          category: r.category,
-          season: r.season,
-          days_left_min: r.days_left,
-        })
+  const sorted = useMemo(() => {
+    const arr = [...filtered]
+    const getVal = (r: SummaryRow): number | string => {
+      switch (sortBy) {
+        case 'name':          return r.name
+        case 'hq_stock':      return r.hq_stock
+        case 'coupang_stock': return r.coupang_stock
+        case 'supply_qty':    return r.supply_qty
+        case 'daily_sales':   return r.daily_sales
+        case 'days_left':     return r.days_left ?? 99999
+        default:              return r.daily_sales
       }
-    })
-    return Array.from(map.values()).map(g => ({
-      ...g,
-      cost_avg: g.options.length
-        ? g.options.reduce((s, o) => s + priceOf(o), 0) / g.options.length
-        : 0,
-    }))
-  }, [filtered, costSource])
-
-  // ── 정렬 ──
-  const sortedGroups = useMemo(() => {
-    const arr = [...grouped]
-    const keyMap: Record<string, (g: ProductGroup) => number | string> = {
-      name: g => g.name,
-      coupang_stock: g => g.coupang_stock_sum,
-      hq_stock: g => g.hq_stock_sum,
-      supply_qty: g => g.supply_qty_sum,
-      daily_sales: g => g.daily_sales_sum,
-      days_left: g => g.days_left_min ?? 99999,
     }
-    const keyFn = keyMap[sortBy] || keyMap.daily_sales
     arr.sort((a, b) => {
-      const va = keyFn(a), vb = keyFn(b)
+      const va = getVal(a), vb = getVal(b)
       if (typeof va === 'number' && typeof vb === 'number') {
         return sortDesc ? vb - va : va - vb
       }
-      return sortDesc ? String(vb).localeCompare(String(va)) : String(va).localeCompare(String(vb))
+      return sortDesc
+        ? String(vb).localeCompare(String(va), 'ko')
+        : String(va).localeCompare(String(vb), 'ko')
     })
     return arr
-  }, [grouped, sortBy, sortDesc])
+  }, [filtered, sortBy, sortDesc])
 
-  const totalPages = Math.max(1, Math.ceil(sortedGroups.length / PAGE_SIZE))
-  const pagedGroups = sortedGroups.slice(0, page * PAGE_SIZE)
+  const pagedSummaries = sorted.slice(0, page * PAGE_SIZE)
 
-  useEffect(() => { setPage(1) }, [from, to, search, sortBy, sortDesc, viewMode])
+  useEffect(() => { setPage(1) }, [from, to, search, sortBy, sortDesc, viewMode, costSource])
 
-  // ── 시즌별 재고 비중 ──
   const seasonChart = useMemo(() => {
     const map = new Map<string, { qty: number; value: number }>()
-    rows.forEach(r => {
+    summaries.forEach(r => {
       const s = r.season || '미지정'
-      const total = r.hq_stock + r.coupang_stock
+      const qty = r.hq_stock + r.coupang_stock
+      const value = stockValueOf(r)
       const cur = map.get(s) || { qty: 0, value: 0 }
-      cur.qty   += total
-      cur.value += total * priceOf(r)
+      cur.qty += qty
+      cur.value += value
       map.set(s, cur)
     })
     return Array.from(map.entries())
-      .map(([k, v]) => ({ name: k, value: viewMode === 'qty' ? v.qty : v.value, qty: v.qty, amt: v.value }))
+      .map(([k, v]) => ({ name: k, value: viewMode === 'qty' ? v.qty : v.value }))
       .filter(d => d.value > 0)
       .sort((a, b) => b.value - a.value)
-  }, [rows, viewMode, costSource])
+  }, [summaries, viewMode, costSource])
 
-  // ── 카테고리별 판매 비중 ──
   const categoryChart = useMemo(() => {
     const map = new Map<string, { qty: number; value: number }>()
-    rows.forEach(r => {
+    summaries.forEach(r => {
       const c = r.category || '기타'
       const cur = map.get(c) || { qty: 0, value: 0 }
-      cur.qty   += r.total_qty_range
-      cur.value += r.total_qty_range * priceOf(r)
+      cur.qty += r.total_qty_range
+      cur.value += r.total_qty_range * priceOfSummary(r)
       map.set(c, cur)
     })
     return Array.from(map.entries())
       .map(([k, v]) => ({ category: k, value: viewMode === 'qty' ? v.qty : v.value }))
       .filter(d => d.value > 0)
       .sort((a, b) => b.value - a.value)
-      .slice(0, 10)
-  }, [rows, viewMode, costSource])
+      .slice(0, 15)
+  }, [summaries, viewMode, costSource])
 
-  // ── 미운동 재고 ──
-  // deadRows가 있으면 그걸 쓰고 (별도 기간), 없으면 filtered(메인 기간)를 사용
   const deadStock = useMemo(() => {
-    // deadRows가 비어있다는 건 "메인 기간과 동일" 신호 → filtered 사용
-    const source = deadRows.length > 0
+    const source = deadSummaries.length > 0
       ? (search
-          ? deadRows.filter(r =>
-              (r.name + r.option_value + r.barcode + r.season + r.category)
-                .toLowerCase().includes(search.toLowerCase()))
-          : deadRows)
+          ? deadSummaries.filter(r => (r.name + r.season + r.category).toLowerCase().includes(search.toLowerCase()))
+          : deadSummaries)
       : filtered
     return source
       .filter(r => r.total_qty_range === 0 && (r.hq_stock + r.coupang_stock) > 0)
       .map(r => ({
         ...r,
         total_stock: r.hq_stock + r.coupang_stock,
-        stock_value: (r.hq_stock + r.coupang_stock) * priceOf(r),
+        stock_value: stockValueOf(r),
       }))
-      .sort((a, b) =>
-        viewMode === 'qty'
-          ? b.total_stock - a.total_stock
-          : b.stock_value - a.stock_value,
-      )
-  }, [deadRows, filtered, search, viewMode, costSource])
+      .sort((a, b) => viewMode === 'qty'
+        ? b.total_stock - a.total_stock
+        : b.stock_value - a.stock_value)
+  }, [deadSummaries, filtered, search, viewMode, costSource])
 
-  const deadStockTotal = useMemo(() => {
-    return deadStock.reduce((s, d) => s + (viewMode === 'qty' ? d.total_stock : d.stock_value), 0)
-  }, [deadStock, viewMode])
+  const deadStockTotal = useMemo(() =>
+    deadStock.reduce((s, d) => s + (viewMode === 'qty' ? d.total_stock : d.stock_value), 0),
+  [deadStock, viewMode])
 
-  // ── 헬퍼 ──
-  const toggleExpand = (name: string) => {
+  const toggleExpand = async (name: string) => {
     const s = new Set(expanded)
-    if (s.has(name)) s.delete(name); else s.add(name)
-    setExpanded(s)
+    if (s.has(name)) {
+      s.delete(name); setExpanded(s); return
+    }
+    s.add(name); setExpanded(s)
+    const cacheKey = `${name}||${from}||${to}`
+    if (optionsCache[cacheKey]) return
+    const data = await rpc('get_inventory_options', { p_name: name, p_from: from, p_to: to })
+    const opts = (data as OptionRow[]).map(o => ({
+      ...o,
+      cost: Number(o.cost || 0),
+      coupang_cost: Number(o.coupang_cost || 0),
+      hq_stock: Number(o.hq_stock || 0),
+      coupang_stock: Number(o.coupang_stock || 0),
+      supply_qty: Number(o.supply_qty || 0),
+      daily_sales: Number(o.daily_sales || 0),
+      days_left: o.days_left == null ? null : Number(o.days_left),
+    }))
+    setOptionsCache(c => ({ ...c, [cacheKey]: opts }))
   }
+
   const toggleSort = (key: string) => {
     if (sortBy === key) setSortDesc(!sortDesc)
     else { setSortBy(key); setSortDesc(true) }
   }
-  const valueFor = (qty: number, cost: number) =>
-    viewMode === 'qty' ? fmt(qty) : fmtMoney(qty * cost)
+
+  const valueForSummary = (qty: number, r: SummaryRow) =>
+    viewMode === 'qty' ? fmt(qty) : fmtMoney(qty * priceOfSummary(r))
+  const valueForOption = (qty: number, o: OptionRow) =>
+    viewMode === 'qty' ? fmt(qty) : fmtMoney(qty * priceOfOption(o))
 
   return (
     <div>
-      {/* ── 필터 바 ── */}
+      {/* 필터 바 */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="cb" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '12px 14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -349,40 +301,30 @@ export default function InventoryPage() {
             <span className="date-range-sep">~</span>
             <input type="date" className="date-input" value={to} onChange={e => setTo(e.target.value)} />
           </div>
-
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #E4E7EC' }}>
               <button onClick={() => setViewMode('qty')}
-                style={{
-                  padding: '8px 14px', fontSize: 12, fontWeight: 800, border: 'none', cursor: 'pointer',
+                style={{ padding: '8px 14px', fontSize: 12, fontWeight: 800, border: 'none', cursor: 'pointer',
                   background: viewMode === 'qty' ? 'var(--blue)' : '#fff',
-                  color: viewMode === 'qty' ? '#fff' : 'var(--t2)',
-                }}>수량 보기</button>
+                  color: viewMode === 'qty' ? '#fff' : 'var(--t2)' }}>수량 보기</button>
               <button onClick={() => setViewMode('amt')}
-                style={{
-                  padding: '8px 14px', fontSize: 12, fontWeight: 800, border: 'none', cursor: 'pointer',
+                style={{ padding: '8px 14px', fontSize: 12, fontWeight: 800, border: 'none', cursor: 'pointer',
                   background: viewMode === 'amt' ? 'var(--blue)' : '#fff',
-                  color: viewMode === 'amt' ? '#fff' : 'var(--t2)',
-                }}>금액 보기</button>
+                  color: viewMode === 'amt' ? '#fff' : 'var(--t2)' }}>금액 보기</button>
             </div>
-
             {viewMode === 'amt' && (
               <>
                 <div style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 4px' }} />
                 <span style={{ fontSize: 11, color: 'var(--t3)', fontWeight: 600 }}>원가</span>
                 <div style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #E4E7EC' }}>
                   <button onClick={() => setCostSource('master')}
-                    style={{
-                      padding: '7px 12px', fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
+                    style={{ padding: '7px 12px', fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
                       background: costSource === 'master' ? 'var(--purple)' : '#fff',
-                      color: costSource === 'master' ? '#fff' : 'var(--t2)',
-                    }} title="상품마스터(이지어드민) 원가 기준">마스터</button>
+                      color: costSource === 'master' ? '#fff' : 'var(--t2)' }}>마스터</button>
                   <button onClick={() => setCostSource('coupang')}
-                    style={{
-                      padding: '7px 12px', fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
+                    style={{ padding: '7px 12px', fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
                       background: costSource === 'coupang' ? 'var(--purple)' : '#fff',
-                      color: costSource === 'coupang' ? '#fff' : 'var(--t2)',
-                    }} title="쿠팡 허브 매입가 기준">쿠팡</button>
+                      color: costSource === 'coupang' ? '#fff' : 'var(--t2)' }}>쿠팡</button>
                 </div>
               </>
             )}
@@ -390,7 +332,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* ── 시즌 파이 + 카테고리 막대 ── */}
+      {/* 시즌 파이 + 카테고리 막대 */}
       <div className="g2" style={{ marginBottom: 12 }}>
         <div className="card">
           <div className="ch">
@@ -414,7 +356,7 @@ export default function InventoryPage() {
               </ResponsiveContainer>
             ) : (
               <div className="empty-st" style={{ height: 260 }}>
-                <div className="es-ico">🎨</div><div className="es-t">시즌 데이터 없음</div>
+                <div className="es-ico">🎨</div><div className="es-t">{loading ? '불러오는 중...' : '시즌 데이터 없음'}</div>
               </div>
             )}
           </div>
@@ -429,10 +371,10 @@ export default function InventoryPage() {
           </div>
           <div className="cb">
             {categoryChart.length > 0 ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={categoryChart} margin={{ top: 8, right: 16, left: 0, bottom: 5 }}>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={categoryChart} margin={{ top: 12, right: 16, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="category" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={60} />
+                  <XAxis dataKey="category" tick={{ fontSize: 10 }} interval={0} angle={-35} textAnchor="end" height={70} />
                   <YAxis tick={{ fontSize: 10 }} width={50}
                     tickFormatter={v => viewMode === 'qty' ? fmt(v) : fmtMoney(v)} />
                   <Tooltip formatter={(v: number) => viewMode === 'qty' ? fmt(v) + '개' : fmtMoney(v) + '원'} />
@@ -441,14 +383,14 @@ export default function InventoryPage() {
               </ResponsiveContainer>
             ) : (
               <div className="empty-st" style={{ height: 260 }}>
-                <div className="es-ico">📊</div><div className="es-t">판매 데이터 없음</div>
+                <div className="es-ico">📊</div><div className="es-t">{loading ? '불러오는 중...' : '판매 데이터 없음'}</div>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* ── 미운동 재고 ── */}
+      {/* 미운동 재고 */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">💤</div>
@@ -472,7 +414,6 @@ export default function InventoryPage() {
                   <tr>
                     <th style={{ width: 44 }}>이미지</th>
                     <th>상품명</th>
-                    <th>옵션</th>
                     <th>시즌</th>
                     <th>카테고리</th>
                     <th style={{ textAlign: 'right' }}>본사재고</th>
@@ -489,7 +430,6 @@ export default function InventoryPage() {
                         : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
                       </td>
                       <td style={{ fontWeight: 700, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
-                      <td style={{ color: 'var(--t3)', fontSize: 11 }}>{r.option_value || '—'}</td>
                       <td style={{ fontSize: 11 }}>{r.season}</td>
                       <td style={{ fontSize: 11 }}>{r.category}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(r.hq_stock)}</td>
@@ -509,7 +449,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* ── 메인 재고 현황 테이블 ── */}
+      {/* 메인 재고 테이블 */}
       <div className="card">
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📦</div>
@@ -519,7 +459,7 @@ export default function InventoryPage() {
         </div>
         <div className="cb">
           <div className="frow" style={{ marginBottom: 8 }}>
-            <input className="si" placeholder="🔍 상품명 · 옵션 · 바코드 · 시즌 · 카테고리 검색..."
+            <input className="si" placeholder="🔍 상품명 · 시즌 · 카테고리 검색..."
               value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           {loading ? (
@@ -530,29 +470,19 @@ export default function InventoryPage() {
                 <thead>
                   <tr>
                     <th style={{ width: 44 }}>이미지</th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('name')}>
-                      상품명 {sortBy === 'name' ? (sortDesc ? '▼' : '▲') : ''}
-                    </th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('hq_stock')}>
-                      본사재고 {sortBy === 'hq_stock' ? (sortDesc ? '▼' : '▲') : ''}
-                    </th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('coupang_stock')}>
-                      쿠팡재고 {sortBy === 'coupang_stock' ? (sortDesc ? '▼' : '▲') : ''}
-                    </th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('supply_qty')}>
-                      공급중 {sortBy === 'supply_qty' ? (sortDesc ? '▼' : '▲') : ''}
-                    </th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('daily_sales')}>
-                      일평균판매 {sortBy === 'daily_sales' ? (sortDesc ? '▼' : '▲') : ''}
-                    </th>
-                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('days_left')}>
-                      소진예상 {sortBy === 'days_left' ? (sortDesc ? '▼' : '▲') : ''}
-                    </th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('name')}>상품명 {sortBy === 'name' ? (sortDesc ? '▼' : '▲') : ''}</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('hq_stock')}>본사재고 {sortBy === 'hq_stock' ? (sortDesc ? '▼' : '▲') : ''}</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('coupang_stock')}>쿠팡재고 {sortBy === 'coupang_stock' ? (sortDesc ? '▼' : '▲') : ''}</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('supply_qty')}>공급중 {sortBy === 'supply_qty' ? (sortDesc ? '▼' : '▲') : ''}</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('daily_sales')}>일평균판매 {sortBy === 'daily_sales' ? (sortDesc ? '▼' : '▲') : ''}</th>
+                    <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('days_left')}>소진예상 {sortBy === 'days_left' ? (sortDesc ? '▼' : '▲') : ''}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pagedGroups.length > 0 ? pagedGroups.flatMap(g => {
+                  {pagedSummaries.length > 0 ? pagedSummaries.flatMap(g => {
                     const isOpen = expanded.has(g.name)
+                    const cacheKey = `${g.name}||${from}||${to}`
+                    const options = optionsCache[cacheKey]
                     const mainRow = (
                       <tr key={g.name} style={{ cursor: 'pointer' }} onClick={() => toggleExpand(g.name)}>
                         <td>{g.image_url
@@ -563,59 +493,50 @@ export default function InventoryPage() {
                         <td style={{ fontWeight: 700 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <span style={{ color: 'var(--t3)', fontSize: 10 }}>{isOpen ? '▼' : '▶'}</span>
-                            <div style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {g.name}
-                            </div>
+                            <div style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>
                           </div>
                           <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>
                             {g.category && <span className="badge b-gr" style={{ fontSize: 10 }}>{g.category}</span>}
                             {g.season   && <span className="badge b-bl" style={{ fontSize: 10 }}>{g.season}</span>}
-                            <span style={{ fontSize: 10, color: 'var(--t3)' }}>옵션 {g.options.length}개</span>
+                            <span style={{ fontSize: 10, color: 'var(--t3)' }}>옵션 {g.option_count}개</span>
                           </div>
                         </td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{valueForSummary(g.hq_stock, g)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{valueForSummary(g.coupang_stock, g)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--purple)' }}>{valueForSummary(g.supply_qty, g)}</td>
                         <td style={{ textAlign: 'right', fontWeight: 700 }}>
-                          {valueFor(g.hq_stock_sum, g.cost_avg)}
+                          {viewMode === 'qty' ? g.daily_sales.toFixed(1) : fmtMoney(g.daily_sales * priceOfSummary(g))}
                         </td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>
-                          {valueFor(g.coupang_stock_sum, g.cost_avg)}
-                        </td>
-                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--purple)' }}>
-                          {valueFor(g.supply_qty_sum, g.cost_avg)}
-                        </td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>
-                          {viewMode === 'qty' ? g.daily_sales_sum.toFixed(1) : fmtMoney(g.daily_sales_sum * g.cost_avg)}
-                        </td>
-                        <td style={{
-                          textAlign: 'right', fontWeight: 800,
-                          color:
-                            g.days_left_min == null ? 'var(--t3)' :
-                            g.days_left_min < 7  ? 'var(--red)' :
-                            g.days_left_min < 14 ? 'var(--amber)' : 'var(--green)',
-                        }}>
-                          {g.days_left_min == null ? '—' : `${fmt(g.days_left_min)}일`}
+                        <td style={{ textAlign: 'right', fontWeight: 800,
+                          color: g.days_left == null ? 'var(--t3)' : g.days_left < 7 ? 'var(--red)' : g.days_left < 14 ? 'var(--amber)' : 'var(--green)' }}>
+                          {g.days_left == null ? '—' : `${fmt(g.days_left)}일`}
                         </td>
                       </tr>
                     )
                     if (!isOpen) return [mainRow]
-                    const optionRows = g.options.map(o => (
+                    if (!options) {
+                      return [mainRow, (
+                        <tr key={g.name + '__loading'} style={{ background: 'var(--bg)' }}>
+                          <td colSpan={7} style={{ textAlign: 'center', fontSize: 11, color: 'var(--t3)', padding: '8px' }}>
+                            ⏳ 옵션 불러오는 중...
+                          </td>
+                        </tr>
+                      )]
+                    }
+                    const optionRows = options.map(o => (
                       <tr key={g.name + '_' + o.barcode} style={{ background: 'var(--bg)' }}>
                         <td></td>
                         <td style={{ paddingLeft: 28, fontSize: 11, color: 'var(--t2)' }}>
                           └ {o.option_value || '(옵션 없음)'} <span style={{ color: 'var(--t3)', fontSize: 10 }}>· {o.barcode}</span>
                         </td>
-                        <td style={{ textAlign: 'right', fontSize: 11 }}>{valueFor(o.hq_stock, priceOf(o))}</td>
-                        <td style={{ textAlign: 'right', fontSize: 11 }}>{valueFor(o.coupang_stock, priceOf(o))}</td>
-                        <td style={{ textAlign: 'right', fontSize: 11, color: 'var(--purple)' }}>{valueFor(o.supply_qty, priceOf(o))}</td>
+                        <td style={{ textAlign: 'right', fontSize: 11 }}>{valueForOption(o.hq_stock, o)}</td>
+                        <td style={{ textAlign: 'right', fontSize: 11 }}>{valueForOption(o.coupang_stock, o)}</td>
+                        <td style={{ textAlign: 'right', fontSize: 11, color: 'var(--purple)' }}>{valueForOption(o.supply_qty, o)}</td>
                         <td style={{ textAlign: 'right', fontSize: 11 }}>
-                          {viewMode === 'qty' ? o.daily_sales.toFixed(1) : fmtMoney(o.daily_sales * priceOf(o))}
+                          {viewMode === 'qty' ? o.daily_sales.toFixed(1) : fmtMoney(o.daily_sales * priceOfOption(o))}
                         </td>
-                        <td style={{
-                          textAlign: 'right', fontSize: 11, fontWeight: 700,
-                          color:
-                            o.days_left == null ? 'var(--t3)' :
-                            o.days_left < 7  ? 'var(--red)' :
-                            o.days_left < 14 ? 'var(--amber)' : 'var(--green)',
-                        }}>
+                        <td style={{ textAlign: 'right', fontSize: 11, fontWeight: 700,
+                          color: o.days_left == null ? 'var(--t3)' : o.days_left < 7 ? 'var(--red)' : o.days_left < 14 ? 'var(--amber)' : 'var(--green)' }}>
                           {o.days_left == null ? '—' : `${fmt(o.days_left)}일`}
                         </td>
                       </tr>
@@ -632,17 +553,17 @@ export default function InventoryPage() {
             </div>
           )}
 
-          {pagedGroups.length > 0 && pagedGroups.length < sortedGroups.length && (
+          {pagedSummaries.length > 0 && pagedSummaries.length < sorted.length && (
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
               <button onClick={() => setPage(p => p + 1)}
                 style={{ fontSize: 12, padding: '8px 20px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontWeight: 700 }}>
-                더 보기 ({pagedGroups.length} / {sortedGroups.length})
+                더 보기 ({pagedSummaries.length} / {sorted.length})
               </button>
             </div>
           )}
-          {pagedGroups.length > 0 && (
+          {pagedSummaries.length > 0 && (
             <div style={{ fontSize: 10, color: 'var(--t3)', textAlign: 'center', marginTop: 8 }}>
-              전체 {fmt(sortedGroups.length)}개 상품 · {fmt(filtered.length)}개 옵션 · 페이지 {page}/{totalPages}
+              전체 {fmt(sorted.length)}개 상품
             </div>
           )}
         </div>
