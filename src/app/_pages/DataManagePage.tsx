@@ -23,12 +23,13 @@ async function upsertDailySales(rows: SalesRow[], dispatchFn: LogDispatch) {
   if (!rows.length) return 0
 
   const data = rows.map(r => ({
-    date:        r.date,
-    barcode:     (r.option && r.option.length > 3) ? r.option : r.productName,
-    quantity:    r.qty,
-    stock:       r.stock ?? 0,
-    fc_quantity: 0,
-    vf_quantity: 0,
+    date:         r.date,
+    barcode:      (r.option && r.option.length > 3) ? r.option : r.productName,
+    quantity:     r.qty,
+    stock:        r.stock ?? 0,
+    coupang_cost: r.coupangCost ?? 0,  // 쿠팡 허브 파일의 매입원가
+    fc_quantity:  0,
+    vf_quantity:  0,
   })).filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && r.barcode)
 
   if (!data.length) return 0
@@ -76,6 +77,7 @@ async function upsertProducts(
   const seasonCol   = detectColumn(s0, ['시즌', 'season', '시즌구분'])
   const imageCol    = detectColumn(s0, ['이미지', 'image', '이미지URL', '이미지주소', 'image_url', '대표이미지'])
   const categoryCol = detectColumn(s0, ['카테고리', 'category', '분류', '상품분류', '대분류', '품목'])
+  const hqStockCol  = detectColumn(s0, ['가용재고', '본사재고', 'hq_stock', '가용수량', '현재고', '재고수량'])
 
   if (!bcCol && !nameCol) {
     dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 바코드/상품명 컬럼을 찾지 못해 products 저장 스킵` })
@@ -84,7 +86,7 @@ async function upsertProducts(
 
   dispatchFn({
     type: 'APPEND_LOG',
-    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol}`
+    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol} | 가용재고=${hqStockCol}`
   })
 
   const toStr = (v: unknown) => v != null ? String(v).trim() : ''
@@ -96,6 +98,7 @@ async function upsertProducts(
     season:       seasonCol   ? toStr(r[seasonCol])   : '',
     image_url:    imageCol    ? toStr(r[imageCol])    : '',
     category:     categoryCol ? toStr(r[categoryCol]) : '',
+    hq_stock:     hqStockCol  ? toNumber(r[hqStockCol]) : 0,
   })).filter(r => r.barcode)
 
   if (!mapped.length) {
