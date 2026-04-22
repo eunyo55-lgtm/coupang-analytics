@@ -98,7 +98,7 @@ export default function InventoryPage() {
   const [deadSeason, setDeadSeason] = useState('전체')
   const [viewMode, setViewMode] = useState<'qty' | 'amt'>('qty')
   const [costSource, setCostSource] = useState<'master' | 'coupang'>('coupang')
-  const [sortBy, setSortBy] = useState<string>('daily_sales')
+  const [sortBy, setSortBy] = useState<string>('coupang_stock')
   const [sortDesc, setSortDesc] = useState(true)
   const [page, setPage] = useState(1)
 
