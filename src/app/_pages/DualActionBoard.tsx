@@ -30,34 +30,6 @@ export type ActionBoardOption = {
 
 // ─── Helpers ───
 
-// 오즈키즈 시즌 라벨 → 시즌 기준일
-// - 사계절: null (프로모션 제외)
-// - 여름: 7/15
-// - 봄/가을: 4/15 또는 10/15 중 오늘과 가까운 기준일
-// - 겨울: 12/15
-function getSeasonDeadline(season: string, today: Date): Date | null {
-  const y = today.getFullYear()
-  const s = (season || '').trim()
-  if (!s || s === '사계절' || s === '미지정') return null
-  const makeDate = (month: number, day: number, year: number = y) =>
-    new Date(year, month - 1, day)
-
-  if (s === '여름') return makeDate(7, 15)
-  if (s === '겨울') return makeDate(12, 15)
-  if (s === '봄/가을' || s === '봄' || s === '가을') {
-    const spring = makeDate(4, 15)
-    const autumn = makeDate(10, 15)
-    const dSpring = Math.abs(today.getTime() - spring.getTime())
-    const dAutumn = Math.abs(today.getTime() - autumn.getTime())
-    return dSpring <= dAutumn ? spring : autumn
-  }
-  return null
-}
-
-function daysBetween(from: Date, to: Date): number {
-  return Math.round((to.getTime() - from.getTime()) / 86400000)
-}
-
 // 상품 단위 제안 수량 (정수 올림, 10단위 올림 없음)
 function calcOrderQtyProduct(r: ActionBoardRow): number {
   const need = (r.daily_sales * 14) - (r.coupang_stock + r.supply_qty)
@@ -92,12 +64,6 @@ const INITIAL_VISIBLE = 10
 const LOAD_MORE = 10
 
 export default function DualActionBoard({ rows, from, to, optionsCache, onRequestOptions }: Props) {
-  const today = useMemo(() => {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return d
-  }, [])
-
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 
   // ── 수동발주 검토 타겟 (상품 단위) ──
@@ -119,36 +85,11 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
     return opts.reduce((s, o) => s + calcOrderQtyOption(o), 0)
   }
 
-  // ── 재고 소진 필요 타겟 ──
-  const promoAll = useMemo(() => {
-    return rows
-      .filter(r => r.coupang_stock > 0)
-      .map(r => {
-        const deadline = getSeasonDeadline(r.season, today)
-        if (!deadline) return null
-        const daysToDeadline = daysBetween(today, deadline)
-        const isPast = daysToDeadline < 0
-        const cantSell = !isPast && r.days_left != null
-          && r.days_left > daysToDeadline && daysToDeadline >= 0
-        if (!isPast && !cantSell) return null
-        return {
-          ...r,
-          deadline,
-          daysToDeadline,
-          reason: isPast ? '시즌 경과' : `마감 ${daysToDeadline}일 전 소진불가`,
-        }
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((a, b) => b.coupang_stock - a.coupang_stock)
-  }, [rows, today])
-
   // ── 더보기 상태 ──
   const [urgentVisible, setUrgentVisible] = useState(INITIAL_VISIBLE)
-  const [promoVisible, setPromoVisible] = useState(INITIAL_VISIBLE)
-  useEffect(() => { setUrgentVisible(INITIAL_VISIBLE); setPromoVisible(INITIAL_VISIBLE) }, [rows])
+  useEffect(() => { setUrgentVisible(INITIAL_VISIBLE) }, [rows])
 
   const urgentList = urgentAll.slice(0, urgentVisible)
-  const promoList  = promoAll.slice(0, promoVisible)
 
   // ── 토글 state ──
   const [expandedUrgent, setExpandedUrgent] = useState<Set<string>>(new Set())
@@ -163,7 +104,6 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
 
   // ── 복사 ──
   const [copiedLeft, setCopiedLeft] = useState(false)
-  const [copiedRight, setCopiedRight] = useState(false)
 
   // 발주 복사: SKU가 로드된 상품은 SKU별로, 아니면 상품 총합.
   // SKU 합이 0이면 해당 상품은 skip (실제 보낼 수량 없음)
@@ -196,17 +136,6 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
     await navigator.clipboard.writeText(lines.join('\n'))
     setCopiedLeft(true)
     setTimeout(() => setCopiedLeft(false), 2000)
-  }
-
-  const copyPromo = async () => {
-    const lines = ['[시즌오프 대비 노출 지원 요청건]']
-    promoList.forEach(r => {
-      lines.push(`${r.name} / 현재 쿠팡재고: ${r.coupang_stock}개`)
-    })
-    lines.push('(시즌 마감 전 소진을 위해 기획전 노출 구좌 지원 부탁드립니다!)')
-    await navigator.clipboard.writeText(lines.join('\n'))
-    setCopiedRight(true)
-    setTimeout(() => setCopiedRight(false), 2000)
   }
 
   return (
@@ -372,89 +301,6 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
             <div className="empty-st" style={{ padding: 20 }}>
               <div className="es-ico">✅</div>
               <div className="es-t">수동 발주가 필요한 상품이 없어요</div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── 재고 소진 필요 ── */}
-      <div className="card" style={{ marginBottom: 12, borderLeft: '4px solid #F59E0B' }}>
-        <div className="ch">
-          <div className="ch-l"><div className="ch-ico" style={{ background: '#FEF0C7' }}>💸</div>
-            <div>
-              <div className="ch-title" style={{ color: '#B54708' }}>재고 소진 필요</div>
-              <div className="ch-sub">
-                시즌오프 경과 또는 시즌 내 소진 불가 · 총 {promoAll.length}개 상품
-              </div>
-            </div>
-          </div>
-          <button onClick={copyPromo} disabled={promoList.length === 0}
-            style={{
-              marginLeft: 'auto',
-              padding: '6px 12px', fontSize: 11, fontWeight: 700,
-              border: '1px solid #F59E0B', borderRadius: 6,
-              background: copiedRight ? '#F59E0B' : '#fff',
-              color: copiedRight ? '#fff' : '#B54708',
-              cursor: promoList.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: promoList.length === 0 ? 0.4 : 1,
-            }}>
-            {copiedRight ? '✓ 복사됨' : '📝 텍스트 복사'}
-          </button>
-        </div>
-        <div className="cb">
-          {promoList.length > 0 ? (
-            <>
-              <div className="tw">
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 44 }}>이미지</th>
-                      <th style={{ width: 180 }}>상품명</th>
-                      <th style={{ width: 80 }}>시즌</th>
-                      <th>카테고리</th>
-                      <th style={{ textAlign: 'right', width: 100, background: '#FFFAEB' }}>쿠팡재고</th>
-                      <th style={{ width: 150 }}>사유</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {promoList.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.image_url
-                          ? <img src={r.image_url} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }}
-                              onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                          : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
-                        </td>
-                        <td style={{ fontWeight: 700, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>
-                          {r.name}
-                        </td>
-                        <td><span className="badge b-bl" style={{ fontSize: 10 }}>{r.season}</span></td>
-                        <td style={{ fontSize: 11 }}>{r.category}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 800, color: '#B54708', background: '#FFFAEB' }}>
-                          {fmt(r.coupang_stock)}개
-                        </td>
-                        <td style={{ fontSize: 10, color: 'var(--t3)' }}>{r.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {promoVisible < promoAll.length && (
-                <div style={{ textAlign: 'center', marginTop: 10 }}>
-                  <button onClick={() => setPromoVisible(v => v + LOAD_MORE)}
-                    style={{
-                      fontSize: 11, padding: '6px 14px', borderRadius: 6,
-                      border: '1px solid #F59E0B', background: '#FFFBEB', color: '#B54708',
-                      cursor: 'pointer', fontWeight: 700,
-                    }}>
-                    더 보기 ({promoVisible} / {promoAll.length})
-                  </button>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="empty-st" style={{ padding: 20 }}>
-              <div className="es-ico">✅</div>
-              <div className="es-t">즉시 소진 대상이 없어요</div>
             </div>
           )}
         </div>
