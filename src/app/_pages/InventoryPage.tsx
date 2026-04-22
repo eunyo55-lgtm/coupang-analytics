@@ -93,9 +93,8 @@ export default function InventoryPage() {
   const [from, setFrom] = useState(defaultFrom)
   const [to, setTo] = useState(defaultTo)
   const [search, setSearch] = useState('')
-  const [deadFrom, setDeadFrom] = useState(defaultFrom)
-  const [deadTo, setDeadTo] = useState(defaultTo)
-  const [deadSeason, setDeadSeason] = useState('전체')
+  const [seasonFilter, setSeasonFilter] = useState('전체')
+  const [hideZeroCoupang, setHideZeroCoupang] = useState(true)  // 기본: 쿠팡재고 0 숨김
   const [viewMode, setViewMode] = useState<'qty' | 'amt'>('qty')
   const [costSource, setCostSource] = useState<'master' | 'coupang'>('coupang')
   const [sortBy, setSortBy] = useState<string>('coupang_stock')
@@ -103,7 +102,6 @@ export default function InventoryPage() {
   const [page, setPage] = useState(1)
 
   const [summaries, setSummaries] = useState<SummaryRow[]>([])
-  const [deadSummaries, setDeadSummaries] = useState<SummaryRow[]>([])
   const [loading, setLoading] = useState(false)
   const [optionsCache, setOptionsCache] = useState<Record<string, OptionRow[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -111,10 +109,8 @@ export default function InventoryPage() {
   useEffect(() => {
     if (state.latestSaleDate) {
       setTo(state.latestSaleDate)
-      setDeadTo(state.latestSaleDate)
       const d = new Date(state.latestSaleDate); d.setDate(d.getDate() - 6)
       setFrom(toYMD(d))
-      setDeadFrom(toYMD(d))
     }
   }, [state.latestSaleDate])
 
@@ -146,17 +142,6 @@ export default function InventoryPage() {
       .catch(() => setLoading(false))
   }, [from, to])
 
-  useEffect(() => {
-    if (!deadFrom || !deadTo) return
-    if (deadFrom === from && deadTo === to) {
-      setDeadSummaries([])
-      return
-    }
-    rpc('get_inventory_summary', { p_from: deadFrom, p_to: deadTo })
-      .then((data) => setDeadSummaries((data as SummaryRow[]).map(normalizeSummary)))
-      .catch(() => {})
-  }, [deadFrom, deadTo, from, to])
-
   const priceOfSummary = (r: SummaryRow): number => {
     if (costSource === 'master') return r.cost_avg > 0 ? r.cost_avg : r.coupang_cost_avg
     return r.coupang_cost_avg > 0 ? r.coupang_cost_avg : r.cost_avg
@@ -170,11 +155,22 @@ export default function InventoryPage() {
     return o.coupang_cost > 0 ? o.coupang_cost : o.cost
   }
 
+  // 시즌 옵션 목록 (현재 로드된 summaries 기반)
+  const seasonOptions = useMemo(() => {
+    const set = new Set<string>()
+    summaries.forEach(r => set.add(r.season || '미지정'))
+    return ['전체', ...Array.from(set).sort()]
+  }, [summaries])
+
   const filtered = useMemo(() => {
-    if (!search) return summaries
     const s = search.toLowerCase()
-    return summaries.filter(r => (r.name + r.season + r.category).toLowerCase().includes(s))
-  }, [summaries, search])
+    return summaries.filter(r => {
+      if (search && !(r.name + r.season + r.category).toLowerCase().includes(s)) return false
+      if (seasonFilter !== '전체' && (r.season || '미지정') !== seasonFilter) return false
+      if (hideZeroCoupang && r.coupang_stock <= 0) return false
+      return true
+    })
+  }, [summaries, search, seasonFilter, hideZeroCoupang])
 
   const sorted = useMemo(() => {
     const arr = [...filtered]
@@ -203,7 +199,7 @@ export default function InventoryPage() {
 
   const pagedSummaries = sorted.slice(0, page * PAGE_SIZE)
 
-  useEffect(() => { setPage(1) }, [from, to, search, sortBy, sortDesc, viewMode, costSource])
+  useEffect(() => { setPage(1) }, [from, to, search, sortBy, sortDesc, viewMode, costSource, seasonFilter, hideZeroCoupang])
 
   const seasonChart = useMemo(() => {
     const map = new Map<string, { qty: number; value: number }>()
@@ -241,41 +237,6 @@ export default function InventoryPage() {
       .sort((a, b) => b.value - a.value)
       .slice(0, 15)
   }, [summaries, viewMode, costSource])
-
-  // 미운동 재고용 시즌 옵션 (deadSummaries 또는 summaries 기반)
-  const deadSeasonOptions = useMemo(() => {
-    const set = new Set<string>()
-    const src = deadSummaries.length > 0 ? deadSummaries : summaries
-    src.forEach(r => set.add(r.season || '미지정'))
-    return ['전체', ...Array.from(set).sort()]
-  }, [deadSummaries, summaries])
-
-  const deadStock = useMemo(() => {
-    const source = deadSummaries.length > 0
-      ? (search
-          ? deadSummaries.filter(r => (r.name + r.season + r.category).toLowerCase().includes(search.toLowerCase()))
-          : deadSummaries)
-      : filtered
-    return source
-      // 쿠팡재고 기준: 기간 내 판매 0 & 쿠팡재고 > 0
-      .filter(r => r.total_qty_range === 0 && r.coupang_stock > 0)
-      // 시즌 필터
-      .filter(r => deadSeason === '전체' || (r.season || '미지정') === deadSeason)
-      .map(r => ({
-        ...r,
-        total_stock: r.coupang_stock,   // 쿠팡 재고만 표시
-        stock_value: r.coupang_stock * (costSource === 'master'
-          ? (r.cost_avg > 0 ? r.cost_avg : r.coupang_cost_avg)
-          : (r.coupang_cost_avg > 0 ? r.coupang_cost_avg : r.cost_avg)),
-      }))
-      .sort((a, b) => viewMode === 'qty'
-        ? b.total_stock - a.total_stock
-        : b.stock_value - a.stock_value)
-  }, [deadSummaries, filtered, search, viewMode, costSource, deadSeason])
-
-  const deadStockTotal = useMemo(() =>
-    deadStock.reduce((s, d) => s + (viewMode === 'qty' ? d.total_stock : d.stock_value), 0),
-  [deadStock, viewMode])
 
   const toggleExpand = async (name: string) => {
     const s = new Set(expanded)
@@ -452,7 +413,20 @@ export default function InventoryPage() {
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📦</div>
             <div><div className="ch-title">재고 현황</div>
-              <div className="ch-sub">전일 기준 일평균 기준 · 상품명 클릭 시 옵션 펼치기</div></div>
+              <div className="ch-sub">쿠팡재고 기준 정렬 · 상품명 클릭 시 옵션 펼치기</div></div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>🎨 시즌</span>
+            <select value={seasonFilter} onChange={e => setSeasonFilter(e.target.value)}
+              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+              {seasonOptions.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: 'var(--t2)', cursor: 'pointer', marginLeft: 8 }}>
+              <input type="checkbox" checked={hideZeroCoupang}
+                onChange={e => setHideZeroCoupang(e.target.checked)}
+                style={{ cursor: 'pointer' }} />
+              쿠팡재고 0 숨김
+            </label>
           </div>
         </div>
         <div className="cb">
