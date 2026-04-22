@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD, fromYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
+import SalesActionBoard from './SalesActionBoard'
 
 Chart.register(...registerables)
 
@@ -508,6 +509,20 @@ export default function SalesPage() {
           </div>
         </div>
       </div>
+
+      {/* ─── 판매 & 랭킹 액션 보드 ─── */}
+      <SalesActionBoard
+        products={products.map(p => ({
+          productName: p.productName,
+          imageUrl: p.imageUrl,
+          category: p.category,
+          season: p.season,
+          ytdQty: p.ytdQty,
+          chartDaily: p.chartDaily,
+        }))}
+        rankings={state.rankings}
+        anchorDate={chartTo}
+      />
 
       {/* ─── 시즌별 / 카테고리별 차트 ─── */}
       <div className="g2">
