@@ -68,7 +68,10 @@ function calcOrderQtyProduct(r: ActionBoardRow): number {
 }
 
 // SKU 단위 제안 수량 (정수 올림, 10단위 올림 없음)
+// 소진예상 14일 이하인 SKU만 제안 대상 (상품 단위 필터와 동일 기준)
 function calcOrderQtyOption(o: ActionBoardOption): number {
+  // 소진예상이 14일 초과거나 null(판매 없음)이면 제안 불필요
+  if (o.days_left == null || o.days_left > 14) return 0
   const need = (o.daily_sales * 14) - (o.coupang_stock + o.supply_qty)
   const hqLimit = o.hq_stock * 0.5
   const first = Math.min(need, hqLimit)
@@ -215,9 +218,11 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
             <div>
               <div className="ch-title" style={{ color: '#B42318' }}>수동 발주 검토</div>
               <div className="ch-sub">
-                소진예상 14일 이내 · 본사 가용한도 50% 기준 · 상품명 클릭 시 SKU 합계로 재계산
+                소진예상 14일 이내 · 본사 가용한도 50% 기준 · 상품명 클릭 시 SKU 합계로 정확히 재계산
                 {` · 총 ${urgentAll.length}개 상품`}
-                <span style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 6 }}>(*는 SKU 확인 전 추정치)</span>
+                <span style={{ fontSize: 10, color: '#B54708', marginLeft: 6, fontWeight: 600 }}>
+                  ※ ≈는 상품 집계 추정치, 실제 SKU 합계와 차이날 수 있음
+                </span>
               </div>
             </div>
           </div>
@@ -290,11 +295,23 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
                           <td style={{ textAlign: 'right', fontWeight: 800,
                             color: displayQty > 0 ? '#B42318' : 'var(--t3)',
                             background: displayQty > 0 ? '#FEF3F2' : 'transparent' }}
-                            title={isEstimate ? '상품 총합 기준 추정치 (클릭하여 SKU 합계 확인)' : 'SKU 합계'}>
-                            {displayQty > 0 ? `${fmt(displayQty)}개` : '—'}
-                            {isEstimate && displayQty > 0 && (
-                              <span style={{ fontSize: 9, color: 'var(--t3)', fontWeight: 500, marginLeft: 2 }}>*</span>
-                            )}
+                            title={isEstimate
+                              ? '상품 집계 기준 추정치 · 실제는 SKU별로 차이날 수 있음. 클릭하여 정확한 합계 확인'
+                              : 'SKU 합계 (정확한 값)'}>
+                            {displayQty > 0 ? (
+                              <>
+                                {isEstimate && (
+                                  <span style={{ fontSize: 9, fontWeight: 700, color: '#B54708',
+                                    background: '#FFFAEB', padding: '1px 5px', borderRadius: 4,
+                                    marginRight: 4, verticalAlign: 'middle' }}>
+                                    추정
+                                  </span>
+                                )}
+                                <span>
+                                  {isEstimate ? '≈' : ''}{fmt(displayQty)}개
+                                </span>
+                              </>
+                            ) : '—'}
                           </td>
                         </tr>
                       )
