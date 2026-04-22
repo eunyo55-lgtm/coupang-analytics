@@ -227,8 +227,9 @@ export default function InventoryPage() {
     summaries.forEach(r => {
       const c = r.category || '기타'
       const cur = map.get(c) || { qty: 0, value: 0 }
-      cur.qty += r.total_qty_range
-      cur.value += r.total_qty_range * priceOfSummary(r)
+      // 재고 기준: 본사+쿠팡 재고 합계
+      cur.qty += r.hq_stock + r.coupang_stock
+      cur.value += stockValueOf(r)
       map.set(c, cur)
     })
     return Array.from(map.entries())
@@ -279,6 +280,24 @@ export default function InventoryPage() {
       s.delete(name); setExpanded(s); return
     }
     s.add(name); setExpanded(s)
+    const cacheKey = `${name}||${from}||${to}`
+    if (optionsCache[cacheKey]) return
+    const data = await rpc('get_inventory_options', { p_name: name, p_from: from, p_to: to })
+    const opts = (data as OptionRow[]).map(o => ({
+      ...o,
+      cost: Number(o.cost || 0),
+      coupang_cost: Number(o.coupang_cost || 0),
+      hq_stock: Number(o.hq_stock || 0),
+      coupang_stock: Number(o.coupang_stock || 0),
+      supply_qty: Number(o.supply_qty || 0),
+      daily_sales: Number(o.daily_sales || 0),
+      days_left: o.days_left == null ? null : Number(o.days_left),
+    }))
+    setOptionsCache(c => ({ ...c, [cacheKey]: opts }))
+  }
+
+  // DualActionBoard에서 옵션이 필요할 때 호출 (expanded 건드리지 않고 캐시에만 로드)
+  const loadOptionsForAction = async (name: string) => {
     const cacheKey = `${name}||${from}||${to}`
     if (optionsCache[cacheKey]) return
     const data = await rpc('get_inventory_options', { p_name: name, p_from: from, p_to: to })
@@ -347,20 +366,6 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* 듀얼 액션 보드 - 긴급 발주 + 프로모션 필요 */}
-      <DualActionBoard
-        rows={summaries.map(s => ({
-          name: s.name,
-          season: s.season,
-          hq_stock: s.hq_stock,
-          coupang_stock: s.coupang_stock,
-          supply_qty: s.supply_qty,
-          daily_sales: s.daily_sales,
-          days_left: s.days_left,
-        }))}
-        limit={10}
-      />
-
       {/* 시즌 파이 + 카테고리 막대 */}
       <div className="g2" style={{ marginBottom: 12 }}>
         <div className="card">
@@ -394,8 +399,8 @@ export default function InventoryPage() {
         <div className="card">
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">📊</div>
-              <div><div className="ch-title">카테고리별 판매 비중</div>
-                <div className="ch-sub">{from} ~ {to} ({viewMode === 'qty' ? '수량' : '금액'})</div></div>
+              <div><div className="ch-title">카테고리별 재고 비중</div>
+                <div className="ch-sub">본사+쿠팡 재고 합계 기준 ({viewMode === 'qty' ? '수량' : '금액'})</div></div>
             </div>
           </div>
           <div className="cb">
@@ -419,69 +424,25 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* 미운동 재고 */}
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="ch">
-          <div className="ch-l"><div className="ch-ico">💤</div>
-            <div><div className="ch-title">미운동 재고</div>
-              <div className="ch-sub">{deadFrom} ~ {deadTo} 기간 판매 0 · 재고 보유 {deadStock.length}개 상품
-                {viewMode === 'qty' ? ` · 총 ${fmt(deadStockTotal)}개` : ` · 총 ${fmtMoney(deadStockTotal)}원`}</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>🎨 시즌</span>
-            <select value={deadSeason} onChange={e => setDeadSeason(e.target.value)}
-              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-              {deadSeasonOptions.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)', marginLeft: 6 }}>📅 기간</span>
-            <input type="date" className="date-input" value={deadFrom} onChange={e => setDeadFrom(e.target.value)} />
-            <span className="date-range-sep">~</span>
-            <input type="date" className="date-input" value={deadTo} onChange={e => setDeadTo(e.target.value)} />
-          </div>
-        </div>
-        <div className="cb">
-          <div className="tw" style={{ maxHeight: 320, overflowY: 'auto' }}>
-            {deadStock.length > 0 ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 44 }}>이미지</th>
-                    <th style={{ width: 180 }}>상품명</th>
-                    <th>시즌</th>
-                    <th>카테고리</th>
-                    <th style={{ textAlign: 'right' }}>본사재고</th>
-                    <th style={{ textAlign: 'right' }}>쿠팡재고</th>
-                    <th style={{ textAlign: 'right' }}>{viewMode === 'qty' ? '총재고' : '재고액'}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deadStock.slice(0, 100).map((r, i) => (
-                    <tr key={i}>
-                      <td>{r.image_url
-                        ? <img src={r.image_url} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }}
-                            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                        : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
-                      </td>
-                      <td style={{ fontWeight: 700, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
-                      <td style={{ fontSize: 11 }}>{r.season}</td>
-                      <td style={{ fontSize: 11 }}>{r.category}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(r.hq_stock)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(r.coupang_stock)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--amber)' }}>
-                        {viewMode === 'qty' ? fmt(r.total_stock) : fmtMoney(r.stock_value)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="empty-st"><div className="es-ico">✨</div>
-                <div className="es-t">해당 기간에 모든 재고가 판매되었거나 데이터가 없습니다</div></div>
-            )}
-          </div>
-        </div>
-      </div>
+      {/* 액션 보드: 수동 발주 검토 + 재고 소진 필요 (상하 배치) */}
+      <DualActionBoard
+        rows={summaries.map(s => ({
+          name: s.name,
+          season: s.season,
+          hq_stock: s.hq_stock,
+          coupang_stock: s.coupang_stock,
+          supply_qty: s.supply_qty,
+          daily_sales: s.daily_sales,
+          days_left: s.days_left,
+          image_url: s.image_url,
+          category: s.category,
+          option_count: s.option_count,
+        }))}
+        from={from}
+        to={to}
+        optionsCache={optionsCache}
+        onRequestOptions={loadOptionsForAction}
+      />
 
       {/* 메인 재고 테이블 */}
       <div className="card">
