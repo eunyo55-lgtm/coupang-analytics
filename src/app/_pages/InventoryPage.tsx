@@ -227,9 +227,12 @@ export default function InventoryPage() {
     summaries.forEach(r => {
       const c = r.category || '기타'
       const cur = map.get(c) || { qty: 0, value: 0 }
-      // 재고 기준: 본사+쿠팡 재고 합계
-      cur.qty += r.hq_stock + r.coupang_stock
-      cur.value += stockValueOf(r)
+      // 쿠팡재고 기준 (부자재/본사재고 제외 — 실제 매출 발생하는 쿠팡 재고만)
+      cur.qty += r.coupang_stock
+      const price = costSource === 'master'
+        ? (r.cost_avg > 0 ? r.cost_avg : r.coupang_cost_avg)
+        : (r.coupang_cost_avg > 0 ? r.coupang_cost_avg : r.cost_avg)
+      cur.value += r.coupang_stock * price
       map.set(c, cur)
     })
     return Array.from(map.entries())
@@ -400,7 +403,7 @@ export default function InventoryPage() {
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">📊</div>
               <div><div className="ch-title">카테고리별 재고 비중</div>
-                <div className="ch-sub">본사+쿠팡 재고 합계 기준 ({viewMode === 'qty' ? '수량' : '금액'})</div></div>
+                <div className="ch-sub">쿠팡 재고 기준 ({viewMode === 'qty' ? '수량' : '금액'})</div></div>
             </div>
           </div>
           <div className="cb">
