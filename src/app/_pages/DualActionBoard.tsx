@@ -1,11 +1,26 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 
 // ─── Types ───
 export type ActionBoardRow = {
   name: string
   season: string
+  category: string
+  image_url?: string
+  hq_stock: number
+  coupang_stock: number
+  supply_qty: number
+  daily_sales: number
+  days_left: number | null
+  option_count?: number
+}
+
+export type ActionBoardOption = {
+  barcode: string
+  option_value: string
+  cost: number
+  coupang_cost: number
   hq_stock: number
   coupang_stock: number
   supply_qty: number
@@ -15,116 +30,154 @@ export type ActionBoardRow = {
 
 // ─── Helpers ───
 
-// 오즈키즈 시즌 라벨 → 시즌 기준일 계산
+// 오즈키즈 시즌 라벨 → 시즌 기준일
 // - 사계절: null (프로모션 제외)
 // - 여름: 7/15
-// - 봄/가을: 봄(4/15) 또는 가을(10/15) 중 '현재 시점에 의미있는' 쪽
+// - 봄/가을: 4/15 또는 10/15 중 오늘과 가까운 기준일
 // - 겨울: 12/15
-// 기준일 계산 로직:
-// - 오늘이 기준일 이전: 다가오는 가장 가까운 기준일
-// - 오늘이 기준일 이후: 지난 기준일 (시즌오프 판단용)
 function getSeasonDeadline(season: string, today: Date): Date | null {
   const y = today.getFullYear()
   const s = (season || '').trim()
-
-  // 사계절은 시즌 개념 없음
   if (!s || s === '사계절' || s === '미지정') return null
-
   const makeDate = (month: number, day: number, year: number = y) =>
     new Date(year, month - 1, day)
 
-  if (s === '여름') {
-    const thisYear = makeDate(7, 15)
-    // 올해 7/15가 지나지 않았으면 올해, 지났으면 내년? 아니다.
-    // 시즌오프 판단이므로: 이미 지났으면 지난 기준일 유지
-    return thisYear
-  }
-  if (s === '겨울') {
-    const thisYear = makeDate(12, 15)
-    return thisYear
-  }
+  if (s === '여름') return makeDate(7, 15)
+  if (s === '겨울') return makeDate(12, 15)
   if (s === '봄/가을' || s === '봄' || s === '가을') {
     const spring = makeDate(4, 15)
     const autumn = makeDate(10, 15)
-    // 오늘과 가장 가까운 기준일 (과거/미래 불문)
-    const diffSpring = Math.abs(today.getTime() - spring.getTime())
-    const diffAutumn = Math.abs(today.getTime() - autumn.getTime())
-    return diffSpring <= diffAutumn ? spring : autumn
+    const dSpring = Math.abs(today.getTime() - spring.getTime())
+    const dAutumn = Math.abs(today.getTime() - autumn.getTime())
+    return dSpring <= dAutumn ? spring : autumn
   }
-  // 그 외 알 수 없는 시즌
   return null
 }
 
-// 긴급 발주 수량 계산
-function calcOrderQty(r: ActionBoardRow): number {
+function daysBetween(from: Date, to: Date): number {
+  return Math.round((to.getTime() - from.getTime()) / 86400000)
+}
+
+// 상품 단위 제안 수량 (10 단위 올림)
+function calcOrderQtyProduct(r: ActionBoardRow): number {
   const need = (r.daily_sales * 14) - (r.coupang_stock + r.supply_qty)
   const hqLimit = r.hq_stock * 0.5
-  const firstQty = Math.min(need, hqLimit)
-  if (firstQty <= 0) return 0
-  return Math.ceil(firstQty / 10) * 10
+  const first = Math.min(need, hqLimit)
+  if (first <= 0) return 0
+  return Math.ceil(first / 10) * 10
 }
 
-// 두 날짜 사이 일수
-function daysBetween(from: Date, to: Date): number {
-  const ms = to.getTime() - from.getTime()
-  return Math.round(ms / (1000 * 60 * 60 * 24))
+// SKU 단위 제안 수량 (정수 올림, 10 단위 올림은 선택적)
+function calcOrderQtyOption(o: ActionBoardOption): number {
+  const need = (o.daily_sales * 14) - (o.coupang_stock + o.supply_qty)
+  const hqLimit = o.hq_stock * 0.5
+  const first = Math.min(need, hqLimit)
+  if (first <= 0) return 0
+  return Math.ceil(first / 10) * 10
 }
 
+// ─── Props ───
 type Props = {
   rows: ActionBoardRow[]
-  limit?: number
+  from: string
+  to: string
+  optionsCache: Record<string, ActionBoardOption[]>
+  onRequestOptions: (name: string) => void | Promise<void>
 }
 
-export default function DualActionBoard({ rows, limit = 10 }: Props) {
+const INITIAL_VISIBLE = 10
+const LOAD_MORE = 10
+
+export default function DualActionBoard({ rows, from, to, optionsCache, onRequestOptions }: Props) {
   const today = useMemo(() => {
     const d = new Date()
     d.setHours(0, 0, 0, 0)
     return d
   }, [])
 
-  // ── 긴급 발주 타겟 ──
-  const urgentOrders = useMemo(() => {
+  const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
+
+  // ── 수동발주 검토 타겟 (상품 단위) ──
+  const urgentAll = useMemo(() => {
     return rows
       .filter(r => r.daily_sales > 0 && r.days_left != null && r.days_left <= 14)
-      .map(r => ({ ...r, suggest: calcOrderQty(r) }))
+      .map(r => ({ ...r, suggest: calcOrderQtyProduct(r) }))
       .filter(r => r.suggest > 0)
-      .sort((a, b) => (a.days_left ?? 99) - (b.days_left ?? 99))  // 임박 순
-      .slice(0, limit)
-  }, [rows, limit])
+      .sort((a, b) => (a.days_left ?? 99) - (b.days_left ?? 99))
+  }, [rows])
 
-  // ── 프로모션 타겟 ──
-  const promoTargets = useMemo(() => {
+  // ── 재고 소진 필요 타겟 ──
+  const promoAll = useMemo(() => {
     return rows
       .filter(r => r.coupang_stock > 0)
       .map(r => {
         const deadline = getSeasonDeadline(r.season, today)
         if (!deadline) return null
         const daysToDeadline = daysBetween(today, deadline)
-        // 이미 시즌 지남: 악성 이월 재고
-        const isPastSeason = daysToDeadline < 0
-        // 시즌 내 소진 불가 예상
-        const cantSellInSeason = !isPastSeason && r.days_left != null
+        const isPast = daysToDeadline < 0
+        const cantSell = !isPast && r.days_left != null
           && r.days_left > daysToDeadline && daysToDeadline >= 0
-        if (!isPastSeason && !cantSellInSeason) return null
+        if (!isPast && !cantSell) return null
         return {
           ...r,
           deadline,
           daysToDeadline,
-          reason: isPastSeason ? '시즌 경과' : `시즌마감 ${daysToDeadline}일 前 소진불가`,
+          reason: isPast ? '시즌 경과' : `마감 ${daysToDeadline}일 전 소진불가`,
         }
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((a, b) => b.coupang_stock - a.coupang_stock)  // 재고 많은 순
-      .slice(0, limit)
-  }, [rows, today, limit])
+      .sort((a, b) => b.coupang_stock - a.coupang_stock)
+  }, [rows, today])
 
-  // ── 복사 핸들러 ──
+  // ── 더보기 상태 ──
+  const [urgentVisible, setUrgentVisible] = useState(INITIAL_VISIBLE)
+  const [promoVisible, setPromoVisible] = useState(INITIAL_VISIBLE)
+  useEffect(() => { setUrgentVisible(INITIAL_VISIBLE); setPromoVisible(INITIAL_VISIBLE) }, [rows])
+
+  const urgentList = urgentAll.slice(0, urgentVisible)
+  const promoList  = promoAll.slice(0, promoVisible)
+
+  // ── 토글 state ──
+  const [expandedUrgent, setExpandedUrgent] = useState<Set<string>>(new Set())
+
+  const toggleUrgent = (name: string) => {
+    const s = new Set(expandedUrgent)
+    if (s.has(name)) { s.delete(name); setExpandedUrgent(s); return }
+    s.add(name); setExpandedUrgent(s)
+    const cacheKey = `${name}||${from}||${to}`
+    if (!optionsCache[cacheKey]) onRequestOptions(name)
+  }
+
+  // ── 복사 ──
   const [copiedLeft, setCopiedLeft] = useState(false)
   const [copiedRight, setCopiedRight] = useState(false)
 
+  // 발주 복사: SKU 단위 (펼쳐진 것은 SKU별, 안 펼쳐진 것은 상품 총합)
   const copyUrgent = async () => {
     const lines = ['[예외발주 요청건 - 2주 판매 확보용]']
-    urgentOrders.forEach(r => lines.push(`${r.name} / ${r.suggest}개`))
+    for (const r of urgentList) {
+      const cacheKey = `${r.name}||${from}||${to}`
+      const opts = optionsCache[cacheKey]
+      // 옵션이 로드됐으면 SKU별로 추출 (제안수량 > 0만)
+      if (opts && opts.length > 0) {
+        const skuLines: string[] = []
+        for (const o of opts) {
+          const q = calcOrderQtyOption(o)
+          if (q > 0) {
+            const optLabel = o.option_value || '기본'
+            skuLines.push(`  └ ${optLabel} (${o.barcode}) / ${q}개`)
+          }
+        }
+        if (skuLines.length > 0) {
+          lines.push(`${r.name}`)
+          lines.push(...skuLines)
+        } else {
+          lines.push(`${r.name} / ${r.suggest}개`)
+        }
+      } else {
+        lines.push(`${r.name} / ${r.suggest}개`)
+      }
+    }
     await navigator.clipboard.writeText(lines.join('\n'))
     setCopiedLeft(true)
     setTimeout(() => setCopiedLeft(false), 2000)
@@ -132,7 +185,7 @@ export default function DualActionBoard({ rows, limit = 10 }: Props) {
 
   const copyPromo = async () => {
     const lines = ['[시즌오프 대비 노출 지원 요청건]']
-    promoTargets.forEach(r => {
+    promoList.forEach(r => {
       lines.push(`${r.name} / 현재 쿠팡재고: ${r.coupang_stock}개`)
     })
     lines.push('(시즌 마감 전 소진을 위해 기획전 노출 구좌 지원 부탁드립니다!)')
@@ -141,154 +194,230 @@ export default function DualActionBoard({ rows, limit = 10 }: Props) {
     setTimeout(() => setCopiedRight(false), 2000)
   }
 
-  // ── 렌더 ──
-  const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
-
   return (
-    <div className="g2" style={{ marginBottom: 12 }}>
-      {/* 좌측: 긴급 발주 */}
-      <div className="card" style={{ borderLeft: '4px solid #F04438' }}>
+    <>
+      {/* ── 수동발주 검토 ── */}
+      <div className="card" style={{ marginBottom: 12, borderLeft: '4px solid #F04438' }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico" style={{ background: '#FEE4E2' }}>🚨</div>
             <div>
-              <div className="ch-title" style={{ color: '#B42318' }}>긴급 예외발주 요망</div>
-              <div className="ch-sub">소진예상 14일 이내 · 본사 가용한도 50% 기준</div>
+              <div className="ch-title" style={{ color: '#B42318' }}>수동 발주 검토</div>
+              <div className="ch-sub">
+                소진예상 14일 이내 · 본사 가용한도 50% 기준 · 상품명 클릭 시 SKU별 펼침
+                {` · 총 ${urgentAll.length}개 상품`}
+              </div>
             </div>
           </div>
-          <button onClick={copyUrgent} disabled={urgentOrders.length === 0}
+          <button onClick={copyUrgent} disabled={urgentList.length === 0}
             style={{
               marginLeft: 'auto',
-              padding: '6px 12px',
-              fontSize: 11,
-              fontWeight: 700,
-              border: '1px solid #F04438',
-              borderRadius: 6,
+              padding: '6px 12px', fontSize: 11, fontWeight: 700,
+              border: '1px solid #F04438', borderRadius: 6,
               background: copiedLeft ? '#F04438' : '#fff',
               color: copiedLeft ? '#fff' : '#B42318',
-              cursor: urgentOrders.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: urgentOrders.length === 0 ? 0.4 : 1,
+              cursor: urgentList.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: urgentList.length === 0 ? 0.4 : 1,
             }}>
             {copiedLeft ? '✓ 복사됨' : '📝 텍스트 복사'}
           </button>
         </div>
         <div className="cb">
-          {urgentOrders.length > 0 ? (
-            <div className="tw">
-              <table>
-                <thead>
-                  <tr>
-                    <th>상품명</th>
-                    <th style={{ textAlign: 'right', width: 80 }}>쿠팡재고</th>
-                    <th style={{ textAlign: 'right', width: 80 }}>소진예상</th>
-                    <th style={{ textAlign: 'right', width: 90, background: '#FEF3F2' }}>💡제안수량</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {urgentOrders.map((r, i) => (
-                    <tr key={i}>
-                      <td style={{
-                        fontWeight: 700,
-                        maxWidth: 180,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }} title={r.name}>{r.name}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(r.coupang_stock)}</td>
-                      <td style={{
-                        textAlign: 'right',
-                        fontWeight: 700,
-                        color: (r.days_left ?? 99) < 7 ? '#B42318' : '#DC6803',
-                      }}>{r.days_left}일</td>
-                      <td style={{
-                        textAlign: 'right',
-                        fontWeight: 800,
-                        color: '#B42318',
-                        background: '#FEF3F2',
-                      }}>{fmt(r.suggest)}개</td>
+          {urgentList.length > 0 ? (
+            <>
+              <div className="tw">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 44 }}>이미지</th>
+                      <th style={{ width: 180 }}>상품명</th>
+                      <th style={{ textAlign: 'right', width: 80 }}>본사재고</th>
+                      <th style={{ textAlign: 'right', width: 80 }}>쿠팡재고</th>
+                      <th style={{ textAlign: 'right', width: 80 }}>공급중</th>
+                      <th style={{ textAlign: 'right', width: 90 }}>일평균</th>
+                      <th style={{ textAlign: 'right', width: 80 }}>소진예상</th>
+                      <th style={{ textAlign: 'right', width: 100, background: '#FEF3F2' }}>💡제안수량</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {urgentList.flatMap(r => {
+                      const isOpen = expandedUrgent.has(r.name)
+                      const cacheKey = `${r.name}||${from}||${to}`
+                      const opts = optionsCache[cacheKey]
+                      const mainRow = (
+                        <tr key={r.name} style={{ cursor: 'pointer' }} onClick={() => toggleUrgent(r.name)}>
+                          <td>{r.image_url
+                            ? <img src={r.image_url} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }}
+                                onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                            : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
+                          </td>
+                          <td style={{ fontWeight: 700 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <span style={{ color: 'var(--t3)', fontSize: 10 }}>{isOpen ? '▼' : '▶'}</span>
+                              <div style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>
+                              {r.category && <span className="badge b-gr" style={{ fontSize: 10 }}>{r.category}</span>}
+                              {r.season   && <span className="badge b-bl" style={{ fontSize: 10 }}>{r.season}</span>}
+                              {r.option_count ? <span style={{ fontSize: 10, color: 'var(--t3)' }}>옵션 {r.option_count}개</span> : null}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>{fmt(r.hq_stock)}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(r.coupang_stock)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--purple)' }}>{fmt(r.supply_qty)}</td>
+                          <td style={{ textAlign: 'right' }}>{r.daily_sales.toFixed(1)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700,
+                            color: (r.days_left ?? 99) < 7 ? '#B42318' : '#DC6803' }}>
+                            {r.days_left}일
+                          </td>
+                          <td style={{ textAlign: 'right', fontWeight: 800, color: '#B42318', background: '#FEF3F2' }}>
+                            {fmt(r.suggest)}개
+                          </td>
+                        </tr>
+                      )
+                      if (!isOpen) return [mainRow]
+                      if (!opts) {
+                        return [mainRow, (
+                          <tr key={r.name + '__loading'} style={{ background: '#FFFBFA' }}>
+                            <td colSpan={8} style={{ textAlign: 'center', fontSize: 11, color: 'var(--t3)', padding: 8 }}>
+                              ⏳ SKU 옵션 불러오는 중...
+                            </td>
+                          </tr>
+                        )]
+                      }
+                      const optRows = opts.map(o => {
+                        const q = calcOrderQtyOption(o)
+                        return (
+                          <tr key={r.name + '_' + o.barcode} style={{ background: '#FFFBFA' }}>
+                            <td></td>
+                            <td style={{ paddingLeft: 28, fontSize: 11, color: 'var(--t2)' }}>
+                              └ {o.option_value || '기본'} <span style={{ color: 'var(--t3)', fontSize: 10 }}>· {o.barcode}</span>
+                            </td>
+                            <td style={{ textAlign: 'right', fontSize: 11 }}>{fmt(o.hq_stock)}</td>
+                            <td style={{ textAlign: 'right', fontSize: 11 }}>{fmt(o.coupang_stock)}</td>
+                            <td style={{ textAlign: 'right', fontSize: 11, color: 'var(--purple)' }}>{fmt(o.supply_qty)}</td>
+                            <td style={{ textAlign: 'right', fontSize: 11 }}>{o.daily_sales.toFixed(1)}</td>
+                            <td style={{ textAlign: 'right', fontSize: 11, fontWeight: 700,
+                              color: o.days_left == null ? 'var(--t3)'
+                                   : o.days_left < 7 ? '#B42318'
+                                   : o.days_left < 14 ? '#DC6803' : 'var(--green)' }}>
+                              {o.days_left == null ? '—' : `${o.days_left}일`}
+                            </td>
+                            <td style={{ textAlign: 'right', fontSize: 11, fontWeight: 800,
+                              color: q > 0 ? '#B42318' : 'var(--t3)', background: q > 0 ? '#FEF3F2' : 'transparent' }}>
+                              {q > 0 ? `${fmt(q)}개` : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })
+                      return [mainRow, ...optRows]
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {urgentVisible < urgentAll.length && (
+                <div style={{ textAlign: 'center', marginTop: 10 }}>
+                  <button onClick={() => setUrgentVisible(v => v + LOAD_MORE)}
+                    style={{
+                      fontSize: 11, padding: '6px 14px', borderRadius: 6,
+                      border: '1px solid #F04438', background: '#FFFBFA', color: '#B42318',
+                      cursor: 'pointer', fontWeight: 700,
+                    }}>
+                    더 보기 ({urgentVisible} / {urgentAll.length})
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <div className="empty-st" style={{ padding: 20 }}>
               <div className="es-ico">✅</div>
-              <div className="es-t">긴급 발주가 필요한 상품이 없어요</div>
+              <div className="es-t">수동 발주가 필요한 상품이 없어요</div>
             </div>
           )}
         </div>
       </div>
 
-      {/* 우측: 프로모션 필요 */}
-      <div className="card" style={{ borderLeft: '4px solid #F59E0B' }}>
+      {/* ── 재고 소진 필요 ── */}
+      <div className="card" style={{ marginBottom: 12, borderLeft: '4px solid #F59E0B' }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico" style={{ background: '#FEF0C7' }}>💸</div>
             <div>
-              <div className="ch-title" style={{ color: '#B54708' }}>즉시 프로모션 필요</div>
-              <div className="ch-sub">시즌오프 경과 또는 시즌 내 소진 불가</div>
+              <div className="ch-title" style={{ color: '#B54708' }}>재고 소진 필요</div>
+              <div className="ch-sub">
+                시즌오프 경과 또는 시즌 내 소진 불가 · 총 {promoAll.length}개 상품
+              </div>
             </div>
           </div>
-          <button onClick={copyPromo} disabled={promoTargets.length === 0}
+          <button onClick={copyPromo} disabled={promoList.length === 0}
             style={{
               marginLeft: 'auto',
-              padding: '6px 12px',
-              fontSize: 11,
-              fontWeight: 700,
-              border: '1px solid #F59E0B',
-              borderRadius: 6,
+              padding: '6px 12px', fontSize: 11, fontWeight: 700,
+              border: '1px solid #F59E0B', borderRadius: 6,
               background: copiedRight ? '#F59E0B' : '#fff',
               color: copiedRight ? '#fff' : '#B54708',
-              cursor: promoTargets.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: promoTargets.length === 0 ? 0.4 : 1,
+              cursor: promoList.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: promoList.length === 0 ? 0.4 : 1,
             }}>
             {copiedRight ? '✓ 복사됨' : '📝 텍스트 복사'}
           </button>
         </div>
         <div className="cb">
-          {promoTargets.length > 0 ? (
-            <div className="tw">
-              <table>
-                <thead>
-                  <tr>
-                    <th>상품명</th>
-                    <th style={{ width: 70 }}>시즌</th>
-                    <th style={{ textAlign: 'right', width: 90, background: '#FFFAEB' }}>쿠팡재고</th>
-                    <th style={{ fontSize: 10, width: 110 }}>사유</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {promoTargets.map((r, i) => (
-                    <tr key={i}>
-                      <td style={{
-                        fontWeight: 700,
-                        maxWidth: 160,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }} title={r.name}>{r.name}</td>
-                      <td style={{ fontSize: 11 }}>
-                        <span className="badge b-bl">{r.season}</span>
-                      </td>
-                      <td style={{
-                        textAlign: 'right',
-                        fontWeight: 800,
-                        color: '#B54708',
-                        background: '#FFFAEB',
-                      }}>{fmt(r.coupang_stock)}개</td>
-                      <td style={{ fontSize: 10, color: 'var(--t3)' }}>{r.reason}</td>
+          {promoList.length > 0 ? (
+            <>
+              <div className="tw">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 44 }}>이미지</th>
+                      <th style={{ width: 180 }}>상품명</th>
+                      <th style={{ width: 80 }}>시즌</th>
+                      <th>카테고리</th>
+                      <th style={{ textAlign: 'right', width: 100, background: '#FFFAEB' }}>쿠팡재고</th>
+                      <th style={{ width: 150 }}>사유</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {promoList.map((r, i) => (
+                      <tr key={i}>
+                        <td>{r.image_url
+                          ? <img src={r.image_url} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: 'cover' }}
+                              onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                          : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>-</div>}
+                        </td>
+                        <td style={{ fontWeight: 700, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>
+                          {r.name}
+                        </td>
+                        <td><span className="badge b-bl" style={{ fontSize: 10 }}>{r.season}</span></td>
+                        <td style={{ fontSize: 11 }}>{r.category}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 800, color: '#B54708', background: '#FFFAEB' }}>
+                          {fmt(r.coupang_stock)}개
+                        </td>
+                        <td style={{ fontSize: 10, color: 'var(--t3)' }}>{r.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {promoVisible < promoAll.length && (
+                <div style={{ textAlign: 'center', marginTop: 10 }}>
+                  <button onClick={() => setPromoVisible(v => v + LOAD_MORE)}
+                    style={{
+                      fontSize: 11, padding: '6px 14px', borderRadius: 6,
+                      border: '1px solid #F59E0B', background: '#FFFBEB', color: '#B54708',
+                      cursor: 'pointer', fontWeight: 700,
+                    }}>
+                    더 보기 ({promoVisible} / {promoAll.length})
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <div className="empty-st" style={{ padding: 20 }}>
               <div className="es-ico">✅</div>
-              <div className="es-t">즉시 프로모션 대상이 없어요</div>
+              <div className="es-t">즉시 소진 대상이 없어요</div>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </>
   )
 }
