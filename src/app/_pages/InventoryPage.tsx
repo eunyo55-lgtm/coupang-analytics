@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
+import DualActionBoard from './DualActionBoard'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
@@ -345,6 +346,20 @@ export default function InventoryPage() {
           </div>
         </div>
       </div>
+
+      {/* 듀얼 액션 보드 - 긴급 발주 + 프로모션 필요 */}
+      <DualActionBoard
+        rows={summaries.map(s => ({
+          name: s.name,
+          season: s.season,
+          hq_stock: s.hq_stock,
+          coupang_stock: s.coupang_stock,
+          supply_qty: s.supply_qty,
+          daily_sales: s.daily_sales,
+          days_left: s.days_left,
+        }))}
+        limit={10}
+      />
 
       {/* 시즌 파이 + 카테고리 막대 */}
       <div className="g2" style={{ marginBottom: 12 }}>
