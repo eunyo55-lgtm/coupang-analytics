@@ -58,22 +58,22 @@ function daysBetween(from: Date, to: Date): number {
   return Math.round((to.getTime() - from.getTime()) / 86400000)
 }
 
-// 상품 단위 제안 수량 (10 단위 올림)
+// 상품 단위 제안 수량 (정수 올림, 10단위 올림 없음)
 function calcOrderQtyProduct(r: ActionBoardRow): number {
   const need = (r.daily_sales * 14) - (r.coupang_stock + r.supply_qty)
   const hqLimit = r.hq_stock * 0.5
   const first = Math.min(need, hqLimit)
   if (first <= 0) return 0
-  return Math.ceil(first / 10) * 10
+  return Math.ceil(first)
 }
 
-// SKU 단위 제안 수량 (정수 올림, 10 단위 올림은 선택적)
+// SKU 단위 제안 수량 (정수 올림, 10단위 올림 없음)
 function calcOrderQtyOption(o: ActionBoardOption): number {
   const need = (o.daily_sales * 14) - (o.coupang_stock + o.supply_qty)
   const hqLimit = o.hq_stock * 0.5
   const first = Math.min(need, hqLimit)
   if (first <= 0) return 0
-  return Math.ceil(first / 10) * 10
+  return Math.ceil(first)
 }
 
 // ─── Props ───
@@ -98,6 +98,7 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 
   // ── 수동발주 검토 타겟 (상품 단위) ──
+  // suggest는 상품 총합 기준 추정치. 옵션이 로드되면 SKU 합계로 재계산되어 화면/복사에 반영됨.
   const urgentAll = useMemo(() => {
     return rows
       .filter(r => r.daily_sales > 0 && r.days_left != null && r.days_left <= 14)
@@ -105,6 +106,15 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
       .filter(r => r.suggest > 0)
       .sort((a, b) => (a.days_left ?? 99) - (b.days_left ?? 99))
   }, [rows])
+
+  // 옵션이 로드된 상품의 "실효 제안수량" = SKU별 제안수량의 합
+  // 로드 안 된 상품은 null 반환 → 호출자가 fallback 처리
+  const effectiveSuggest = (name: string): number | null => {
+    const cacheKey = `${name}||${from}||${to}`
+    const opts = optionsCache[cacheKey]
+    if (!opts) return null
+    return opts.reduce((s, o) => s + calcOrderQtyOption(o), 0)
+  }
 
   // ── 재고 소진 필요 타겟 ──
   const promoAll = useMemo(() => {
@@ -152,30 +162,32 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
   const [copiedLeft, setCopiedLeft] = useState(false)
   const [copiedRight, setCopiedRight] = useState(false)
 
-  // 발주 복사: SKU 단위 (펼쳐진 것은 SKU별, 안 펼쳐진 것은 상품 총합)
+  // 발주 복사: SKU가 로드된 상품은 SKU별로, 아니면 상품 총합.
+  // SKU 합이 0이면 해당 상품은 skip (실제 보낼 수량 없음)
   const copyUrgent = async () => {
     const lines = ['[예외발주 요청건 - 2주 판매 확보용]']
     for (const r of urgentList) {
       const cacheKey = `${r.name}||${from}||${to}`
       const opts = optionsCache[cacheKey]
-      // 옵션이 로드됐으면 SKU별로 추출 (제안수량 > 0만)
       if (opts && opts.length > 0) {
+        // SKU 단위 상세 라인
         const skuLines: string[] = []
+        let sumQty = 0
         for (const o of opts) {
           const q = calcOrderQtyOption(o)
           if (q > 0) {
             const optLabel = o.option_value || '기본'
             skuLines.push(`  └ ${optLabel} (${o.barcode}) / ${q}개`)
+            sumQty += q
           }
         }
-        if (skuLines.length > 0) {
-          lines.push(`${r.name}`)
-          lines.push(...skuLines)
-        } else {
-          lines.push(`${r.name} / ${r.suggest}개`)
-        }
+        // SKU 합이 0이면 실제로 발주할 SKU가 없음 → skip
+        if (sumQty === 0) continue
+        lines.push(`${r.name} (합계 ${sumQty}개)`)
+        lines.push(...skuLines)
       } else {
-        lines.push(`${r.name} / ${r.suggest}개`)
+        // 옵션 미로드: 상품 총합 기준 추정치
+        lines.push(`${r.name} / ${r.suggest}개 (SKU 확인 전 추정)`)
       }
     }
     await navigator.clipboard.writeText(lines.join('\n'))
@@ -203,8 +215,9 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
             <div>
               <div className="ch-title" style={{ color: '#B42318' }}>수동 발주 검토</div>
               <div className="ch-sub">
-                소진예상 14일 이내 · 본사 가용한도 50% 기준 · 상품명 클릭 시 SKU별 펼침
+                소진예상 14일 이내 · 본사 가용한도 50% 기준 · 상품명 클릭 시 SKU 합계로 재계산
                 {` · 총 ${urgentAll.length}개 상품`}
+                <span style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 6 }}>(*는 SKU 확인 전 추정치)</span>
               </div>
             </div>
           </div>
@@ -243,6 +256,11 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
                       const isOpen = expandedUrgent.has(r.name)
                       const cacheKey = `${r.name}||${from}||${to}`
                       const opts = optionsCache[cacheKey]
+                      // 옵션 로드됐으면 SKU 합계로 재계산 (정확한 값)
+                      // 안 됐으면 상품 총합 추정치(r.suggest) 사용
+                      const skuSum = effectiveSuggest(r.name)
+                      const displayQty = skuSum != null ? skuSum : r.suggest
+                      const isEstimate = skuSum == null
                       const mainRow = (
                         <tr key={r.name} style={{ cursor: 'pointer' }} onClick={() => toggleUrgent(r.name)}>
                           <td>{r.image_url
@@ -269,8 +287,14 @@ export default function DualActionBoard({ rows, from, to, optionsCache, onReques
                             color: (r.days_left ?? 99) < 7 ? '#B42318' : '#DC6803' }}>
                             {r.days_left}일
                           </td>
-                          <td style={{ textAlign: 'right', fontWeight: 800, color: '#B42318', background: '#FEF3F2' }}>
-                            {fmt(r.suggest)}개
+                          <td style={{ textAlign: 'right', fontWeight: 800,
+                            color: displayQty > 0 ? '#B42318' : 'var(--t3)',
+                            background: displayQty > 0 ? '#FEF3F2' : 'transparent' }}
+                            title={isEstimate ? '상품 총합 기준 추정치 (클릭하여 SKU 합계 확인)' : 'SKU 합계'}>
+                            {displayQty > 0 ? `${fmt(displayQty)}개` : '—'}
+                            {isEstimate && displayQty > 0 && (
+                              <span style={{ fontSize: 9, color: 'var(--t3)', fontWeight: 500, marginLeft: 2 }}>*</span>
+                            )}
                           </td>
                         </tr>
                       )
