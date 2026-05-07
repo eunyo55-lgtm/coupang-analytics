@@ -140,6 +140,94 @@ function isRangeDateCell(s: string): boolean {
   return false
 }
 
+// ── Wide-format detection & expansion ──
+// 24/25년 쿠팡 파일은 피벗 형태: 1행=1바코드, 컬럼=날짜 (예: "01월 01일", "01월 02일", ...)
+// 각 셀 값이 그 날짜의 출고수량. 이걸 long format(1행=1바코드×1날짜)으로 melt해야
+// 기존 daily_sales 스키마와 RPC가 정상 작동.
+const WIDE_DATE_HEADER_RE = /^\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*$/
+
+export function isWideSalesFormat(s0: Record<string, unknown> | undefined): boolean {
+  if (!s0) return false
+  let cnt = 0
+  for (const k of Object.keys(s0)) {
+    if (WIDE_DATE_HEADER_RE.test(k)) cnt++
+    if (cnt >= 30) return true   // 한 달치 이상이면 wide로 확정
+  }
+  return false
+}
+
+// 파일명에서 연도 추출: "2024_판매.xlsx", "쿠팡_25년.csv", "24년 매출" 등 지원
+export function extractYearFromFilename(name: string): number | null {
+  if (!name) return null
+  const m4 = name.match(/(20\d{2})/)
+  if (m4) return parseInt(m4[1], 10)
+  const m2 = name.match(/(\d{2})\s*년/)
+  if (m2) {
+    const yy = parseInt(m2[1], 10)
+    return yy < 50 ? 2000 + yy : 1900 + yy
+  }
+  return null
+}
+
+export function normalizeWideSalesData(
+  raw: Record<string, unknown>[],
+  year: number
+): SalesRow[] {
+  if (!raw.length) return []
+  const s0 = raw[0]
+  const barcodeCol = detectColumn(s0, COL_CANDIDATES.barcode)
+  if (!barcodeCol) {
+    console.warn('[parser] wide format: 바코드 컬럼 미발견 — 스킵')
+    return []
+  }
+
+  // 날짜 컬럼 수집
+  const dateCols: { key: string; mm: string; dd: string }[] = []
+  for (const k of Object.keys(s0)) {
+    const m = WIDE_DATE_HEADER_RE.exec(k)
+    if (m) {
+      dateCols.push({
+        key: k,
+        mm: m[1].padStart(2, '0'),
+        dd: m[2].padStart(2, '0'),
+      })
+    }
+  }
+  if (!dateCols.length) return []
+
+  console.log(`[parser] wide format: ${year}년 / ${dateCols.length}개 날짜 컬럼 / ${raw.length}행`)
+
+  const result: SalesRow[] = []
+  let dropped = 0
+  for (const row of raw) {
+    const barcode = String(row[barcodeCol] || '').trim()
+    if (!barcode) { dropped++; continue }
+    if (isSummaryValue(barcode)) { dropped++; continue }
+
+    for (const dc of dateCols) {
+      const qty = toNumber(row[dc.key])
+      if (qty === 0) continue   // 0은 저장 안 함 (long format이 비어있는 것과 동일)
+      // 유효 날짜인지 확인 (2월 30일 같은 거 방어)
+      const date = `${year}-${dc.mm}-${dc.dd}`
+      const dt = new Date(date + 'T00:00:00Z')
+      if (isNaN(dt.getTime())) continue
+
+      result.push({
+        date,
+        productName: barcode,
+        option: barcode,
+        qty,
+        revenue: 0,
+        isReturn: false,
+        stock: 0,
+        coupangCost: 0,
+      })
+    }
+  }
+  if (dropped > 0) console.log(`[parser] wide format: 빈 바코드 또는 합계 행 ${dropped}건 제외`)
+  return result
+}
+
 // ── Sales data normalizer (쿠팡 허브 CSV 지원) ──
 export function normalizeSalesData(
   raw: Record<string, unknown>[]

@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { persistData } from '@/lib/storage'
-import { parseFile, normalizeSalesData, detectColumn, toNumber } from '@/lib/fileParser'
+import { parseFile, normalizeSalesData, normalizeWideSalesData, isWideSalesFormat, extractYearFromFilename, detectColumn, toNumber } from '@/lib/fileParser'
 import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
@@ -268,7 +268,23 @@ export default function DataManagePage() {
       if (key === 'sales') {
         const rawKeys = result.data[0] ? Object.keys(result.data[0]).slice(0,8).join(' | ') : 'empty'
         dispatch({ type: 'APPEND_LOG', payload: `🔍 원본컬럼: ${rawKeys}` })
-        const normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+
+        // wide format(피벗 — 1행=1바코드, 365개 날짜 컬럼) 자동 감지 및 분기
+        let normalized: Record<string,unknown>[]
+        if (isWideSalesFormat(result.data[0])) {
+          const year = extractYearFromFilename(file.name)
+          if (!year) {
+            dispatch({ type: 'APPEND_LOG', payload: `❌ wide-format 인식되었으나 파일명에서 연도(예: 2024, 25년)를 못 찾음 — 파일명 변경 후 재업로드 필요` })
+            setUploading(u => ({ ...u, [key]: false }))
+            return
+          }
+          dispatch({ type: 'APPEND_LOG', payload: `📅 wide-format 인식: ${year}년 데이터로 변환 중` })
+          normalized = normalizeWideSalesData(result.data, year) as unknown as Record<string,unknown>[]
+          dispatch({ type: 'APPEND_LOG', payload: `↻ ${result.data.length.toLocaleString()}행 × 날짜컬럼 → ${normalized.length.toLocaleString()}행 (qty>0만)` })
+        } else {
+          normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+        }
+
         if (normalized.length > 0) {
           const s = normalized[0] as Record<string,unknown>
           dispatch({ type: 'APPEND_LOG', payload: `🔍 파싱결과: date=${s.date} barcode=${s.option} qty=${s.qty}` })
@@ -276,7 +292,7 @@ export default function DataManagePage() {
           dispatch({ type: 'APPEND_LOG', payload: `⚠️ 파싱결과: 0행 (날짜/수량 필터에 걸림)` })
         }
         result.data = normalized
-        dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${result.rows.toLocaleString()}행 | ${cols}` })
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${normalized.length.toLocaleString()}행 변환 완료 | ${cols}` })
         dispatch({ type: 'APPEND_LOG', payload: `📤 Supabase에 업로드 중...` })
         const salesRows = result.data as unknown as SalesRow[]
         const saved = await upsertDailySales(salesRows, dispatch)
