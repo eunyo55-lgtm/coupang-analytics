@@ -27,6 +27,13 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install dependencies
+        # ci 대신 install — package-lock.json 자동 동기화 (lockfile 안 맞아도 통과)
+        run: npm install --no-audit --no-fund
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Run Naver search volume bot
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
