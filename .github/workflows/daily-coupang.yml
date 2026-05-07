@@ -1,0 +1,51 @@
+name: Daily Coupang rankings (self-hosted)
+
+# 쿠팡 랭킹은 Akamai가 GitHub datacenter IP를 차단해서
+# 사용자의 가정·회사 네트워크에 설치한 self-hosted runner에서만 실행해야 함.
+#
+# 설정 가이드: scripts/README.md 또는
+# Settings → Actions → Runners → "New self-hosted runner"
+#
+# 라벨 'self-hosted'를 가진 러너 중 온라인 상태인 아무 머신에서나 실행됨.
+# 두 컴퓨터(집·회사) 모두 등록해두면 둘 중 하나만 켜져 있어도 자동 실행.
+
+on:
+  schedule:
+    # 매일 KST 21:00 = UTC 12:00 — 집·회사 둘 다 켜져 있을 가능성이 높은 시간
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    inputs:
+      coupang_debug:
+        description: '디버그 모드 (1=HTML 미리보기 출력)'
+        type: choice
+        default: '0'
+        options: ['0', '1']
+
+jobs:
+  coupang:
+    runs-on: self-hosted
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+        shell: pwsh
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+        shell: pwsh
+
+      - name: Run Coupang ranking bot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          COUPANG_DEBUG: ${{ inputs.coupang_debug || '0' }}
+        run: node scripts/coupang-rank.mjs
+        shell: pwsh
