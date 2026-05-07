@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { persistData } from '@/lib/storage'
-import { parseFile, normalizeSalesData, detectColumn, toNumber } from '@/lib/fileParser'
+import { parseFile, normalizeSalesData, normalizeWideSalesData, isWideSalesFormat, extractYearFromFilename, detectColumn, toNumber } from '@/lib/fileParser'
 import type { ParseResult, SalesRow } from '@/types'
 
 const FILE_CONFIG = [
@@ -34,21 +34,48 @@ async function upsertDailySales(rows: SalesRow[], dispatchFn: LogDispatch) {
 
   if (!data.length) return 0
 
+  // batch 사이즈 200 — 500은 daily_sales가 638k+ 행일 때 statement timeout(57014)을 일으킴.
+  // timeout 발생 시 자동 재시도(최대 3회): 일시적 부하라면 회복됨.
+  const BATCH = 200
+  const total_batches = Math.ceil(data.length / BATCH)
   let total = 0
-  for (let i = 0; i < data.length; i += 500) {
-    const batch = data.slice(i, i + 500)
-    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
-      method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: batch }),
-    })
-    if (res.ok) {
-      const cnt = await res.json().catch(() => batch.length)
-      total += Number(cnt) || batch.length
-    } else {
-      const err = await res.text().catch(() => 'unknown error')
-      dispatchFn({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${err.substring(0,100)}` })
-      break
+  let batchNum = 0
+
+  for (let i = 0; i < data.length; i += BATCH) {
+    batchNum++
+    const batch = data.slice(i, i + BATCH)
+    let attempts = 0
+    let ok = false
+
+    while (attempts < 3 && !ok) {
+      attempts++
+      const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
+        method: 'POST',
+        headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: batch }),
+      })
+      if (res.ok) {
+        const cnt = await res.json().catch(() => batch.length)
+        total += Number(cnt) || batch.length
+        ok = true
+      } else {
+        const err = await res.text().catch(() => 'unknown error')
+        if (res.status === 500 && attempts < 3) {
+          dispatchFn({ type: 'APPEND_LOG', payload: `⏳ batch ${batchNum}/${total_batches} timeout — 재시도 ${attempts}/3` })
+          await new Promise(r => setTimeout(r, 800 * attempts)) // back-off
+        } else {
+          dispatchFn({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}, batch ${batchNum}/${total_batches}): ${err.substring(0,100)}` })
+          return total // 다음 batch로 진행 안 하고 종료, 이미 처리된 양만 반환
+        }
+      }
+    }
+    if (!ok) {
+      dispatchFn({ type: 'APPEND_LOG', payload: `⛔ batch ${batchNum}/${total_batches} 3회 시도 실패 — 중단` })
+      return total
+    }
+    // 진행 표시 (10 batch마다)
+    if (batchNum % 10 === 0 || batchNum === total_batches) {
+      dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${total.toLocaleString()}/${data.length.toLocaleString()}행 저장 중... (batch ${batchNum}/${total_batches})` })
     }
   }
   return total
@@ -241,7 +268,23 @@ export default function DataManagePage() {
       if (key === 'sales') {
         const rawKeys = result.data[0] ? Object.keys(result.data[0]).slice(0,8).join(' | ') : 'empty'
         dispatch({ type: 'APPEND_LOG', payload: `🔍 원본컬럼: ${rawKeys}` })
-        const normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+
+        // wide format(피벗 — 1행=1바코드, 365개 날짜 컬럼) 자동 감지 및 분기
+        let normalized: Record<string,unknown>[]
+        if (isWideSalesFormat(result.data[0])) {
+          const year = extractYearFromFilename(file.name)
+          if (!year) {
+            dispatch({ type: 'APPEND_LOG', payload: `❌ wide-format 인식되었으나 파일명에서 연도(예: 2024, 25년)를 못 찾음 — 파일명 변경 후 재업로드 필요` })
+            setUploading(u => ({ ...u, [key]: false }))
+            return
+          }
+          dispatch({ type: 'APPEND_LOG', payload: `📅 wide-format 인식: ${year}년 데이터로 변환 중` })
+          normalized = normalizeWideSalesData(result.data, year) as unknown as Record<string,unknown>[]
+          dispatch({ type: 'APPEND_LOG', payload: `↻ ${result.data.length.toLocaleString()}행 × 날짜컬럼 → ${normalized.length.toLocaleString()}행 (qty>0만)` })
+        } else {
+          normalized = normalizeSalesData(result.data) as unknown as Record<string,unknown>[]
+        }
+
         if (normalized.length > 0) {
           const s = normalized[0] as Record<string,unknown>
           dispatch({ type: 'APPEND_LOG', payload: `🔍 파싱결과: date=${s.date} barcode=${s.option} qty=${s.qty}` })
@@ -249,7 +292,7 @@ export default function DataManagePage() {
           dispatch({ type: 'APPEND_LOG', payload: `⚠️ 파싱결과: 0행 (날짜/수량 필터에 걸림)` })
         }
         result.data = normalized
-        dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${result.rows.toLocaleString()}행 | ${cols}` })
+        dispatch({ type: 'APPEND_LOG', payload: `✅ [sales] ${normalized.length.toLocaleString()}행 변환 완료 | ${cols}` })
         dispatch({ type: 'APPEND_LOG', payload: `📤 Supabase에 업로드 중...` })
         const salesRows = result.data as unknown as SalesRow[]
         const saved = await upsertDailySales(salesRows, dispatch)
