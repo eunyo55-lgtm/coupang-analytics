@@ -153,9 +153,13 @@ export async function loadData(): Promise<PersistedData | null> {
     })
 
     const stockSummary = (stock as Record<string,unknown>[])[0] ?? { total_stock: 0, stock_value: 0 }
-    const d26 = (daily26 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
-    const d25 = (daily25 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
-    const d24 = (daily24 as Record<string,unknown>[]).map(r => ({ date: String(r['sale_date']), qty: Number(r['total_qty']) }))
+    // sale_date 정규화: PostgREST가 DATE/TIMESTAMP에 따라 'YYYY-MM-DD' 또는
+    // 'YYYY-MM-DDTHH:mm:ss+00:00'로 반환할 수 있음. 차트가 'YYYY-MM-DD' 키로
+    // 매칭하므로 항상 첫 10자만 사용 — 25년/24년 라인이 0으로 보이던 원인.
+    const ymd = (v: unknown) => String(v ?? '').slice(0, 10)
+    const d26 = (daily26 as Record<string,unknown>[]).map(r => ({ date: ymd(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d25 = (daily25 as Record<string,unknown>[]).map(r => ({ date: ymd(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d24 = (daily24 as Record<string,unknown>[]).map(r => ({ date: ymd(r['sale_date']), qty: Number(r['total_qty']) }))
     const latestSaleDate = d26.length > 0 ? d26[d26.length - 1].date : ''
 
     // masterData: 재고현황용 상품 목록

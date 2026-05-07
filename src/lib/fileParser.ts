@@ -6,7 +6,8 @@ const COL_CANDIDATES = {
   productName: ['SKU 명', 'SKU명', '상품명', 'productname', '노출상품명', '상품이름', 'item', '상품 명'],
   option:      ['옵션', 'option', '옵션명', '속성', '옵션 명'],
   barcode:     ['바코드', 'barcode', 'SKU Barcode', 'SKUBarcode', 'SKU ID', 'sku', 'SKU', '상품바코드'],
-  qty:         ['출고수량', '판매수량', '수량', 'qty', '주문수량', 'quantity', '판매 수량', '출고수량(판매량)'],
+  // 주의: '주문수량'은 의도적으로 제외 — 출고/판매와 의미가 달라 데이터 일관성을 깸
+  qty:         ['출고수량(판매량)', '출고수량', '판매수량', '판매 수량', '수량', 'qty', 'quantity'],
   price:       ['매입원가', '원가', '금액', 'price', '매출', '결제금액', '판매금액', '상품금액', '단가', '매입원가(쿠팡공급가)'],
   date:        ['날짜', '판매일', 'date', '주문일', '결제일', '주문날짜', '날짜(판매일)'],
   stock:       ['현재재고수량', '재고', 'stock', '현재고', '재고수량', '현재재고수량(쿠팡재고)'],
@@ -118,6 +119,27 @@ export async function parseFile(
   })
 }
 
+// ── Summary/Total row detection ──
+// 쿠팡/이지어드민 파일에는 흔히 "합계", "소계", "Total" 라벨의 집계 행이 섞여 있음.
+// 이런 행은 일별 데이터가 아니라 누적/주간 합계라서 그대로 들어가면
+// 특정 날짜(예: 주의 첫째 날)에 큰 폭으로 inflation이 발생함.
+const SUMMARY_TOKENS = ['합계', '소계', '총계', '계 :', '계:', '총합', 'total', 'subtotal', 'grand', '전체', '평균']
+function isSummaryValue(v: unknown): boolean {
+  if (v === null || v === undefined) return false
+  const s = String(v).trim().toLowerCase()
+  if (!s) return false
+  return SUMMARY_TOKENS.some(tok => s.includes(tok.toLowerCase()))
+}
+// 날짜 셀에 기간 표시(`~`, `to`, ` - `)가 있으면 합계 행으로 간주
+function isRangeDateCell(s: string): boolean {
+  const t = s.trim()
+  if (!t) return false
+  if (t.includes('~')) return true
+  if (/\d\s*-\s*\d{4}/.test(t)) return true   // "2026.04.13 - 2026.04.19"
+  if (/\d\s+to\s+\d/i.test(t)) return true
+  return false
+}
+
 // ── Sales data normalizer (쿠팡 허브 CSV 지원) ──
 export function normalizeSalesData(
   raw: Record<string, unknown>[]
@@ -137,8 +159,33 @@ export function normalizeSalesData(
 
   const stockCol = detectColumn(s0, COL_CANDIDATES.stock)
 
+  // ── Step 0: 합계/소계/Total 행 사전 제거 ──
+  let droppedSummary = 0
+  const cleaned = raw.filter(row => {
+    if (!row) return false
+    // 날짜·바코드·상품명·옵션 셀에 합계 토큰이 있으면 제외
+    const dateVal = dateCol ? row[dateCol] : ''
+    const bcVal   = barcodeCol ? row[barcodeCol] : ''
+    const nameVal = nameCol ? row[nameCol] : ''
+    const optVal  = optCol ? row[optCol] : ''
+    if (isSummaryValue(dateVal) || isSummaryValue(bcVal) ||
+        isSummaryValue(nameVal) || isSummaryValue(optVal)) {
+      droppedSummary++
+      return false
+    }
+    // 날짜 셀이 기간(`2026.04.13~2026.04.19` 등)으로 표기된 합계 행도 제외
+    if (dateCol && isRangeDateCell(String(dateVal || ''))) {
+      droppedSummary++
+      return false
+    }
+    return true
+  })
+  if (droppedSummary > 0) {
+    console.log(`[parser] 🧹 합계/소계 행 ${droppedSummary}건 제외`)
+  }
+
   // ── Step 1: row별 파싱 ──
-  const parsed = raw
+  const parsed = cleaned
     .filter(row => {
       const d = dateCol ? String(row[dateCol] || '') : ''
       return d.length > 0
@@ -174,7 +221,8 @@ export function normalizeSalesData(
         coupangCost: price, // 쿠팡 매입원가 (재고액 계산용)
       }
     })
-    .filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/))  // 날짜 형식 유효한 행만
+    // 날짜 형식이 유효하고, 바코드(option) 또는 상품명이 비어있지 않은 행만
+    .filter(r => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/) && (r.option || r.productName))
 
   // ── Step 2: 날짜 + 바코드(option) 기준으로 집계 ──
   // 쿠팡 허브 파일은 동일 날짜에 같은 바코드가 여러 row로 나올 수 있음
