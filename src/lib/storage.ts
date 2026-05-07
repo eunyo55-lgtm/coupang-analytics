@@ -63,12 +63,15 @@ async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
   return []
 }
 
-// 테이블 직접 페이지네이션 — PAGE 5000으로 키워 호출 횟수 1/5로 축소
+// 테이블 직접 페이지네이션
+// 주의: Supabase PostgREST의 기본 max-rows = 1000. limit=5000을 요청해도 서버는 1000만
+// 반환하므로 PAGE를 1000으로 유지해야 모든 행을 가져올 수 있음.
+// (PAGE > 1000 이면 첫 페이지에서 즉시 break 되어 일부 행만 로드되는 silent bug 발생)
 async function fetchAllPages(path: string, extraHeaders: Record<string,string> = {}) {
   if (typeof window === 'undefined') return []
   const all: Record<string,unknown>[] = []
   let offset = 0
-  const PAGE = 5000
+  const PAGE = 1000
   while (true) {
     const sep = path.includes('?') ? '&' : '?'
     const url = `${SUPA_URL}/rest/v1/${path}${sep}offset=${offset}&limit=${PAGE}`
