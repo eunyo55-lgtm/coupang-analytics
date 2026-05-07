@@ -34,21 +34,48 @@ async function upsertDailySales(rows: SalesRow[], dispatchFn: LogDispatch) {
 
   if (!data.length) return 0
 
+  // batch 사이즈 200 — 500은 daily_sales가 638k+ 행일 때 statement timeout(57014)을 일으킴.
+  // timeout 발생 시 자동 재시도(최대 3회): 일시적 부하라면 회복됨.
+  const BATCH = 200
+  const total_batches = Math.ceil(data.length / BATCH)
   let total = 0
-  for (let i = 0; i < data.length; i += 500) {
-    const batch = data.slice(i, i + 500)
-    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
-      method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: batch }),
-    })
-    if (res.ok) {
-      const cnt = await res.json().catch(() => batch.length)
-      total += Number(cnt) || batch.length
-    } else {
-      const err = await res.text().catch(() => 'unknown error')
-      dispatchFn({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}): ${err.substring(0,100)}` })
-      break
+  let batchNum = 0
+
+  for (let i = 0; i < data.length; i += BATCH) {
+    batchNum++
+    const batch = data.slice(i, i + BATCH)
+    let attempts = 0
+    let ok = false
+
+    while (attempts < 3 && !ok) {
+      attempts++
+      const res = await fetch(`${SUPA_URL}/rest/v1/rpc/upsert_daily_sales`, {
+        method: 'POST',
+        headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: batch }),
+      })
+      if (res.ok) {
+        const cnt = await res.json().catch(() => batch.length)
+        total += Number(cnt) || batch.length
+        ok = true
+      } else {
+        const err = await res.text().catch(() => 'unknown error')
+        if (res.status === 500 && attempts < 3) {
+          dispatchFn({ type: 'APPEND_LOG', payload: `⏳ batch ${batchNum}/${total_batches} timeout — 재시도 ${attempts}/3` })
+          await new Promise(r => setTimeout(r, 800 * attempts)) // back-off
+        } else {
+          dispatchFn({ type: 'APPEND_LOG', payload: `❌ 저장 에러 (${res.status}, batch ${batchNum}/${total_batches}): ${err.substring(0,100)}` })
+          return total // 다음 batch로 진행 안 하고 종료, 이미 처리된 양만 반환
+        }
+      }
+    }
+    if (!ok) {
+      dispatchFn({ type: 'APPEND_LOG', payload: `⛔ batch ${batchNum}/${total_batches} 3회 시도 실패 — 중단` })
+      return total
+    }
+    // 진행 표시 (10 batch마다)
+    if (batchNum % 10 === 0 || batchNum === total_batches) {
+      dispatchFn({ type: 'APPEND_LOG', payload: `📤 ${total.toLocaleString()}/${data.length.toLocaleString()}행 저장 중... (batch ${batchNum}/${total_batches})` })
     }
   }
   return total
