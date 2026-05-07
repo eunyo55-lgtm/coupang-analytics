@@ -7,6 +7,12 @@ on:
     - cron: '0 18 * * *'
   # 수동 실행 (Actions 탭에서 "Run workflow" 클릭 가능)
   workflow_dispatch:
+    inputs:
+      coupang_debug:
+        description: '쿠팡 봇 디버그 모드 (1=켬, 0=끔). 0이면 첫 800자 HTML 미리보기 미출력.'
+        type: choice
+        default: '0'
+        options: ['0', '1']
 
 jobs:
   run-bots:
@@ -34,4 +40,5 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          COUPANG_DEBUG: ${{ inputs.coupang_debug || '0' }}
         run: node scripts/coupang-rank.mjs
