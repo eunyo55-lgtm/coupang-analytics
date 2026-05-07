@@ -1,76 +1,124 @@
 # 자동화 봇
 
-GitHub Actions로 매일 1회 실행되는 데이터 수집 봇 2종.
+데이터 수집 봇 2종. **하나는 자동, 하나는 로컬 실행**으로 분리되어 있습니다.
 
-## 봇 종류
+## 봇별 실행 방식
 
-### `naver-volume.mjs` — 네이버 검색량 봇
-- `keywords` 테이블의 모든 키워드를 가져와서
-- 네이버 검색광고 API(`api.naver.com/keywordstool`)로 PC/모바일 월간 검색량 조회
-- `keyword_search_volumes` 테이블에 (keyword, target_date) 키로 upsert
-
-### `coupang-rank.mjs` — 쿠팡 랭킹 봇
-- `keywords` 테이블에서 `coupang_product_id`가 등록된 키워드 모두 조회
-- 각 키워드로 쿠팡 검색 페이지를 fetch (최대 5페이지 = 360개)
-- 해당 product_id의 노출 순위·평점·리뷰수 추출
-- `keyword_rankings` 테이블에 오늘 날짜로 insert (재실행 시 같은 날짜 row 삭제 후 다시 insert)
-- 5페이지 안에 못 찾으면 rank_position = 999
-
-## 스케줄
-
-`.github/workflows/daily-bots.yml`
-- 매일 KST 오전 3시 (UTC 18:00) 자동 실행
-- GitHub 저장소 → Actions → "Daily bots" → "Run workflow"로 수동 실행도 가능
-
-## 필요한 GitHub Secrets
-
-저장소 → Settings → Secrets and variables → Actions → "New repository secret":
-
-| Secret 이름 | 값 | 어디서 |
+| 봇 | 실행 위치 | 이유 |
 |---|---|---|
-| `SUPABASE_URL` | `https://vzyfygmzqqiwgrcuydti.supabase.co` | Supabase Dashboard → Project Settings → API |
-| `SUPABASE_ANON_KEY` | `eyJ...` (anon public key) | 같은 위치 |
-| `NAVER_CUSTOMER_ID` | 숫자 | 네이버 검색광고 → API 라이센스 관리 |
-| `NAVER_ACCESS_LICENSE` | 라이센스 키 | 같은 위치 |
-| `NAVER_SECRET_KEY` | 시크릿 키 | 같은 위치 (생성 시 1회만 표시 — 분실 시 재생성) |
+| `naver-volume.mjs` | GitHub Actions 자동 (매일 KST 03:00) | API 기반 — 어디서든 작동 |
+| `coupang-rank.mjs` | **사용자 노트북 로컬** (수동 또는 작업 스케줄러) | 쿠팡 Akamai가 GitHub IP 차단 — 가정용 IP 필요 |
 
-## 로컬에서 테스트
+---
 
-```bash
-# .env 파일 생성 (Git에는 push 안 됨)
-cat > .env <<EOF
-SUPABASE_URL=https://vzyfygmzqqiwgrcuydti.supabase.co
-SUPABASE_ANON_KEY=...
-NAVER_CUSTOMER_ID=...
-NAVER_ACCESS_LICENSE=...
-NAVER_SECRET_KEY=...
-EOF
+## 1. Naver 검색량 봇 — 자동 (해야 할 일 1번뿐)
 
-# 환경변수 로드 후 실행 (Linux/Mac/Git Bash)
-export $(grep -v '^#' .env | xargs) && node scripts/naver-volume.mjs
+### GitHub Secrets 5개 등록
+저장소 → **Settings** → **Secrets and variables** → **Actions** → "New repository secret":
 
-# Windows PowerShell
-Get-Content .env | ForEach-Object {
-  if ($_ -match '^([^=]+)=(.+)$') { Set-Item "env:$($Matches[1])" $Matches[2] }
-}
-node scripts/naver-volume.mjs
+| Name | 값 |
+|---|---|
+| `SUPABASE_URL` | `https://vzyfygmzqqiwgrcuydti.supabase.co` |
+| `SUPABASE_ANON_KEY` | Supabase Settings → API → anon public key |
+| `NAVER_CUSTOMER_ID` | 네이버 검색광고 → API 사용 관리 |
+| `NAVER_ACCESS_LICENSE` | 같은 위치 |
+| `NAVER_SECRET_KEY` | 같은 위치 (생성 시 1회만 표시) |
+
+등록 후 **Actions** 탭에서 "Daily Naver search volumes" → "Run workflow"로 즉시 테스트 가능.
+
+이후 매일 KST 03:00에 자동 실행됨.
+
+---
+
+## 2. Coupang 랭킹 봇 — 로컬 실행
+
+쿠팡은 Akamai bot protection을 사용해서 GitHub Actions IP 같은 datacenter IP를 차단합니다 (Access Denied 페이지 반환). **가정용 한국 IP에서 실행해야 합니다.**
+
+### 설정 (1회만)
+
+#### A. Node.js 설치
+이미 설치돼 있으면 건너뛰세요. 아니면 https://nodejs.org/ 에서 LTS 버전 다운로드.
+PowerShell에서 확인: `node --version` (v20 이상 권장)
+
+#### B. 프로젝트 코드 가져오기
+```powershell
+cd C:\Users\<본인이름>\Documents
+git clone https://github.com/eunyo55-lgtm/coupang-analytics.git
+cd coupang-analytics
 ```
 
-## 데이터 모델
+#### C. 의존성 설치
+```powershell
+npm install
+npx playwright install chromium
+```
 
-### `keyword_search_volumes`
-- (keyword, target_date) unique
-- pc_volume / mobile_volume / total_volume
+#### D. .env 파일 생성
+프로젝트 루트(`coupang-analytics/`)에 `.env` 파일 만들고:
+```
+SUPABASE_URL=https://vzyfygmzqqiwgrcuydti.supabase.co
+SUPABASE_ANON_KEY=eyJ...실제값...
+```
 
-### `keyword_rankings`
-- keyword_id (keywords FK)
-- date
-- rank_position (1-360, 또는 999=권외)
-- rating (0~5, null 가능)
-- review_count (null 가능)
+⚠️ `.env`는 `.gitignore`에 들어 있으므로 GitHub에 푸시되지 않습니다.
+
+### 실행 (매번)
+
+#### 옵션 1 — 더블클릭
+탐색기에서 `scripts/run-coupang-local.bat` 더블클릭. 검은 창 열리고 진행 상황 출력. 끝나면 아무 키나 눌러 닫기.
+
+#### 옵션 2 — PowerShell
+```powershell
+cd C:\Users\<본인이름>\Documents\coupang-analytics
+.\scripts\run-coupang-local.ps1
+```
+
+#### 옵션 3 — Node 직접
+```powershell
+$env:SUPABASE_URL="https://vzyfygmzqqiwgrcuydti.supabase.co"
+$env:SUPABASE_ANON_KEY="eyJ..."
+node scripts/coupang-rank.mjs
+```
+
+### 매일 자동 실행하고 싶다면 — Windows 작업 스케줄러
+
+1. 작업 스케줄러 열기 (Win+R → `taskschd.msc`)
+2. 우측 "기본 작업 만들기"
+3. 이름: "쿠팡 랭킹 봇" / 매일 / 시작 시간 (예: 03:00)
+4. 동작: 프로그램 시작 → `C:\...\coupang-analytics\scripts\run-coupang-local.bat`
+5. 노트북 켜져 있어야 실행됨 (꺼져 있으면 다음 켜질 때 1회만 실행)
+
+---
+
+## 보안 주의
+
+- `.env` 파일은 절대 Git에 push 하지 마세요 (이미 `.gitignore`에 포함됨)
+- `SUPABASE_ANON_KEY`는 Supabase의 **anon** key (공개 키)라 노출돼도 RLS 정책으로 보호됨. 다만 다른 사람과 공유하지는 마세요.
 
 ## 모니터링
 
-GitHub 저장소 → Actions 탭에서 각 실행의 로그 확인 가능. 실패 시 이메일 알림.
+Supabase에서:
+```sql
+-- 오늘 쿠팡 랭킹 집계
+select 
+  count(*) as total,
+  sum(case when rank_position = 999 then 1 else 0 end) as out_of_range,
+  sum(case when rank_position < 999 then 1 else 0 end) as ranked
+from keyword_rankings
+where date = (select max(date) from keyword_rankings);
+```
 
-대시보드 "랭킹 현황" 탭에서 데이터가 매일 채워지는지 확인.
+`ranked > 0` 이면 정상 작동. `total = 0` 이면 봇 실행 안 됨. `out_of_range = total` 이면 차단됨 (이 경우 .env 확인 또는 다른 컴퓨터에서 시도).
+
+---
+
+## 미래 옵션 — 셀프 호스트 GitHub Runner
+
+자동화를 더 원하면 본인 노트북에 GitHub Actions self-hosted runner를 설치해서 **매일 정해진 시간에 GitHub가 노트북에 작업 명령**하도록 할 수 있습니다.
+
+1. 저장소 → Settings → Actions → Runners → "New self-hosted runner"
+2. Windows / x64 선택, 표시되는 PowerShell 명령 그대로 실행
+3. runner가 백그라운드 서비스로 등록됨
+4. `.github/workflows/coupang-rank.yml` 추가하고 `runs-on: self-hosted` 설정
+
+이건 좀 더 무거운 셋업이라 일단은 작업 스케줄러로 시작하고, 안정화되면 그때 옮기는 게 좋습니다.

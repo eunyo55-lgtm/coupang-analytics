@@ -1,23 +1,19 @@
-name: Daily bots — Naver volumes & Coupang rankings
+name: Daily Naver search volumes
+
+# 네이버 검색량만 GitHub Actions에서 자동 실행.
+# 쿠팡 랭킹은 Akamai가 GitHub IP를 차단해서 동작하지 않으므로
+# 로컬에서 별도 실행 필요 (scripts/README.md 참고).
 
 on:
   schedule:
-    # 매일 KST 오전 3시 = UTC 18:00 (전날 KST)
-    # cron 형식: 분 시 일 월 요일
+    # 매일 KST 오전 3시 = UTC 18:00 (전날)
     - cron: '0 18 * * *'
-  # 수동 실행 (Actions 탭에서 "Run workflow" 클릭 가능)
   workflow_dispatch:
-    inputs:
-      coupang_debug:
-        description: '쿠팡 봇 디버그 모드 (1=켬, 0=끔). 0이면 첫 800자 HTML 미리보기 미출력.'
-        type: choice
-        default: '0'
-        options: ['0', '1']
 
 jobs:
-  run-bots:
+  naver:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +23,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        # ci 대신 install — package-lock.json 자동 동기화 (lockfile 안 맞아도 통과)
-        run: npm install --no-audit --no-fund
-
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-
       - name: Run Naver search volume bot
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -42,10 +31,3 @@ jobs:
           NAVER_ACCESS_LICENSE: ${{ secrets.NAVER_ACCESS_LICENSE }}
           NAVER_SECRET_KEY: ${{ secrets.NAVER_SECRET_KEY }}
         run: node scripts/naver-volume.mjs
-
-      - name: Run Coupang ranking bot
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          COUPANG_DEBUG: ${{ inputs.coupang_debug || '0' }}
-        run: node scripts/coupang-rank.mjs
