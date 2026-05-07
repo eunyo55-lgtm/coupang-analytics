@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useState } from 'react'
 import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
-import { loadData, clearData, PersistedData } from '@/lib/storage'
+import { loadEssential, loadHistorical, readEssentialFromCache, cacheEssential, clearData, PersistedData } from '@/lib/storage'
 
 export type { PersistedData }
 
@@ -89,26 +89,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (hydrated.current) return
     hydrated.current = true
-    loadData().then((saved: PersistedData | null) => {
-      if (saved?.hasData) {
+
+    // ─── Phase 0: localStorage 캐시(5분 TTL)가 있으면 즉시 화면 표시 (0초)
+    const cached = readEssentialFromCache()
+    if (cached) {
+      dispatch({
+        type: 'HYDRATE',
+        payload: {
+          stockSummary:   cached.stockSummary,
+          daily26:        cached.daily26,
+          daily25:        cached.daily25,
+          daily24:        cached.daily24,
+          latestSaleDate: cached.latestSaleDate,
+          ordersData:     cached.ordersData,
+          supplyData:     cached.supplyData,
+          hasData:        true,
+        },
+      })
+      setIsReady(true)
+      console.log('[CA] 💾 캐시에서 즉시 표시 — 백그라운드에서 fresh 로드 시작')
+    }
+
+    // ─── Phase 1: Essential 데이터 fresh 로드 (~2초)
+    loadEssential().then(essential => {
+      if (essential) {
+        cacheEssential(essential)
         dispatch({
           type: 'HYDRATE',
           payload: {
-            stockSummary:   saved.stockSummary,
-            daily26:        saved.daily26,
-            daily25:        saved.daily25,
-            daily24:        saved.daily24,
-            latestSaleDate: saved.latestSaleDate,
-            ordersData:     saved.ordersData,
-            supplyData:     saved.supplyData,
-            salesData: saved.salesData,
-            masterData: saved.masterData,
+            stockSummary:   essential.stockSummary,
+            daily26:        essential.daily26,
+            daily25:        essential.daily25,
+            daily24:        essential.daily24,
+            latestSaleDate: essential.latestSaleDate,
+            ordersData:     essential.ordersData,
+            supplyData:     essential.supplyData,
             hasData:        true,
           },
         })
+        if (!cached) setIsReady(true)   // 캐시 없었으면 여기서 처음 화면 표시
+      } else if (!cached) {
+        setIsReady(true)   // 로드 실패해도 빈 화면이라도 보이게
       }
-      setIsReady(true)
-    }).catch(() => setIsReady(true))
+
+      // ─── Phase 2: Historical (salesData/products) — 백그라운드, 화면 안 막음
+      loadHistorical().then(historical => {
+        if (historical) {
+          dispatch({
+            type: 'HYDRATE',
+            payload: {
+              salesData:  historical.salesData,
+              masterData: historical.masterData,
+            },
+          })
+        }
+      }).catch(e => console.warn('[CA] historical load failed:', e))
+    }).catch(e => {
+      console.warn('[CA] essential load failed:', e)
+      if (!cached) setIsReady(true)
+    })
   }, [])
 
   return <AppContext.Provider value={{ state, dispatch, isReady }}>{children}</AppContext.Provider>

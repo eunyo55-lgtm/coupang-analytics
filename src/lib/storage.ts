@@ -31,43 +31,232 @@ export interface PersistedData {
   latestSaleDate: string
 }
 
-// fetch로 RPC 호출 — 일반용
+// fetch로 RPC 호출 — 5xx 일시 오류는 자동 재시도 (최대 3회, 지수 backoff)
 async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
   if (typeof window === 'undefined') return []
-  try {
-    const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
-      method: 'POST',
-      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    })
-    if (!res.ok) { console.warn(`[storage] RPC ${fn} error:`, res.status); return [] }
-    return await res.json()
-  } catch(e) { console.warn(`[storage] RPC ${fn}:`, e); return [] }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
+        method: 'POST',
+        headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      })
+      if (res.ok) return await res.json()
+      // 5xx (서버 일시 오류)면 재시도, 4xx면 바로 빈 배열 반환
+      if (res.status >= 500 && attempt < 3) {
+        console.warn(`[storage] RPC ${fn} ${res.status} — 재시도 ${attempt}/3`)
+        await new Promise(r => setTimeout(r, 500 * attempt))
+        continue
+      }
+      console.warn(`[storage] RPC ${fn} error:`, res.status)
+      return []
+    } catch(e) {
+      if (attempt < 3) {
+        console.warn(`[storage] RPC ${fn} 네트워크 에러 — 재시도 ${attempt}/3`)
+        await new Promise(r => setTimeout(r, 500 * attempt))
+        continue
+      }
+      console.warn(`[storage] RPC ${fn}:`, e)
+      return []
+    }
+  }
+  return []
 }
 
-// 테이블 직접 페이지네이션 (1000행 제한 우회)
+// 테이블 직접 페이지네이션 — PAGE 5000으로 키워 호출 횟수 1/5로 축소
 async function fetchAllPages(path: string, extraHeaders: Record<string,string> = {}) {
   if (typeof window === 'undefined') return []
   const all: Record<string,unknown>[] = []
   let offset = 0
-  const PAGE = 1000
+  const PAGE = 5000
   while (true) {
     const sep = path.includes('?') ? '&' : '?'
     const url = `${SUPA_URL}/rest/v1/${path}${sep}offset=${offset}&limit=${PAGE}`
     const res = await fetch(url, {
       headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, ...extraHeaders }
     })
-    console.log('[fetchAllPages]', path.substring(0,30), 'offset:', offset, 'status:', res.status)
     if (!res.ok) { console.warn('[fetchAllPages] not ok:', res.status, await res.text().catch(()=>'')); break }
     const data = await res.json()
-    console.log('[fetchAllPages] data type:', typeof data, 'isArray:', Array.isArray(data), 'length:', Array.isArray(data) ? data.length : 'N/A')
     if (!Array.isArray(data) || !data.length) break
     all.push(...data)
     if (data.length < PAGE) break
     offset += PAGE
-    if (all.length > 300000) break
+    if (all.length > 500000) break
   }
   return all
+}
+
+// ── localStorage 캐시 (Essential 데이터만, 5분 TTL) ──
+// 같은 세션 내 빠른 재방문 시 즉시 화면 표시 (백그라운드에서 fresh 로드)
+const CACHE_KEY = 'ca_essential_v2'
+const CACHE_TTL_MS = 5 * 60 * 1000  // 5분
+
+interface EssentialCache {
+  ts: number
+  data: EssentialData
+}
+
+function readEssentialCache(): EssentialData | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (!raw) return null
+    const c = JSON.parse(raw) as EssentialCache
+    if (Date.now() - c.ts > CACHE_TTL_MS) return null
+    return c.data
+  } catch { return null }
+}
+
+function writeEssentialCache(data: EssentialData) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data }))
+  } catch {
+    // quota / serialize 실패 무시
+  }
+}
+
+// ── Phase 1: Essential — 대시보드 표시에 필요한 가벼운 데이터 (~2초)
+export interface EssentialData {
+  stockSummary: PersistedData['stockSummary']
+  daily26: { date: string; qty: number }[]
+  daily25: { date: string; qty: number }[]
+  daily24: { date: string; qty: number }[]
+  latestSaleDate: string
+  ordersData: Record<string, unknown>[]
+  supplyData: Record<string, unknown>[]
+}
+
+export async function loadEssential(): Promise<EssentialData | null> {
+  if (typeof window === 'undefined') return null
+  try {
+    const [stock, daily26, daily25, daily24, supplyRes, ordersRes] = await Promise.all([
+      rpcFetch('get_stock_summary'),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2026 }),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2025 }),
+      rpcFetch('get_daily_qty_by_year', { target_year: 2024 }),
+      supabase.from('supply_status')
+        .select('"발주번호","SKU 이름","SKU Barcode","입고예정일","발주일","발주수량","확정수량","입고수량"')
+        .limit(5000),
+      supabase.from('coupang_orders')
+        .select('order_date,barcode,order_qty,confirmed_qty,received_qty,center')
+        .order('order_date', { ascending: false })
+        .limit(5000),
+    ])
+
+    const stockSummary = (stock as Record<string,unknown>[])[0] ?? { total_stock: 0, stock_value: 0 }
+    const ymd = (v: unknown) => String(v ?? '').slice(0, 10)
+    const d26 = (daily26 as Record<string,unknown>[]).map(r => ({ date: ymd(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d25 = (daily25 as Record<string,unknown>[]).map(r => ({ date: ymd(r['sale_date']), qty: Number(r['total_qty']) }))
+    const d24 = (daily24 as Record<string,unknown>[]).map(r => ({ date: ymd(r['sale_date']), qty: Number(r['total_qty']) }))
+    const latestSaleDate = d26.length > 0 ? d26[d26.length - 1].date : ''
+
+    const result: EssentialData = {
+      stockSummary: stockSummary as EssentialData['stockSummary'],
+      daily26: d26, daily25: d25, daily24: d24, latestSaleDate,
+      ordersData: (ordersRes.data || []) as Record<string,unknown>[],
+      supplyData: (supplyRes.data  || []) as Record<string,unknown>[],
+    }
+    console.log('[CA] ⚡ Essential 로드 완료:', { daily26: d26.length, daily25: d25.length, daily24: d24.length, latestSaleDate })
+    return result
+  } catch (e) {
+    console.warn('[storage] loadEssential error:', e)
+    return null
+  }
+}
+
+export function readEssentialFromCache(): EssentialData | null {
+  if (typeof window === 'undefined') return null
+  return readEssentialCache()
+}
+
+export function cacheEssential(data: EssentialData) {
+  writeEssentialCache(data)
+}
+
+// ── Phase 2: Historical — SalesPage/InventoryPage용 대용량 데이터 (백그라운드)
+export interface HistoricalData {
+  salesData: PersistedData['salesData']
+  masterData: PersistedData['masterData']
+}
+
+export async function loadHistorical(): Promise<HistoricalData | null> {
+  if (typeof window === 'undefined') return null
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const yearStart = `${new Date().getFullYear()}-01-01`
+    const ninetyAgo = new Date()
+    ninetyAgo.setDate(ninetyAgo.getDate() - 90)
+    const from90 = ninetyAgo.toISOString().slice(0, 10)
+    const fromLoad = yearStart < from90 ? yearStart : from90
+
+    const [salesRaw, productsRaw] = await Promise.all([
+      fetchAllPages(
+        `daily_sales?select=date,barcode,quantity&date=gte.${fromLoad}&date=lte.${today}&quantity=gt.0&order=date.asc`
+      ),
+      (async () => {
+        try {
+          return await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category,hq_stock&barcode=not.is.null&name=not.is.null')
+        } catch {
+          try {
+            return await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category&barcode=not.is.null&name=not.is.null')
+          } catch {
+            return await fetchAllPages('products?select=barcode,name,option_value,cost&barcode=not.is.null&name=not.is.null')
+          }
+        }
+      })(),
+    ])
+
+    interface ProductInfo {
+      name: string; option: string; cost: number;
+      season: string; imageUrl: string; category: string; hqStock: number
+    }
+    const barcodeMap = new Map<string, ProductInfo>()
+    productsRaw.forEach(r => {
+      const bc = String(r['barcode'] || '')
+      if (bc) barcodeMap.set(bc, {
+        name:     String(r['name'] || bc),
+        option:   String(r['option_value'] || ''),
+        cost:     Number(r['cost'] || 0),
+        season:   String(r['season'] || ''),
+        imageUrl: String(r['image_url'] || ''),
+        category: String(r['category'] || ''),
+        hqStock:  Number(r['hq_stock'] || 0),
+      })
+    })
+
+    const salesData = (salesRaw as Record<string,unknown>[]).map(r => {
+      const bc   = String(r['barcode'] || '')
+      const info = barcodeMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
+      const qty  = Number(r['quantity'] || 0)
+      return {
+        date:        String(r['date']),
+        productName: info.name,
+        option:      info.option,
+        barcode:     bc,
+        qty,
+        revenue:     info.cost * qty,
+        isReturn:    false,
+        season:      info.season,
+        imageUrl:    info.imageUrl,
+        category:    info.category,
+        cost:        info.cost,
+      }
+    })
+
+    const seen = new Set<string>()
+    const masterData = salesData.reduce((acc: Record<string,unknown>[], r) => {
+      if (!seen.has(r.productName)) {
+        seen.add(r.productName)
+        acc.push({ 상품명: r.productName, 옵션: r.option, 바코드: r.barcode || '' })
+      }
+      return acc
+    }, [])
+
+    console.log('[CA] 📦 Historical 로드 완료:', { salesYTD: salesData.length, products: productsRaw.length })
+    return { salesData, masterData }
+  } catch (e) {
+    console.warn('[storage] loadHistorical error:', e)
+    return null
+  }
 }
 
 export async function loadData(): Promise<PersistedData | null> {
