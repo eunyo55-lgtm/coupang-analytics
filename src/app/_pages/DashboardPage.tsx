@@ -48,6 +48,9 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
     const from25 = from26.replace('2026','2025'), to25 = to26.replace('2026','2025')
     const from24 = from26.replace('2026','2024'), to24 = to26.replace('2026','2024')
 
+    // sale_date가 timestamp 문자열로 올 수도 있어 항상 'YYYY-MM-DD'로 잘라야 함
+    const ymd = (v: unknown) => String(v ?? '').slice(0, 10)
+
     Promise.all([
       rpc('get_daily_sales_by_name', { p_name: productName, p_from: from26, p_to: to26 }),
       rpc('get_daily_sales_by_name', { p_name: productName, p_from: from25, p_to: to25 }),
@@ -58,13 +61,13 @@ function SalesTrendModal({ productName, onClose }: { productName: string; onClos
       const map24 = new Map<string,number>()
 
       ;(Array.isArray(data26) ? data26 : []).forEach((r:{sale_date:string;total_qty:number}) =>
-        map26.set(r.sale_date, r.total_qty)
+        map26.set(ymd(r.sale_date), r.total_qty)
       )
       ;(Array.isArray(data25) ? data25 : []).forEach((r:{sale_date:string;total_qty:number}) =>
-        map25.set(r.sale_date.replace('2025','2026'), r.total_qty)
+        map25.set(ymd(r.sale_date).replace('2025','2026'), r.total_qty)
       )
       ;(Array.isArray(data24) ? data24 : []).forEach((r:{sale_date:string;total_qty:number}) =>
-        map24.set(r.sale_date.replace('2024','2026'), r.total_qty)
+        map24.set(ymd(r.sale_date).replace('2024','2026'), r.total_qty)
       )
 
       // 날짜 축 생성 (from26 ~ to26)
@@ -418,7 +421,8 @@ export default function DashboardPage() {
                                   body:JSON.stringify({p_name:p.product_name,p_from:'2026-01-01'})
                                 })
                                 const data=await res.json()
-                                const history=Array.isArray(data)?data.map((r:{sale_date:string;total_stock:number})=>({week:r.sale_date.slice(5),qty:r.total_stock})):[]
+                                // sale_date가 timestamp로 와도 안전하게 'YYYY-MM-DD'로 잘라 'MM-DD' 추출
+                                const history=Array.isArray(data)?data.map((r:{sale_date:string;total_stock:number})=>({week:String(r.sale_date??'').slice(0,10).slice(5),qty:r.total_stock})):[]
                                 setStockModal({name:p.product_name,history})
                               }}
                               style={{fontWeight:700,maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'block',cursor:'pointer',color:'var(--blue)',textDecoration:'underline dotted'}}
