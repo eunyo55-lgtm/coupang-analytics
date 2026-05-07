@@ -1,0 +1,37 @@
+name: Daily bots — Naver volumes & Coupang rankings
+
+on:
+  schedule:
+    # 매일 KST 오전 3시 = UTC 18:00 (전날 KST)
+    # cron 형식: 분 시 일 월 요일
+    - cron: '0 18 * * *'
+  # 수동 실행 (Actions 탭에서 "Run workflow" 클릭 가능)
+  workflow_dispatch:
+
+jobs:
+  run-bots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Naver search volume bot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          NAVER_ACCESS_LICENSE: ${{ secrets.NAVER_ACCESS_LICENSE }}
+          NAVER_SECRET_KEY: ${{ secrets.NAVER_SECRET_KEY }}
+        run: node scripts/naver-volume.mjs
+
+      - name: Run Coupang ranking bot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/coupang-rank.mjs
