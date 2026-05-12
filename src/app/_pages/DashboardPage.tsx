@@ -56,6 +56,44 @@ async function rpc(fn: string, params: Record<string,unknown> = {}, timeoutMs = 
   return []
 }
 
+// ── RPC 결과 캐시 (localStorage, 10분 TTL, stale-while-revalidate) ──
+// 같은 파라미터로 자주 호출되는 KPI/TOP 응답을 캐시.
+// 캐시 hit 시 즉시 사용하고 백그라운드에서 fresh fetch는 호출부 useEffect가 진행.
+const RPC_CACHE_PREFIX = 'ca_rpc_'
+const RPC_CACHE_TTL_MS = 10 * 60 * 1000  // 10분
+type CacheEntry<T> = { ts: number; data: T }
+
+function cacheKey(fn: string, params: Record<string,unknown>): string {
+  return RPC_CACHE_PREFIX + fn + ':' + JSON.stringify(params)
+}
+function readRpcCache<T = unknown>(fn: string, params: Record<string,unknown>): T | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(cacheKey(fn, params))
+    if (!raw) return null
+    const c = JSON.parse(raw) as CacheEntry<T>
+    if (Date.now() - c.ts > RPC_CACHE_TTL_MS) return null
+    return c.data
+  } catch { return null }
+}
+function writeRpcCache(fn: string, params: Record<string,unknown>, data: unknown) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(cacheKey(fn, params), JSON.stringify({ ts: Date.now(), data }))
+  } catch { /* quota / serialize 실패 무시 */ }
+}
+
+// rpc() + 캐시 래퍼. 캐시가 있어도 호출부는 fresh fetch를 따로 트리거할 수 있음.
+async function rpcCached(fn: string, params: Record<string,unknown> = {}, opts: { forceFresh?: boolean; timeoutMs?: number } = {}) {
+  if (!opts.forceFresh) {
+    const cached = readRpcCache(fn, params)
+    if (cached !== null) return cached
+  }
+  const fresh = await rpc(fn, params, opts.timeoutMs ?? 30000)
+  if (Array.isArray(fresh) && fresh.length > 0) writeRpcCache(fn, params, fresh)
+  return fresh
+}
+
 // ── 판매 추이 모달: 특정 상품의 3개년 일별 판매량을 RPC로 조회 ──
 function SalesTrendModal({ productName, onClose }: { productName: string; onClose: () => void }) {
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
@@ -206,39 +244,63 @@ export default function DashboardPage() {
     const w25f=weekRange.from.replace('2026','2025'), w25t=weekRange.to.replace('2026','2025')
     const c25t=cumRange.to.replace('2026','2025')
 
-    const pickRow = (res: PromiseSettledResult<unknown>): {total_qty?:number;total_revenue?:number} | null => {
+    const pickRow = (val: unknown): {total_qty?:number;total_revenue?:number} | null => {
+      if (!Array.isArray(val) || val.length === 0) return null
+      return val[0] as {total_qty?:number;total_revenue?:number}
+    }
+    const pickFromSettled = (res: PromiseSettledResult<unknown>): {total_qty?:number;total_revenue?:number} | null => {
       if (res.status !== 'fulfilled') { console.warn('[KPI] RPC rejected:', res.reason); return null }
-      const v = res.value as unknown
-      if (!Array.isArray(v) || v.length === 0) return null
-      return v[0] as {total_qty?:number;total_revenue?:number}
+      return pickRow(res.value)
     }
     const toKpi = (row: {total_qty?:number;total_revenue?:number}|null) =>
       row ? { qty: Number(row.total_qty||0), rev: Number(row.total_revenue||0) } : null
 
-    Promise.allSettled([
-      rpc('get_kpi_by_date',{target_date:latestDate}),
-      rpc('get_kpi_range',{date_from:weekRange.from,date_to:weekRange.to}),
-      rpc('get_kpi_range',{date_from:cumRange.from,date_to:cumRange.to}),
-      rpc('get_kpi_by_date',{target_date:d25}),
-      rpc('get_kpi_range',{date_from:w25f,date_to:w25t}),
-      rpc('get_kpi_range',{date_from:'2025-01-01',date_to:c25t}),
-    ]).then(([y,w,c,y25,w25,c25])=>{
-      if (cancelled) return  // 이미 재호출 시작됨 → 이전 응답 무시
-      const yKpi = toKpi(pickRow(y))
-      const wKpi = toKpi(pickRow(w))
-      const cKpi = toKpi(pickRow(c))
-      const y25Kpi = toKpi(pickRow(y25))
-      const w25Kpi = toKpi(pickRow(w25))
-      const c25Kpi = toKpi(pickRow(c25))
-      setKpiYest(yKpi ?? {qty:0,rev:0})
-      setKpiWeek(wKpi ?? {qty:0,rev:0})
-      setKpiCum(cKpi ?? {qty:0,rev:0})
-      setKpiYest25(y25Kpi ?? {qty:0,rev:0})
-      setKpiWeek25(w25Kpi ?? {qty:0,rev:0})
-      setKpiCum25(c25Kpi ?? {qty:0,rev:0})
+    // Param 묶음 정의 — 캐시 lookup과 fresh fetch 모두에서 동일하게 사용
+    const calls: Array<[string, Record<string,unknown>]> = [
+      ['get_kpi_by_date', { target_date: latestDate }],
+      ['get_kpi_range',   { date_from: weekRange.from, date_to: weekRange.to }],
+      ['get_kpi_range',   { date_from: cumRange.from,  date_to: cumRange.to }],
+      ['get_kpi_by_date', { target_date: d25 }],
+      ['get_kpi_range',   { date_from: w25f, date_to: w25t }],
+      ['get_kpi_range',   { date_from: '2025-01-01', date_to: c25t }],
+    ]
+
+    // 1) 캐시 hit이면 즉시 표시 — 사용자 체감 로딩 0초
+    const cachedRows = calls.map(([fn, p]) => pickRow(readRpcCache(fn, p)))
+    if (cachedRows.some(r => r !== null)) {
+      const [yKpi, wKpi, cKpi, y25Kpi, w25Kpi, c25Kpi] = cachedRows.map(toKpi)
+      if (yKpi)   setKpiYest(yKpi)
+      if (wKpi)   setKpiWeek(wKpi)
+      if (cKpi)   setKpiCum(cKpi)
+      if (y25Kpi) setKpiYest25(y25Kpi)
+      if (w25Kpi) setKpiWeek25(w25Kpi)
+      if (c25Kpi) setKpiCum25(c25Kpi)
+    }
+
+    // 2) 백그라운드에서 fresh fetch (캐시 갱신용). 실패해도 캐시 값 유지.
+    Promise.allSettled(calls.map(([fn, p]) => rpc(fn, p))).then(results => {
+      if (cancelled) return
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled' && Array.isArray(r.value) && r.value.length > 0) {
+          writeRpcCache(calls[i][0], calls[i][1], r.value)
+        }
+      })
+      const [y, w, c, y25, w25, c25] = results
+      const yKpi = toKpi(pickFromSettled(y))
+      const wKpi = toKpi(pickFromSettled(w))
+      const cKpi = toKpi(pickFromSettled(c))
+      const y25Kpi = toKpi(pickFromSettled(y25))
+      const w25Kpi = toKpi(pickFromSettled(w25))
+      const c25Kpi = toKpi(pickFromSettled(c25))
+      if (yKpi)   setKpiYest(yKpi)
+      if (wKpi)   setKpiWeek(wKpi)
+      if (cKpi)   setKpiCum(cKpi)
+      if (y25Kpi) setKpiYest25(y25Kpi)
+      if (w25Kpi) setKpiWeek25(w25Kpi)
+      if (c25Kpi) setKpiCum25(c25Kpi)
     })
     return () => { cancelled = true }
-  },[latestDate,weekRange.from,weekRange.to])
+  },[latestDate,weekRange.from,weekRange.to,cumRange.from,cumRange.to])
 
   useEffect(()=>{
     // latestDate 로드되기 전에는 호출 스킵 (race condition 방지)
@@ -248,25 +310,52 @@ export default function DashboardPage() {
     setLoadingTop(true)
     const from24=topFrom.replace('2026','2024'), to24=topTo.replace('2026','2024')
     const from25=topFrom.replace('2026','2025'), to25=topTo.replace('2026','2025')
-    const arr = <T,>(r: PromiseSettledResult<unknown>): T[] => {
+
+    type Stock = {product_name:string;image_url:string;total_stock:number;stock_value:number;prev_week_stock?:number}
+
+    const arrFromSettled = <T,>(r: PromiseSettledResult<unknown>): T[] => {
       if (r.status !== 'fulfilled') { console.warn('[TOP] rejected:', r.reason); return [] }
       return Array.isArray(r.value) ? (r.value as T[]) : []
     }
-    Promise.allSettled([
-      rpc('get_top_products',{date_from:topFrom,date_to:topTo,top_n:10}),
-      rpc('get_top_products',{date_from:from25,date_to:to25,top_n:30}),
-      rpc('get_top_products',{date_from:from24,date_to:to24,top_n:30}),
-      rpc('get_top_stock',{top_n:10}),
-    ]).then(([r26,r25,r24,rs])=>{
-      if (cancelled) return  // 최신 요청이 아니면 무시
-      const p26 = arr<TopProduct>(r26)
-      const p25 = arr<TopProduct>(r25)
-      const p24 = arr<TopProduct>(r24)
-      const stocks = arr<{product_name:string;image_url:string;total_stock:number;stock_value:number;prev_week_stock?:number}>(rs)
+    const arrFromCache = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [])
+
+    const calls: Array<[string, Record<string,unknown>]> = [
+      ['get_top_products', { date_from: topFrom, date_to: topTo, top_n: 10 }],
+      ['get_top_products', { date_from: from25, date_to: to25, top_n: 30 }],
+      ['get_top_products', { date_from: from24, date_to: to24, top_n: 30 }],
+      ['get_top_stock',    { top_n: 10 }],
+    ]
+    const applyAll = (p26: TopProduct[], p25: TopProduct[], p24: TopProduct[], stocks: Stock[]) => {
       const map25=new Map<string,number>(); p25.forEach(r=>map25.set(r.product_name,r.total_qty))
       const map24=new Map<string,number>(); p24.forEach(r=>map24.set(r.product_name,r.total_qty))
       setTopProducts(p26.map(r=>({...r,qty_26:r.total_qty,qty_25:map25.get(r.product_name)||0,qty_24:map24.get(r.product_name)||0})))
       setTopStock(stocks)
+    }
+
+    // 1) 캐시가 있으면 즉시 표시
+    const c26 = arrFromCache<TopProduct>(readRpcCache(calls[0][0], calls[0][1]))
+    const c25 = arrFromCache<TopProduct>(readRpcCache(calls[1][0], calls[1][1]))
+    const c24 = arrFromCache<TopProduct>(readRpcCache(calls[2][0], calls[2][1]))
+    const cStk = arrFromCache<Stock>(readRpcCache(calls[3][0], calls[3][1]))
+    if (c26.length > 0 || cStk.length > 0) {
+      applyAll(c26, c25, c24, cStk)
+      setLoadingTop(false)  // 캐시 즉시 표시되었으니 스피너 끔 (백그라운드 새 fetch는 진행)
+    }
+
+    // 2) fresh fetch — 캐시 저장 + 화면 갱신
+    Promise.allSettled(calls.map(([fn, p]) => rpc(fn, p))).then(results => {
+      if (cancelled) return  // 최신 요청이 아니면 무시
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled' && Array.isArray(r.value) && r.value.length > 0) {
+          writeRpcCache(calls[i][0], calls[i][1], r.value)
+        }
+      })
+      const [r26,r25,r24,rs] = results
+      const p26 = arrFromSettled<TopProduct>(r26)
+      const p25 = arrFromSettled<TopProduct>(r25)
+      const p24 = arrFromSettled<TopProduct>(r24)
+      const stocks = arrFromSettled<Stock>(rs)
+      applyAll(p26, p25, p24, stocks)
       setLoadingTop(false)
     })
     return () => { cancelled = true }
