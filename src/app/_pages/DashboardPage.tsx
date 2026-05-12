@@ -7,29 +7,53 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Responsi
 const SUPABASE_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
 
-async function rpc(fn: string, params: Record<string,unknown> = {}, timeoutMs = 15000) {
-  const ctrl = new AbortController()
-  const tid = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-      method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-      signal: ctrl.signal,
-    })
-    if (!res.ok) {
-      console.warn(`[RPC] ${fn} HTTP ${res.status}`, await res.text().catch(()=>''))
-      return []
+async function rpc(fn: string, params: Record<string,unknown> = {}, timeoutMs = 30000) {
+  // Retries on transient failures (5xx, abort, network) with exponential backoff.
+  // 3 attempts total: 0s → 1.2s → 3.6s wait. Per-attempt timeout = timeoutMs.
+  const RETRIES = 2
+  let lastDetail = ''
+  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+    const ctrl = new AbortController()
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs)
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+        signal: ctrl.signal,
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.code) {
+          console.warn('[RPC]', fn, data.message)
+          return []
+        }
+        if (attempt > 0) console.log(`[RPC] ${fn} recovered on attempt ${attempt + 1}`)
+        return data
+      }
+      lastDetail = await res.text().catch(()=>'')
+      // 5xx (서버 일시 오류, statement timeout 포함) → 재시도. 4xx → 즉시 실패.
+      if (res.status >= 500 && attempt < RETRIES) {
+        console.warn(`[RPC] ${fn} HTTP ${res.status} — 재시도 ${attempt + 1}/${RETRIES + 1}`)
+      } else {
+        console.warn(`[RPC] ${fn} HTTP ${res.status}`, lastDetail)
+        return []
+      }
+    } catch (e: any) {
+      lastDetail = e?.message || String(e)
+      if (attempt < RETRIES) {
+        console.warn(`[RPC] ${fn} 네트워크/abort — 재시도 ${attempt + 1}/${RETRIES + 1}:`, lastDetail)
+      } else {
+        console.warn(`[RPC] ${fn} 최종 실패:`, lastDetail)
+        return []
+      }
+    } finally {
+      clearTimeout(tid)
     }
-    const data = await res.json()
-    if (data?.code) { console.warn('[RPC]', fn, data.message); return [] }
-    return data
-  } catch (e) {
-    console.warn(`[RPC] ${fn} network error:`, e)
-    return []
-  } finally {
-    clearTimeout(tid)
+    // 다음 시도 전 백오프 (1.2s, 3.6s). MV 콜드 상태 회복 시간을 충분히 줌.
+    await new Promise(r => setTimeout(r, 1200 * Math.pow(3, attempt)))
   }
+  return []
 }
 
 // ── 판매 추이 모달: 특정 상품의 3개년 일별 판매량을 RPC로 조회 ──

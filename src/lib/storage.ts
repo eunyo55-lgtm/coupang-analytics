@@ -31,34 +31,44 @@ export interface PersistedData {
   latestSaleDate: string
 }
 
-// fetch로 RPC 호출 — 5xx 일시 오류는 자동 재시도 (최대 3회, 지수 backoff)
+// fetch로 RPC 호출 — 5xx 일시 오류는 자동 재시도.
+// 백오프: 1.2s → 3.6s. statement_timeout(8s)으로 잘린 쿼리가 MV가 따뜻해진 후
+// 통과할 수 있도록 충분한 간격을 둠. per-request timeout 30s.
 async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
   if (typeof window === 'undefined') return []
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const RETRIES = 2
+  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+    const ctrl = new AbortController()
+    const tid = setTimeout(() => ctrl.abort(), 30000)
     try {
       const res = await fetch(`${SUPA_URL}/rest/v1/rpc/${fn}`, {
         method: 'POST',
         headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
+        signal: ctrl.signal,
       })
-      if (res.ok) return await res.json()
-      // 5xx (서버 일시 오류)면 재시도, 4xx면 바로 빈 배열 반환
-      if (res.status >= 500 && attempt < 3) {
-        console.warn(`[storage] RPC ${fn} ${res.status} — 재시도 ${attempt}/3`)
-        await new Promise(r => setTimeout(r, 500 * attempt))
-        continue
+      if (res.ok) {
+        if (attempt > 0) console.log(`[storage] RPC ${fn} recovered on attempt ${attempt + 1}`)
+        return await res.json()
       }
-      console.warn(`[storage] RPC ${fn} error:`, res.status)
-      return []
+      // 5xx (서버 일시 오류, statement timeout 포함)면 재시도. 4xx면 바로 빈 배열.
+      if (res.status >= 500 && attempt < RETRIES) {
+        console.warn(`[storage] RPC ${fn} ${res.status} — 재시도 ${attempt + 1}/${RETRIES + 1}`)
+      } else {
+        console.warn(`[storage] RPC ${fn} error:`, res.status)
+        return []
+      }
     } catch(e) {
-      if (attempt < 3) {
-        console.warn(`[storage] RPC ${fn} 네트워크 에러 — 재시도 ${attempt}/3`)
-        await new Promise(r => setTimeout(r, 500 * attempt))
-        continue
+      if (attempt < RETRIES) {
+        console.warn(`[storage] RPC ${fn} 네트워크/abort — 재시도 ${attempt + 1}/${RETRIES + 1}`)
+      } else {
+        console.warn(`[storage] RPC ${fn}:`, e)
+        return []
       }
-      console.warn(`[storage] RPC ${fn}:`, e)
-      return []
+    } finally {
+      clearTimeout(tid)
     }
+    await new Promise(r => setTimeout(r, 1200 * Math.pow(3, attempt)))
   }
   return []
 }
