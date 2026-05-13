@@ -9,6 +9,7 @@ import AdSignalCards from '@/components/AdSignalCards'
 import AdPerformanceCharts from '@/components/AdPerformanceCharts'
 import AdBreakdownTables from '@/components/AdBreakdownTables'
 import AdKpiSparkCards from '@/components/AdKpiSparkCards'
+import AdBudgetPacing from '@/components/AdBudgetPacing'
 
 /**
  * 광고 현황 페이지 — 쿠팡 광고 콘솔 CSV 업로드 기반.
@@ -22,7 +23,7 @@ export default function AdPage() {
   const { state, dispatch } = useApp()
   const { dateRange } = state
 
-  type AdDaily = { date: string; ad_cost: number; revenue_14d: number; revenue_1d: number; impressions: number; clicks: number }
+  type AdDaily = { date: string; ad_cost: number; revenue_14d: number; revenue_1d: number; impressions: number; clicks: number; orders_14d: number }
   const [csvDailyAll, setCsvDailyAll] = useState<AdDaily[]>([])
 
   useEffect(() => { loadCsvDaily() }, [])
@@ -30,11 +31,21 @@ export default function AdPage() {
   async function loadCsvDaily() {
     if (!supabase) return
     try {
-      const { data, error } = await supabase
+      // 1차: orders_14d 포함 (CPA 계산용)
+      let { data, error } = await supabase
         .from('coupang_ad_daily_summary')
-        .select('date, ad_cost, revenue_14d, revenue_1d, impressions, clicks')
+        .select('date, ad_cost, revenue_14d, revenue_1d, impressions, clicks, orders_14d')
         .order('date', { ascending: true })
-      if (error) { console.warn('[AdPage] coupang_ad_daily_summary load:', error.message); return }
+      if (error) {
+        // 폴백: orders_14d 미포함 뷰 (구버전)
+        console.warn('[AdPage] retry without orders_14d:', error.message)
+        const res2 = await supabase
+          .from('coupang_ad_daily_summary')
+          .select('date, ad_cost, revenue_14d, revenue_1d, impressions, clicks')
+          .order('date', { ascending: true })
+        if (res2.error) { console.warn('[AdPage] csv daily load:', res2.error.message); return }
+        data = res2.data as any
+      }
       setCsvDailyAll((data as AdDaily[]) || [])
     } catch (e) { console.warn('[AdPage] csv daily load:', e) }
   }
@@ -94,7 +105,10 @@ export default function AdPage() {
         </div>
       )}
 
-      {/* KPI: 스파크라인 + 전 동일 기간 대비 (메인 4 + 운영 4) */}
+      {/* 💰 월 예산 페이스 (현재 월 기준 — dateRange와 무관) */}
+      <AdBudgetPacing csvDailyAll={csvDailyAll} />
+
+      {/* KPI: 스파크라인 + 전 동일 기간 대비 (메인 5 + 운영 5) */}
       <AdKpiSparkCards csvDailyAll={csvDailyAll} dateFrom={dateFromY} dateTo={dateToY} />
 
       {/* 자동 신호 + 액션 가이드 */}

@@ -1,6 +1,7 @@
 'use client'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
+import { supabase } from '@/lib/supabase'
 
 interface AdDaily {
   date: string
@@ -9,6 +10,7 @@ interface AdDaily {
   revenue_1d: number
   impressions: number
   clicks: number
+  orders_14d?: number  // 옵션 (구 뷰에는 없을 수 있음)
 }
 
 interface Props {
@@ -36,7 +38,8 @@ function aggregate(rows: AdDaily[]) {
     revenue_14d: acc.revenue_14d + Number(r.revenue_14d || 0),
     impressions: acc.impressions + Number(r.impressions || 0),
     clicks: acc.clicks + Number(r.clicks || 0),
-  }), { ad_cost: 0, revenue_14d: 0, impressions: 0, clicks: 0 })
+    orders_14d: acc.orders_14d + Number(r.orders_14d || 0),
+  }), { ad_cost: 0, revenue_14d: 0, impressions: 0, clicks: 0, orders_14d: 0 })
 }
 
 const changePct = (curr: number, prev: number) =>
@@ -102,17 +105,43 @@ function SparkCard({ label, ico, value, rawCurr, rawPrev, sparkData, color, foot
 
 /**
  * 광고 KPI 카드 — 스파크라인 + 전 동일 기간 대비 변동률.
- * 메인 4개 (광고비/광고매출/ROAS/ACoS) + 운영 4개 (노출/클릭/CTR/CPC).
+ *  메인 5개: 광고비/광고매출/ROAS/ACoS/광고의존도
+ *  운영 5개: 노출/클릭/CTR/CPC/CPA
  *
- * 전 기간(prev) = 현재 기간과 동일한 일수만큼 직전 구간.
- *  - 예: 5/01~5/07 → 전 기간 = 4/24~4/30 (7일).
- *
- * 스파크라인 = 전 기간 + 현재 기간 합쳐서 추세 시각화.
+ * 광고 의존도 = 광고매출(14일) / 전체매출 — sales_data RPC 결합 필요
+ *  RPC 미설치 시 카드 숨김
  */
 export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props) {
   const periodDays = diffDays(dateFrom, dateTo)
   const prevTo = shiftYMD(dateFrom, -1)
   const prevFrom = shiftYMD(dateFrom, -periodDays)
+
+  // 전체매출 (sales_data) - RPC 로드
+  type SalesDaily = { sale_date: string; total_revenue: number }
+  const [salesDaily, setSalesDaily] = useState<SalesDaily[]>([])
+  const [salesRpcAvailable, setSalesRpcAvailable] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!supabase) return
+      try {
+        const { data, error } = await supabase
+          .rpc('get_daily_revenue_range', { p_date_from: prevFrom, p_date_to: dateTo })
+        if (cancelled) return
+        if (error) {
+          console.warn('[AdKpiSparkCards] get_daily_revenue_range missing:', error.message)
+          setSalesRpcAvailable(false)
+          return
+        }
+        setSalesDaily((data as SalesDaily[]) || [])
+      } catch (e) {
+        if (!cancelled) setSalesRpcAvailable(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [prevFrom, dateTo])
 
   const currRows = useMemo(() => csvDailyAll.filter(r => r.date >= dateFrom && r.date <= dateTo), [csvDailyAll, dateFrom, dateTo])
   const prevRows = useMemo(() => csvDailyAll.filter(r => r.date >= prevFrom && r.date <= prevTo), [csvDailyAll, prevFrom, prevTo])
@@ -120,15 +149,26 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
   const curr = aggregate(currRows)
   const prev = aggregate(prevRows)
 
+  // 전체매출 합계 (광고 의존도용)
+  const totalRevCurr = salesDaily.filter(s => s.sale_date >= dateFrom && s.sale_date <= dateTo).reduce((s, r) => s + Number(r.total_revenue || 0), 0)
+  const totalRevPrev = salesDaily.filter(s => s.sale_date >= prevFrom && s.sale_date <= prevTo).reduce((s, r) => s + Number(r.total_revenue || 0), 0)
+
   if (csvDailyAll.length === 0) return null
 
-  // Sparkline arrays
+  // Sparklines
   const sparkCost = sparkRows.map(r => ({ date: r.date, v: Number(r.ad_cost || 0) }))
   const sparkRev  = sparkRows.map(r => ({ date: r.date, v: Number(r.revenue_14d || 0) }))
   const sparkRoas = sparkRows.map(r => ({ date: r.date, v: Number(r.ad_cost || 0) > 0 ? Number(r.revenue_14d || 0) / Number(r.ad_cost || 0) * 100 : 0 }))
   const sparkAcos = sparkRows.map(r => ({ date: r.date, v: Number(r.revenue_14d || 0) > 0 ? Number(r.ad_cost || 0) / Number(r.revenue_14d || 0) * 100 : 0 }))
   const sparkCtr  = sparkRows.map(r => ({ date: r.date, v: Number(r.impressions || 0) > 0 ? Number(r.clicks || 0) / Number(r.impressions || 0) * 100 : 0 }))
   const sparkCpc  = sparkRows.map(r => ({ date: r.date, v: Number(r.clicks || 0) > 0 ? Number(r.ad_cost || 0) / Number(r.clicks || 0) : 0 }))
+  const sparkCpa  = sparkRows.map(r => ({ date: r.date, v: Number(r.orders_14d || 0) > 0 ? Number(r.ad_cost || 0) / Number(r.orders_14d || 0) : 0 }))
+  // 광고 의존도 스파크라인 — 일별로 광고매출/전체매출
+  const revMapByDate = new Map(salesDaily.map(s => [s.sale_date, Number(s.total_revenue || 0)]))
+  const sparkDep = sparkRows.map(r => {
+    const total = revMapByDate.get(r.date) || 0
+    return { date: r.date, v: total > 0 ? Number(r.revenue_14d || 0) / total * 100 : 0 }
+  })
 
   // Derived
   const currRoas = curr.ad_cost > 0 ? curr.revenue_14d / curr.ad_cost : 0
@@ -139,12 +179,24 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
   const prevCtr  = prev.impressions > 0 ? prev.clicks / prev.impressions * 100 : 0
   const currCpc  = curr.clicks > 0 ? curr.ad_cost / curr.clicks : 0
   const prevCpc  = prev.clicks > 0 ? prev.ad_cost / prev.clicks : 0
+  const currCpa  = curr.orders_14d > 0 ? curr.ad_cost / curr.orders_14d : 0
+  const prevCpa  = prev.orders_14d > 0 ? prev.ad_cost / prev.orders_14d : 0
+  // 광고 의존도
+  const currDep  = totalRevCurr > 0 ? curr.revenue_14d / totalRevCurr * 100 : 0
+  const prevDep  = totalRevPrev > 0 ? prev.revenue_14d / totalRevPrev * 100 : 0
 
   const dailyAvgCost = curr.ad_cost / periodDays
   const dailyAvgRev  = curr.revenue_14d / periodDays
   const roasGoal = 5
   const roasGoalDiff = (currRoas - roasGoal) * 100
   const roasColor = currRoas >= 5 ? '#16a34a' : currRoas >= 2 ? '#f59e0b' : '#dc2626'
+  // 광고 의존도 색상: 낮을수록 좋음 (자연검색 비중 큼)
+  const depColor = currDep >= 50 ? '#dc2626' : currDep >= 20 ? '#f59e0b' : '#16a34a'
+  const depFootText = currDep >= 50 ? '광고 의존 매우 높음 — 자연 노출 강화 필요'
+                    : currDep >= 20 ? '광고 의존 보통'
+                    : currDep >  0  ? '자연 노출 비중 큼 (좋음)'
+                    : '전체 매출 없음'
+  const hasOrdersData = csvDailyAll.some(r => r.orders_14d !== undefined && r.orders_14d !== null)
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -154,9 +206,9 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
         전 기간 <b>{prevFrom} ~ {prevTo}</b> 비교
       </div>
 
-      {/* 메인 4개 (스파크라인 포함) */}
+      {/* 메인 5개 — auto-fit grid로 화면폭에 맞춰 wrap */}
       <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         gap: 8, marginBottom: 8,
       }}>
         <SparkCard
@@ -191,9 +243,25 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
           foot="광고비/매출"
           direction="lower_better"
         />
+        {salesRpcAvailable && (
+          <SparkCard
+            label="광고 의존도" ico="🔗"
+            value={currDep.toFixed(1) + '%'}
+            rawCurr={currDep} rawPrev={prevDep}
+            sparkData={sparkDep} color={depColor}
+            foot={depFootText}
+            direction="lower_better"
+          />
+        )}
       </div>
 
-      {/* 운영 지표 4개 (스파크라인 없는 컴팩트 카드) */}
+      {!salesRpcAvailable && (
+        <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 8, fontStyle: 'italic' }}>
+          ⓘ 광고 의존도 카드 표시: Supabase에 <code>get_daily_revenue_range</code> RPC 설치 필요
+        </div>
+      )}
+
+      {/* 운영 지표 5개 (CTR/CPC/CPA는 스파크라인 포함) */}
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
         gap: 8,
@@ -226,6 +294,16 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
           sparkData={sparkCpc} color="#f59e0b"
           direction="lower_better" size="small"
         />
+        {hasOrdersData && (
+          <SparkCard
+            label="CPA (주문당 광고비)" ico="🛒"
+            value={curr.orders_14d > 0 ? fmt(currCpa) + '원' : '–'}
+            rawCurr={currCpa} rawPrev={prevCpa}
+            sparkData={sparkCpa} color="#7c3aed"
+            foot={`${fmt(curr.orders_14d)}건 주문`}
+            direction="lower_better" size="small"
+          />
+        )}
       </div>
     </div>
   )

@@ -36,26 +36,30 @@ function shiftYMD(ymd: string, deltaDays: number): string {
   d.setDate(d.getDate() + deltaDays)
   return d.toISOString().slice(0, 10)
 }
+function diffDays(from: string, to: string): number {
+  const a = new Date(from + 'T00:00:00').getTime()
+  const b = new Date(to + 'T00:00:00').getTime()
+  return Math.max(1, Math.round((b - a) / 86400000) + 1)
+}
 
 /**
- * 광고 차원별 성과 표 — 독립 날짜 필터 포함.
- *  - 부모 dateRange와 동기화 시작하지만 사용자가 별도 조정 가능
- *  - 빠른 프리셋: 7일/14일/30일/90일 + 부모 동기화
- *  - 사용자 정의: 시작일/종료일 달력 입력
+ * 광고 차원별 성과 표 — 독립 날짜 필터 + 전 기간 비교.
  */
 export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Props) {
   const [tab, setTab] = useState<Tab>('campaign')
   const [dateFrom, setDateFrom] = useState(defaultDateFrom)
   const [dateTo, setDateTo] = useState(defaultDateTo)
   const [syncedWithParent, setSyncedWithParent] = useState(true)
+  const [showCompare, setShowCompare] = useState(true)
 
   const [rows, setRows] = useState<BreakdownRow[]>([])
+  const [prevRows, setPrevRows] = useState<BreakdownRow[]>([])
   const [loading, setLoading] = useState(true)
   const [sortBy, setSortBy] = useState<SortKey>('ad_cost')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [limit, setLimit] = useState<number>(20)
 
-  // 부모 dateRange 변경 시 동기화 (사용자가 별도 조정 안 했으면)
+  // 부모 dateRange 동기화
   useEffect(() => {
     if (syncedWithParent) {
       setDateFrom(defaultDateFrom)
@@ -69,27 +73,38 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
       if (!supabase) return
       setLoading(true)
       try {
-        const { data, error } = await supabase.rpc('get_ad_breakdown', {
-          p_date_from: dateFrom,
-          p_date_to: dateTo,
-          p_group_by: tab,
-        })
-        if (error) {
-          console.warn('[AdBreakdownTables] load:', error.message)
-          if (!cancelled) setRows([])
-          return
+        const periodDays = diffDays(dateFrom, dateTo)
+        const prevTo = shiftYMD(dateFrom, -1)
+        const prevFrom = shiftYMD(dateFrom, -periodDays)
+
+        const [currRes, prevRes] = await Promise.all([
+          supabase.rpc('get_ad_breakdown', { p_date_from: dateFrom, p_date_to: dateTo, p_group_by: tab }),
+          showCompare
+            ? supabase.rpc('get_ad_breakdown', { p_date_from: prevFrom, p_date_to: prevTo, p_group_by: tab })
+            : Promise.resolve({ data: [] as BreakdownRow[], error: null }),
+        ])
+        if (cancelled) return
+        if (currRes.error) {
+          console.warn('[AdBreakdownTables] load curr:', currRes.error.message)
+          setRows([])
+        } else {
+          setRows((currRes.data as BreakdownRow[]) || [])
         }
-        if (!cancelled) setRows((data as BreakdownRow[]) || [])
+        if (prevRes.error) {
+          console.warn('[AdBreakdownTables] load prev:', prevRes.error.message)
+          setPrevRows([])
+        } else {
+          setPrevRows((prevRes.data as BreakdownRow[]) || [])
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
     }
     load()
     return () => { cancelled = true }
-  }, [dateFrom, dateTo, tab])
+  }, [dateFrom, dateTo, tab, showCompare])
 
   function applyPreset(days: number) {
-    // 종료일 기준 N일 거꾸로 (defaultDateTo 기준 — 보통 부모의 to)
     const to = defaultDateTo
     const from = shiftYMD(to, -(days - 1))
     setDateFrom(from)
@@ -102,6 +117,12 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
     setSyncedWithParent(true)
   }
 
+  const prevMap = useMemo(() => {
+    const m = new Map<string, BreakdownRow>()
+    for (const p of prevRows) m.set(p.name, p)
+    return m
+  }, [prevRows])
+
   const enriched = useMemo(() => {
     return rows.map(r => {
       const ad_cost = Number(r.ad_cost || 0)
@@ -112,10 +133,27 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
       const roas = ad_cost > 0 ? revenue_14d / ad_cost : 0
       const ctr = impressions > 0 ? clicks / impressions * 100 : 0
       const cpc = clicks > 0 ? ad_cost / clicks : 0
-      const cvr = clicks > 0 ? orders_14d / clicks * 100 : 0
-      return { ...r, ad_cost, revenue_14d, impressions, clicks, orders_14d, roas, ctr, cpc, cvr }
+
+      // 전 기간 매칭
+      const p = prevMap.get(r.name)
+      const p_ad_cost = p ? Number(p.ad_cost || 0) : 0
+      const p_revenue = p ? Number(p.revenue_14d || 0) : 0
+      const p_roas = p_ad_cost > 0 ? p_revenue / p_ad_cost : 0
+
+      const cost_pct = p_ad_cost > 0 ? (ad_cost - p_ad_cost) / p_ad_cost * 100 : (ad_cost > 0 ? 100 : 0)
+      const rev_pct  = p_revenue > 0 ? (revenue_14d - p_revenue) / p_revenue * 100 : (revenue_14d > 0 ? 100 : 0)
+      // ROAS는 %p 단위 변동
+      const roas_pp  = (roas - p_roas) * 100
+
+      const isNew = !p && (ad_cost > 0 || revenue_14d > 0)
+
+      return {
+        ...r, ad_cost, revenue_14d, impressions, clicks, orders_14d, roas, ctr, cpc,
+        p_ad_cost, p_revenue, p_roas,
+        cost_pct, rev_pct, roas_pp, isNew,
+      }
     })
-  }, [rows])
+  }, [rows, prevMap])
 
   const sorted = useMemo(() => {
     const arr = [...enriched]
@@ -147,6 +185,10 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
 
   const totalRoas = totals.ad_cost > 0 ? totals.revenue_14d / totals.ad_cost : 0
 
+  const periodDays = diffDays(dateFrom, dateTo)
+  const prevFromY = shiftYMD(dateFrom, -periodDays)
+  const prevToY = shiftYMD(dateFrom, -1)
+
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="ch">
@@ -157,6 +199,7 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
             <div className="ch-sub">
               {dateFrom} ~ {dateTo}
               {syncedWithParent ? ' (상단 기간과 동기화)' : ' (독립 기간)'}
+              {showCompare ? ` · 전 기간 비교: ${prevFromY} ~ ${prevToY}` : ''}
             </div>
           </div>
         </div>
@@ -171,14 +214,12 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
                 color: tab === t.id ? 'white' : '#475569',
                 border: 'none',
               }}
-            >
-              {t.icon} {t.label}
-            </button>
+            >{t.icon} {t.label}</button>
           ))}
         </div>
       </div>
 
-      {/* 날짜 필터 바 */}
+      {/* 날짜 필터 + 비교 토글 */}
       <div style={{
         padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0',
         display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12,
@@ -215,6 +256,14 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
             }}
           >🔄 상단 기간과 동기화</button>
         )}
+        <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: '#475569' }}>
+          <input
+            type="checkbox" checked={showCompare}
+            onChange={e => setShowCompare(e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          전 기간 비교 표시
+        </label>
       </div>
 
       <div className="cb" style={{ padding: 0 }}>
@@ -267,10 +316,26 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
                     return (
                       <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ ...td, textAlign: 'left', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}
-                            title={r.name}>{r.name}</td>
-                        <td style={td}>{fmt(r.ad_cost)}</td>
-                        <td style={td}>{fmt(r.revenue_14d)}</td>
-                        <td style={{ ...td, color: roasColor, fontWeight: 700 }}>{(r.roas * 100).toFixed(0)}%</td>
+                            title={r.name}>
+                          {r.name}
+                          {showCompare && r.isNew && (
+                            <span style={{ marginLeft: 4, fontSize: 9, color: '#7c3aed', background: '#ede9fe', padding: '1px 5px', borderRadius: 3, fontWeight: 700 }}>NEW</span>
+                          )}
+                        </td>
+                        <td style={td}>
+                          {fmt(r.ad_cost)}
+                          {showCompare && !r.isNew && <DeltaText pct={r.cost_pct} direction="neutral" />}
+                        </td>
+                        <td style={td}>
+                          {fmt(r.revenue_14d)}
+                          {showCompare && !r.isNew && <DeltaText pct={r.rev_pct} direction="higher_better" />}
+                        </td>
+                        <td style={{ ...td, color: roasColor, fontWeight: 700 }}>
+                          {(r.roas * 100).toFixed(0)}%
+                          {showCompare && !r.isNew && (
+                            <DeltaText pct={r.roas_pp} direction="higher_better" suffix="%p" forceSign />
+                          )}
+                        </td>
                         <td style={td}>{fmt(r.impressions)}</td>
                         <td style={td}>{fmt(r.clicks)}</td>
                         <td style={td}>{r.ctr.toFixed(2)}%</td>
@@ -285,6 +350,27 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+/** 비교 변동률 inline 표시 */
+function DeltaText({ pct, direction, suffix = '%', forceSign = false }: {
+  pct: number
+  direction: 'higher_better' | 'lower_better' | 'neutral'
+  suffix?: string
+  forceSign?: boolean
+}) {
+  const isUp = pct > 0
+  const isDown = pct < 0
+  const isGood = direction === 'higher_better' ? isUp : direction === 'lower_better' ? isDown : false
+  const isBad  = direction === 'higher_better' ? isDown : direction === 'lower_better' ? isUp : false
+  const color = Math.abs(pct) < 0.1 ? '#94a3b8' : isGood ? '#16a34a' : isBad ? '#dc2626' : '#64748b'
+  const sign = forceSign && pct > 0 ? '+' : pct < 0 ? '−' : ''
+  const display = Math.abs(pct) < 0.1 ? '0' : (sign + Math.abs(pct).toFixed(0))
+  return (
+    <div style={{ fontSize: 9, color, fontWeight: 600, marginTop: 1 }}>
+      {display}{suffix}
     </div>
   )
 }
