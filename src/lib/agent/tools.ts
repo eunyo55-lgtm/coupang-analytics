@@ -269,6 +269,15 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
           .map(s => String(s).trim()).filter(Boolean).slice(0, 5)
         const limit = Math.min(50, Math.max(5, Number(args.limit ?? 30)))
         if (seeds.length === 0) return { error: 'seeds 배열에 최소 1개 키워드가 필요합니다' }
+        // 디버그용 환경변수 존재 점검 (값은 노출하지 않음, 존재 여부와 길이만)
+        const envProbe = {
+          has_customer_id: !!process.env.NAVER_CUSTOMER_ID,
+          customer_id_len: (process.env.NAVER_CUSTOMER_ID || '').length,
+          has_access_license: !!process.env.NAVER_ACCESS_LICENSE,
+          access_license_len: (process.env.NAVER_ACCESS_LICENSE || '').length,
+          has_secret_key: !!process.env.NAVER_SECRET_KEY,
+          secret_key_len: (process.env.NAVER_SECRET_KEY || '').length,
+        }
         try {
           const list = await fetchNaverKeywordList(seeds)
           const mapped = list.map(r => {
@@ -284,7 +293,9 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
           mapped.sort((a, b) => b.total_volume - a.total_volume)
           return mapped.slice(0, limit)
         } catch (e: any) {
-          return { error: e?.message ?? String(e) }
+          const msg = e?.message ?? String(e)
+          console.error('[expand_keywords_via_naver] 실패:', msg, envProbe)
+          return { error: msg, debug_env: envProbe }
         }
       }
       default:
