@@ -131,6 +131,26 @@ export const toolDeclarations: FunctionDeclaration[] = [
       required: ['seeds'],
     },
   },
+  {
+    name: 'register_keyword',
+    description:
+      '신규 키워드를 추적 대상으로 등록합니다. 사용자가 "X 등록해줘", "Y 추가해줘", "이 키워드들 등록" 등의 명령을 줄 때 사용. ' +
+      '필수: keyword(키워드 텍스트), coupang_product_id(쿠팡 Wing/와이드에서 확인한 상품 ID — 10자리 숫자). ' +
+      'type은 미지정 시 기존 키워드 중 가장 많이 쓰인 type을 자동 적용. ' +
+      '같은 keyword + coupang_product_id 조합은 중복 등록되지 않음. ' +
+      '등록 즉시 다음 봇 사이클(매일 KST 09:05)부터 자동 추적 시작.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        keyword: { type: Type.STRING, description: '키워드 텍스트 (예: "아기신발", "걸음마신발")' },
+        coupang_product_id: { type: Type.STRING, description: '쿠팡 상품 ID — 보통 10자리 숫자 (예: "1234567890")' },
+        category: { type: Type.STRING, description: '카테고리 (선택, 예: "신발", "의류")' },
+        type: { type: Type.STRING, description: '키워드 유형 (선택, 미지정 시 자동 추정)' },
+        barcode: { type: Type.STRING, description: '바코드 (선택)' },
+      },
+      required: ['keyword', 'coupang_product_id'],
+    },
+  },
 ]
 
 // ── 네이버 검색광고 API 헬퍼 (server-side only) ──
@@ -322,6 +342,64 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
               `원본 에러: ${msg.slice(0, 200)}`,
             debug_env: envProbe,
           }
+        }
+      }
+      case 'register_keyword': {
+        const keyword = String(args.keyword ?? '').trim()
+        const coupang_product_id = String(args.coupang_product_id ?? '').trim()
+        if (!keyword || !coupang_product_id) {
+          return {
+            status: 'error',
+            error: 'keyword와 coupang_product_id가 모두 필요합니다',
+          }
+        }
+        const category = args.category ? String(args.category).trim() || null : null
+        const barcode = args.barcode ? String(args.barcode).trim() || null : null
+        let type = args.type ? String(args.type).trim() : ''
+
+        // type 미지정 시 기존 키워드의 가장 빈도 높은 type 자동 사용
+        if (!type) {
+          const { data: typeData } = await supa.from('keywords').select('type').limit(500)
+          const counts: Record<string, number> = {}
+          for (const r of typeData ?? []) {
+            if (r.type) counts[r.type] = (counts[r.type] || 0) + 1
+          }
+          const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
+          type = top?.[0] ?? 'main'
+        }
+
+        // 중복 체크
+        const { data: existing } = await supa
+          .from('keywords')
+          .select('id')
+          .eq('keyword', keyword)
+          .eq('coupang_product_id', coupang_product_id)
+          .limit(1)
+        if (existing && existing.length > 0) {
+          return {
+            status: 'duplicate',
+            message: `이미 등록된 키워드입니다: "${keyword}" (상품 ID: ${coupang_product_id})`,
+            existing_id: existing[0].id,
+          }
+        }
+
+        // INSERT
+        const { data: inserted, error } = await supa
+          .from('keywords')
+          .insert({ keyword, coupang_product_id, type, category, barcode })
+          .select('id, keyword, coupang_product_id, type, category')
+          .single()
+        if (error) {
+          return {
+            status: 'error',
+            error: error.message,
+            attempted: { keyword, coupang_product_id, type, category, barcode },
+          }
+        }
+        return {
+          status: 'success',
+          message: `✅ "${keyword}" 등록 완료 (쿠팡 상품 ID: ${coupang_product_id}, type: ${type}${category ? `, category: ${category}` : ''}). 다음 봇 사이클(매일 KST 09:05)부터 자동 추적됩니다.`,
+          registered: inserted,
         }
       }
       default:
