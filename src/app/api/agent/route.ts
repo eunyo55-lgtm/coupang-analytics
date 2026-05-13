@@ -152,7 +152,17 @@ export async function POST(req: Request) {
         }
       } catch (e: any) {
         console.error('[agent] error:', e)
-        controller.enqueue(encoder.encode(`\n\n[오류: ${e?.message ?? e}]`))
+        const rawMsg = String(e?.message ?? e)
+        let userMsg = rawMsg.slice(0, 300)
+        // Gemini API 무료 tier 일일 한도 초과 → 친화적 메시지
+        if (/RESOURCE_EXHAUSTED|free_tier|429|quota/i.test(rawMsg)) {
+          userMsg = '⚠️ Gemini API 일일 무료 한도(20회)를 초과했습니다.\n\n해결 방법:\n' +
+            '1) Google AI Studio (https://aistudio.google.com/apikey)에서 결제 활성화 → 한도가 사실상 무제한이 됩니다 (월 평균 1만원 미만)\n' +
+            '2) 또는 한국 시간 오전 9시 이후 다시 시도'
+        } else if (/Naver API/i.test(rawMsg)) {
+          userMsg = `네이버 검색광고 API 호출 실패: ${rawMsg.slice(0, 200)}\n→ Vercel 환경변수 NAVER_CUSTOMER_ID / NAVER_ACCESS_LICENSE / NAVER_SECRET_KEY 확인 필요`
+        }
+        controller.enqueue(encoder.encode(`\n\n${userMsg}`))
       } finally {
         controller.close()
       }
