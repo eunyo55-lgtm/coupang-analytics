@@ -5,8 +5,6 @@ import { toYMD } from '@/lib/dateUtils'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
 import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
 import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
-import DashboardTrendStrip from '@/components/dashboard/DashboardTrendStrip'
-import DashboardTabPortals from '@/components/dashboard/DashboardTabPortals'
 
 const SUPABASE_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -460,6 +458,15 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* 🌅 오늘의 브리핑 + 🚨 우선순위 액션 큐 (3개년 차트 아래) */}
+      <DashboardBriefing
+        latestDate={latestDate}
+        yestQty={kpiYest?.qty}
+        yestRev={kpiYest?.rev}
+        yoyPct={kpiYest && kpiYest25 ? pct(kpiYest.qty, kpiYest25.qty) : null}
+      />
+      <DashboardActionQueue />
+
       <div className="g2" style={{marginBottom:12}}>
         <div className="card">
           <div className="ch">
@@ -560,17 +567,6 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
-
-      {/* ── 새 대시보드 섹션들 (priority 순) ────────────────────── */}
-      <DashboardBriefing
-        latestDate={latestDate}
-        yestQty={kpiYest?.qty}
-        yestRev={kpiYest?.rev}
-        yoyPct={kpiYest && kpiYest25 ? pct(kpiYest.qty, kpiYest25.qty) : null}
-      />
-      <DashboardActionQueue />
-      <DashboardTrendStrip latestDate={latestDate} daily26={state.daily26} />
-      <DashboardTabPortals />
 
       {salesModal&&<SalesTrendModal productName={salesModal} onClose={()=>setSalesModal(null)}/>}
       {stockModal&&<StockTrendModal productName={stockModal.name} stockHistory={stockModal.history} onClose={()=>setStockModal(null)}/>}
