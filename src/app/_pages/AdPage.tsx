@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { filterByRange, toYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
 import type { AdEntry } from '@/types'
+import CoupangAdUpload from '@/components/CoupangAdUpload'
 
 Chart.register(...registerables)
 
@@ -27,8 +28,28 @@ export default function AdPage() {
   const adChartRef  = useRef<HTMLCanvasElement>(null)
   const adChartInst = useRef<Chart | null>(null)
 
+  // 쿠팡 광고 CSV 업로드분 (coupang_ad_daily) 일별 합계 — 자동 KPI/차트용
+  const [csvDaily, setCsvDaily] = useState<{
+    date: string; ad_cost: number; revenue_14d: number; revenue_1d: number;
+    impressions: number; clicks: number;
+  }[]>([])
+
   // Load from Supabase
-  useEffect(() => { loadAds() }, [dateRange]) // eslint-disable-line
+  useEffect(() => { loadAds(); loadCsvDaily() }, [dateRange]) // eslint-disable-line
+
+  async function loadCsvDaily() {
+    if (!supabase) return
+    try {
+      const { data, error } = await supabase
+        .from('coupang_ad_daily_summary')
+        .select('date, ad_cost, revenue_14d, revenue_1d, impressions, clicks')
+        .gte('date', toYMD(dateRange.from))
+        .lte('date', toYMD(dateRange.to))
+        .order('date', { ascending: true })
+      if (error) { console.warn('[AdPage] coupang_ad_daily_summary load error:', error.message); return }
+      setCsvDaily((data as any[]) || [])
+    } catch (e) { console.warn('[AdPage] csv daily load:', e) }
+  }
 
   async function loadAds() {
     try {
@@ -77,8 +98,15 @@ export default function AdPage() {
   }
 
   const filtered = filterByRange(state.adEntries, dateRange)
-  const totalCost = filtered.reduce((s, a) => s + a.adCost, 0)
-  const totalRev  = filtered.reduce((s, a) => s + a.adRevenue, 0)
+  // 수동 입력 합산
+  const manualCost = filtered.reduce((s, a) => s + a.adCost, 0)
+  const manualRev  = filtered.reduce((s, a) => s + a.adRevenue, 0)
+  // CSV 업로드 합산 (14일 매출 기준 — 쿠팡 광고 콘솔 기본)
+  const csvCost = csvDaily.reduce((s, r) => s + Number(r.ad_cost || 0), 0)
+  const csvRev  = csvDaily.reduce((s, r) => s + Number(r.revenue_14d || 0), 0)
+  // 두 소스 합산 (중복은 사용자가 정리)
+  const totalCost = manualCost + csvCost
+  const totalRev  = manualRev + csvRev
   const roas      = totalCost ? (totalRev / totalCost).toFixed(2) : '0'
   const acos      = totalRev  ? (totalCost / totalRev * 100).toFixed(1) + '%' : '0%'
 
@@ -110,12 +138,15 @@ export default function AdPage() {
 
   return (
     <div>
+      {/* 광고 리포트 CSV 업로드 (쿠팡 광고 어드민 → 리포트 다운로드) */}
+      <CoupangAdUpload onComplete={loadCsvDaily} />
+
       <div className="krow">
         <div className="kpi kc-re">
           <div className="kpi-top"><div className="kpi-ico">💸</div><div className="kpi-badge kb-dn">비용</div></div>
           <div className="kpi-lbl">총 광고비</div>
           <div className="kpi-val">{fmt(totalCost)}</div>
-          <div className="kpi-foot">기간 합계</div>
+          <div className="kpi-foot">기간 합계{csvDaily.length > 0 ? ` · CSV ${csvDaily.length}일` : ''}</div>
         </div>
         <div className="kpi kc-gr">
           <div className="kpi-top"><div className="kpi-ico">📣</div><div className="kpi-badge kb-up">▲</div></div>
