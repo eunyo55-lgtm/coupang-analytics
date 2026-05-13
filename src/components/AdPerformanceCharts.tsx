@@ -140,15 +140,8 @@ export default function AdPerformanceCharts({ dateFrom, dateTo }: Props) {
     )
   }
 
-  if (rows.length === 0) {
-    return (
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div style={{ padding: 16, fontSize: 13, color: '#94a3b8' }}>
-          📊 선택한 기간 ({dateFrom} ~ {dateTo})에 광고 데이터가 없습니다.
-        </div>
-      </div>
-    )
-  }
+  // 데이터 없음 → 상단 노란 배너(AdPage)가 이미 안내하므로 여기서는 카드 자체를 그리지 않음
+  if (rows.length === 0) return null
 
   return (
     <div style={{ marginBottom: 12 }}>
