@@ -280,6 +280,17 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
         }
         try {
           const list = await fetchNaverKeywordList(seeds)
+          console.log('[expand_keywords_via_naver] naver returned', list.length, 'items for seeds:', seeds)
+          if (list.length === 0) {
+            // API 자체는 성공했지만 연관 키워드가 0개인 경우 (시드가 너무 좁거나, 등록되지 않은 키워드)
+            return {
+              status: 'empty_result',
+              message: `네이버 API 호출은 성공했지만 시드 [${seeds.join(', ')}]에 대해 연관 키워드가 0개입니다. 시드를 더 일반적/대중적으로 바꾸거나 (예: '샌들' → '아동샌들', '여성샌들') 다른 키워드로 시도해 보세요.`,
+              seeds_used: seeds,
+              naver_returned: 0,
+              debug_env: envProbe,
+            }
+          }
           const mapped = list.map(r => {
             const pc = parseNaverVolume(r.monthlyPcQcCnt)
             const mb = parseNaverVolume(r.monthlyMobileQcCnt)
@@ -291,11 +302,26 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
             }
           })
           mapped.sort((a, b) => b.total_volume - a.total_volume)
-          return mapped.slice(0, limit)
+          return {
+            status: 'success',
+            seeds_used: seeds,
+            results: mapped.slice(0, limit),
+            total_returned_by_naver: list.length,
+          }
         } catch (e: any) {
           const msg = e?.message ?? String(e)
-          console.error('[expand_keywords_via_naver] 실패:', msg, envProbe)
-          return { error: msg, debug_env: envProbe }
+          console.error('[expand_keywords_via_naver] throw 발생:', msg, envProbe)
+          return {
+            status: 'error',
+            error: msg,
+            user_facing_help:
+              `네이버 API 호출 실패. 환경변수 점검: ` +
+              `CUSTOMER_ID=${envProbe.has_customer_id ? `있음(${envProbe.customer_id_len}자)` : '❌없음'}, ` +
+              `ACCESS_LICENSE=${envProbe.has_access_license ? `있음(${envProbe.access_license_len}자)` : '❌없음'}, ` +
+              `SECRET_KEY=${envProbe.has_secret_key ? `있음(${envProbe.secret_key_len}자)` : '❌없음'}. ` +
+              `원본 에러: ${msg.slice(0, 200)}`,
+            debug_env: envProbe,
+          }
         }
       }
       default:
