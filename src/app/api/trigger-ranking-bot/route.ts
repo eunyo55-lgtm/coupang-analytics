@@ -64,6 +64,34 @@ export async function POST(req: Request) {
   }
 }
 
+// 막힌 pending job 취소 (runner 오프라인일 때 사용자가 큐 정리)
+export async function DELETE(req: Request) {
+  try {
+    const url = new URL(req.url)
+    const id = url.searchParams.get('id')
+    const supa = getSupa()
+    if (id) {
+      // 단건 취소
+      const { error } = await supa
+        .from('ranking_jobs')
+        .update({ status: 'failed', error: 'cancelled by user', finished_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('status', 'pending')  // 이미 실행 중인 건 못 취소
+      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    // 전체 pending 취소
+    const { error, count } = await supa
+      .from('ranking_jobs')
+      .update({ status: 'failed', error: 'cancelled by user', finished_at: new Date().toISOString() })
+      .eq('status', 'pending')
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ ok: true, cancelled: count }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  } catch (e: any) {
+    return new Response(JSON.stringify({ error: e?.message ?? String(e) }), { status: 500, headers: { 'Content-Type': 'application/json' } })
+  }
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url)

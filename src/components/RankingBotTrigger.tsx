@@ -75,6 +75,28 @@ export default function RankingBotTrigger() {
     }
   }
 
+  async function cancelJob(id: string) {
+    if (!confirm('이 작업을 취소하시겠습니까? (로컬 봇이 안 켜져 있으면 큐를 비우는 데 유용합니다.)')) return
+    try {
+      const res = await fetch(`/api/trigger-ranking-bot?id=${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j?.error || '취소 실패')
+      }
+      await loadJobs()
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? String(e))
+    }
+  }
+
+  // 봇 오프라인 감지: pending 작업이 2분 이상 멈춰 있으면 runner가 안 돌고 있다는 신호.
+  // runner는 15초마다 polling 하므로 정상이라면 30초 안에 'running'으로 바뀐다.
+  function isLikelyOffline(j: Job): boolean {
+    if (j.status !== 'pending') return false
+    const createdMs = new Date(j.created_at).getTime()
+    return Date.now() - createdMs > 2 * 60 * 1000
+  }
+
   useEffect(() => {
     loadJobs()
     pollRef.current = setInterval(() => {
@@ -96,11 +118,12 @@ export default function RankingBotTrigger() {
     const latest = latestByType(jobType)
     const isBusy = busyType === jobType
     const isActive = activeByType(jobType)
+    const offline = latest ? isLikelyOffline(latest) : false
     const statusText = latest ? STATUS_LABEL[latest.status] : '대기'
     const statusColor = latest ? STATUS_COLOR[latest.status] : '#94a3b8'
 
     return (
-      <div key={jobType} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div key={jobType} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <button
           onClick={() => triggerBot(jobType)}
           disabled={isBusy || isActive}
@@ -119,8 +142,24 @@ export default function RankingBotTrigger() {
         </button>
         {latest && (
           <span style={{ fontSize: 11, color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: offline ? '#ef4444' : statusColor }} />
             {statusText} · {fmtKST(latest.finished_at || latest.started_at || latest.created_at)}
+          </span>
+        )}
+        {offline && latest && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b',
+            fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          }}>
+            🔌 봇 오프라인 의심
+            <button
+              onClick={() => cancelJob(latest.id)}
+              style={{
+                background: '#991b1b', color: 'white', border: 'none', borderRadius: 4,
+                padding: '1px 6px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+              }}
+            >취소</button>
           </span>
         )}
       </div>
@@ -141,6 +180,16 @@ export default function RankingBotTrigger() {
         {renderCompactButton('coupang_rank')}
         {renderCompactButton('naver_volume')}
       </div>
+      {jobs.some(isLikelyOffline) && (
+        <div style={{
+          width: '100%', marginTop: 4, padding: '8px 12px',
+          background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6,
+          fontSize: 11, color: '#991b1b', lineHeight: 1.55,
+        }}>
+          ⚠️ <b>로컬 봇이 응답하지 않습니다.</b> 회사 PC에서 <code>C:\Users\onlin\Desktop\Sales\scraper\start_runner.bat</code>을 실행하세요.
+          정상 작동하면 클릭 후 15~30초 안에 "실행 중"으로 바뀝니다.
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {errorMsg && (
           <span style={{ fontSize: 11, color: '#ef4444' }}>{errorMsg.slice(0, 80)}</span>
