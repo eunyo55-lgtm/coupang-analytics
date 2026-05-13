@@ -114,6 +114,11 @@ export default function RankingPage() {
   const [naverKw, setNaverKw] = useState('')
   const [naverLoading, setNaverLoading] = useState(false)
   const [naverResults, setNaverResults] = useState<NaverKeywordResult[]>([])
+  const [naverDisplayLimit, setNaverDisplayLimit] = useState(10)
+
+  // 아동 시장에 부적합한 키워드 (네이버 검색량 결과에서 제외)
+  // 부분 일치 — 키워드에 아래 단어가 포함되면 결과에서 숨김
+  const EXCLUDE_KEYWORDS = ['성인', '남자', '여자', '남성', '여성', '어른', '임산부', '산모', '부부']
 
   /* 정렬 & 편집 */
   const [sortKey, setSortKey] = useState<string>('volLatest')
@@ -329,9 +334,11 @@ export default function RankingPage() {
     if (!keywords.length) {
       // 검색어를 비우고 조회를 눌렀거나 빈 입력 → 결과 비우기 (사용자 요청)
       setNaverResults([])
+      setNaverDisplayLimit(10)
       return
     }
     setNaverLoading(true)
+    setNaverDisplayLimit(10) // 새 조회 시 처음 10개부터 다시 보여줌
     try {
       const res = await fetch('/api/naver-keywords', {
         method: 'POST',
@@ -687,73 +694,115 @@ export default function RankingPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {naverResults.length > 0 ? (
-                    naverResults.map((r, i) => {
-                      const alreadyTracked = keywords.some(k => k.keyword === r.keyword)
+                  {(() => {
+                    // 필터 + 정렬: 아동 시장에 부적합한 키워드 제외 + 합계 desc
+                    const filtered = naverResults
+                      .filter(r => !EXCLUDE_KEYWORDS.some(neg => r.keyword.includes(neg)))
+                      .slice()
+                      .sort((a, b) => (b.total || 0) - (a.total || 0))
+                    const displayed = filtered.slice(0, naverDisplayLimit)
+                    const excludedCount = naverResults.length - filtered.length
+                    if (displayed.length === 0) {
                       return (
-                        <tr key={i}>
-                          <td><span className="kw-tag">{r.keyword}</span></td>
-                          <td style={{ fontWeight: 700 }}>{fmt(r.pc)}</td>
-                          <td style={{ fontWeight: 700 }}>{fmt(r.mobile)}</td>
-                          <td style={{ fontWeight: 800 }}>{fmt(r.total)}</td>
-                          <td>
-                            <span
-                              className={`badge ${
-                                r.competition === 'high'
-                                  ? 'b-re'
-                                  : r.competition === 'mid'
-                                  ? 'b-am'
-                                  : 'b-gr'
-                              }`}
-                            >
-                              {r.competition === 'high'
-                                ? '높음'
-                                : r.competition === 'mid'
-                                ? '중간'
-                                : '낮음'}
-                            </span>
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                // 좌측 키워드 추가 폼에 자동 입력 + 부드러운 스크롤
-                                setNewKeyword(r.keyword)
-                                if (!newCategory) setNewCategory('')
-                                document
-                                  .querySelector('input[placeholder="필수"]')
-                                  ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                              }}
-                              disabled={alreadyTracked}
-                              style={{
-                                padding: '4px 10px',
-                                fontSize: 11,
-                                fontWeight: 600,
-                                borderRadius: 6,
-                                border: 'none',
-                                cursor: alreadyTracked ? 'not-allowed' : 'pointer',
-                                background: alreadyTracked ? '#e2e8f0' : '#2563eb',
-                                color: alreadyTracked ? '#94a3b8' : 'white',
-                                whiteSpace: 'nowrap',
-                              }}
-                              title={alreadyTracked ? '이미 추적 중인 키워드입니다' : '좌측 키워드 추가 폼에 채웁니다'}
-                            >
-                              {alreadyTracked ? '추적 중' : '+ 추가'}
-                            </button>
+                        <tr>
+                          <td colSpan={6}>
+                            <div className="empty-st" style={{ padding: 20 }}>
+                              <div className="es-ico">🔎</div>
+                              <div className="es-t">
+                                {naverResults.length === 0
+                                  ? '키워드를 입력하고 조회하세요'
+                                  : '필터(성인/남녀 등) 적용 후 표시할 결과가 없습니다'}
+                              </div>
+                            </div>
                           </td>
                         </tr>
                       )
-                    })
-                  ) : (
-                    <tr>
-                      <td colSpan={6}>
-                        <div className="empty-st" style={{ padding: 20 }}>
-                          <div className="es-ico">🔎</div>
-                          <div className="es-t">키워드를 입력하고 조회하세요</div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                    }
+                    return (
+                      <>
+                        {displayed.map((r, i) => {
+                          const alreadyTracked = keywords.some(k => k.keyword === r.keyword)
+                          return (
+                            <tr key={i}>
+                              <td><span className="kw-tag">{r.keyword}</span></td>
+                              <td style={{ fontWeight: 700 }}>{fmt(r.pc)}</td>
+                              <td style={{ fontWeight: 700 }}>{fmt(r.mobile)}</td>
+                              <td style={{ fontWeight: 800 }}>{fmt(r.total)}</td>
+                              <td>
+                                <span
+                                  className={`badge ${
+                                    r.competition === 'high'
+                                      ? 'b-re'
+                                      : r.competition === 'mid'
+                                      ? 'b-am'
+                                      : 'b-gr'
+                                  }`}
+                                >
+                                  {r.competition === 'high'
+                                    ? '높음'
+                                    : r.competition === 'mid'
+                                    ? '중간'
+                                    : '낮음'}
+                                </span>
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNewKeyword(r.keyword)
+                                    if (!newCategory) setNewCategory('')
+                                    document
+                                      .querySelector('input[placeholder="필수"]')
+                                      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                                  }}
+                                  disabled={alreadyTracked}
+                                  style={{
+                                    padding: '4px 10px',
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    border: 'none',
+                                    cursor: alreadyTracked ? 'not-allowed' : 'pointer',
+                                    background: alreadyTracked ? '#e2e8f0' : '#2563eb',
+                                    color: alreadyTracked ? '#94a3b8' : 'white',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                  title={alreadyTracked ? '이미 추적 중인 키워드입니다' : '좌측 키워드 추가 폼에 채웁니다'}
+                                >
+                                  {alreadyTracked ? '추적 중' : '+ 추가'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                        {/* 더보기 / 상태 표시 행 */}
+                        {(displayed.length < filtered.length || excludedCount > 0) && (
+                          <tr>
+                            <td colSpan={6} style={{ padding: 10, textAlign: 'center', background: '#fafafa' }}>
+                              {displayed.length < filtered.length && (
+                                <button
+                                  type="button"
+                                  onClick={() => setNaverDisplayLimit(n => n + 10)}
+                                  style={{
+                                    padding: '6px 16px', fontSize: 12, fontWeight: 600,
+                                    background: 'white', color: '#2563eb',
+                                    border: '1px solid #2563eb', borderRadius: 6, cursor: 'pointer',
+                                  }}
+                                >
+                                  더보기 ({displayed.length}/{filtered.length})
+                                </button>
+                              )}
+                              {excludedCount > 0 && (
+                                <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 6 }}>
+                                  성인/남녀 관련 키워드 {excludedCount}개 자동 제외됨
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    )
+                  })()}
                 </tbody>
               </table>
             </div>
