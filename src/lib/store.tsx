@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef, useState } from 'react'
 import type { DateRange, SalesRow, InventoryItem, RankingEntry, AdEntry } from '@/types'
 import { getPresetRange } from '@/lib/dateUtils'
-import { loadEssential, loadHistorical, readEssentialFromCache, cacheEssential, clearData, PersistedData } from '@/lib/storage'
+import { loadEssential, loadHistorical, readEssentialFromCache, cacheEssential, readHistoricalFromCache, cacheHistorical, clearData, PersistedData } from '@/lib/storage'
 
 export type { PersistedData }
 
@@ -107,7 +107,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
         },
       })
       setIsReady(true)
-      console.log('[CA] 💾 캐시에서 즉시 표시 — 백그라운드에서 fresh 로드 시작')
+      console.log('[CA] 💾 Essential 캐시에서 즉시 표시')
+    }
+
+    // ─── Phase 0b: Historical 캐시(10분 TTL)도 있으면 즉시 표시 → SalesPage 즉시 작동
+    const cachedHist = readHistoricalFromCache()
+    if (cachedHist) {
+      dispatch({
+        type: 'HYDRATE',
+        payload: {
+          salesData:  cachedHist.data.salesData,
+          masterData: cachedHist.data.masterData,
+        },
+      })
+      console.log('[CA] 💾 Historical 캐시 즉시 표시 (stale:', cachedHist.stale, ')')
     }
 
     // ─── Phase 1: Essential 데이터 fresh 로드 (~2초)
@@ -132,18 +145,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setIsReady(true)   // 로드 실패해도 빈 화면이라도 보이게
       }
 
-      // ─── Phase 2: Historical (salesData/products) — 백그라운드, 화면 안 막음
-      loadHistorical().then(historical => {
-        if (historical) {
-          dispatch({
-            type: 'HYDRATE',
-            payload: {
-              salesData:  historical.salesData,
-              masterData: historical.masterData,
-            },
-          })
-        }
-      }).catch(e => console.warn('[CA] historical load failed:', e))
+      // ─── Phase 2: Historical (salesData/products) — 백그라운드 + 캐시 저장
+      // 캐시가 신선하면 fresh fetch 스킵 (체감 0초)
+      const histCache = readHistoricalFromCache()
+      if (histCache && !histCache.stale) {
+        console.log('[CA] Historical 캐시 신선 — fresh fetch 스킵')
+      } else {
+        loadHistorical().then(historical => {
+          if (historical) {
+            cacheHistorical(historical)
+            dispatch({
+              type: 'HYDRATE',
+              payload: {
+                salesData:  historical.salesData,
+                masterData: historical.masterData,
+              },
+            })
+          }
+        }).catch(e => console.warn('[CA] historical load failed:', e))
+      }
     }).catch(e => {
       console.warn('[CA] essential load failed:', e)
       if (!cached) setIsReady(true)

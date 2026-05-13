@@ -1,6 +1,9 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
+
+const SUPPLY_CACHE_TTL_MS = 5 * 60 * 1000
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -34,11 +37,27 @@ function getWeekLabel(dateStr: string): string {
   return `W${week}`
 }
 
-// ── 모듈 레벨 캐시 (탭 이동 시 데이터 유지) ──
-let _cachedAllRows: SupplyRow[] = []
-let _cachedProdMap: Record<string,{name:string;image_url:string}> = {}
-let _cachedRows: Record<string, SupplyRow[]> = {}  // key: `${dateFrom}-${dateTo}`
-let _cacheLoaded = false
+// ── 모듈 레벨 캐시 (탭 이동 시 데이터 유지) + localStorage 백킹 ──
+// 모듈 변수는 SPA 내 탭 이동에 빠르지만 새로고침 시 사라짐.
+// localStorage(SWR 5분 TTL)로 백킹해 새로고침에서도 즉시 표시.
+const SUPPLY_ALL_KEY = 'swr_supply_all_v1'
+const SUPPLY_PRODMAP_KEY = 'swr_supply_prodmap_v1'
+
+interface SupplyAllCache {
+  allRows: SupplyRow[]
+  prodMap: Record<string, { name: string; image_url: string }>
+}
+
+function readSupplyCache(): SupplyAllCache | null {
+  const r = readSwrCache<SupplyAllCache>(SUPPLY_ALL_KEY, SUPPLY_CACHE_TTL_MS)
+  return r ? r.data : null
+}
+
+const _initialSupplyCache = typeof window !== 'undefined' ? readSupplyCache() : null
+let _cachedAllRows: SupplyRow[] = _initialSupplyCache?.allRows ?? []
+let _cachedProdMap: Record<string,{name:string;image_url:string}> = _initialSupplyCache?.prodMap ?? {}
+let _cachedRows: Record<string, SupplyRow[]> = {}  // key: `${dateFrom}-${dateTo}` (in-memory only)
+let _cacheLoaded = _cachedAllRows.length > 0
 
 function getOneMonthAgo() {
   const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0,10)
@@ -140,6 +159,8 @@ export default function SupplyPage() {
       _cachedProdMap = pm
       _cacheLoaded = true
       setProdMap(pm)
+      // localStorage 백킹 — 새로고침 후에도 즉시 표시
+      writeSwrCache<SupplyAllCache>(SUPPLY_ALL_KEY, { allRows: all, prodMap: pm })
     }
     loadAll()
   }, [])

@@ -1,6 +1,7 @@
 'use client'
 
 import { supabase } from '@/lib/supabase'
+import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -189,6 +190,25 @@ export function cacheEssential(data: EssentialData) {
 export interface HistoricalData {
   salesData: PersistedData['salesData']
   masterData: PersistedData['masterData']
+}
+
+// ── Historical 캐시 (10분 TTL) — salesData는 크지만 stringify해도 보통 1~5MB
+const HISTORICAL_CACHE_KEY = 'swr_historical_v1'
+const HISTORICAL_TTL_MS = 10 * 60 * 1000
+
+export function readHistoricalFromCache(): { data: HistoricalData; stale: boolean } | null {
+  const r = readSwrCache<HistoricalData>(HISTORICAL_CACHE_KEY, HISTORICAL_TTL_MS)
+  return r ? { data: r.data, stale: r.stale } : null
+}
+
+export function cacheHistorical(data: HistoricalData) {
+  // 4MB 초과면 캐시 스킵 (localStorage 5~10MB 한도)
+  const approxBytes = data.salesData.length * 200 + data.masterData.length * 100
+  if (approxBytes > 4 * 1024 * 1024) {
+    console.log('[CA] historical too large for cache, skipping localStorage')
+    return
+  }
+  writeSwrCache(HISTORICAL_CACHE_KEY, data)
 }
 
 export async function loadHistorical(): Promise<HistoricalData | null> {

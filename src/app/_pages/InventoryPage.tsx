@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
+import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 import DualActionBoard from './DualActionBoard'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -131,15 +132,34 @@ export default function InventoryPage() {
     category: extractCategory(r.name),
   })
 
+  // 5분 stale-while-revalidate: 캐시가 있으면 즉시 표시, 백그라운드에서 갱신
   useEffect(() => {
     if (!from || !to) return
-    setLoading(true)
+    const cacheKey = `swr_inv_summary_${from}_${to}`
+    const TTL = 5 * 60 * 1000
+
+    let cancelled = false
+    const cached = readSwrCache<SummaryRow[]>(cacheKey, TTL)
+    if (cached) {
+      // 즉시 표시 (체감 0초)
+      setSummaries(cached.data.map(normalizeSummary))
+      setLoading(false)
+      if (!cached.stale) return  // 신선하면 fetch 생략
+    } else {
+      setLoading(true)
+    }
+
+    // stale or 캐시 없음 → 백그라운드 fresh fetch
     rpc('get_inventory_summary', { p_from: from, p_to: to })
       .then((data) => {
-        setSummaries((data as SummaryRow[]).map(normalizeSummary))
+        if (cancelled) return
+        const rows = data as SummaryRow[]
+        writeSwrCache(cacheKey, rows)
+        setSummaries(rows.map(normalizeSummary))
         setLoading(false)
       })
-      .catch(() => setLoading(false))
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [from, to])
 
   const priceOfSummary = (r: SummaryRow): number => {
