@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { NaverKeywordResult } from '@/types'
 import RankingBotTrigger from '@/components/RankingBotTrigger'
+import KeywordVolumeChart from '@/components/KeywordVolumeChart'
 
 /* ────────────────────────────────────────────────────────────
    Types (기존 앱 스키마 기반 - keywords + keyword_rankings)
@@ -723,6 +724,9 @@ export default function RankingPage() {
           </div>
         </div>
       </div>
+
+      {/* 네이버 키워드 검색량 추이 + 상승 키워드 분석 */}
+      <KeywordVolumeChart />
 
       {/* 순위 추이 테이블 (가로 스크롤) */}
       <div className="card" style={{ marginTop: 16 }}>
