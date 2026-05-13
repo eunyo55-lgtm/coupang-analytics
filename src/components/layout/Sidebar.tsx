@@ -14,6 +14,9 @@ const NAV_ITEMS = [
     { path: '/ranking',   key: 'ranking',    icon: '🏆', label: '랭킹 현황',  badge: 'rank' },
     { path: '/ad',        key: 'ad',         icon: '📣', label: '광고 현황' },
   ]},
+  { section: 'AI', items: [
+    { path: '/agent',     key: 'agent',      icon: '🤖', label: 'AI 어시스턴트' },
+  ]},
   { section: '관리', items: [
     { path: '/datamanage', key: 'datamanage', icon: '🗂️', label: '데이터 관리', badge: 'alert' },
   ]},

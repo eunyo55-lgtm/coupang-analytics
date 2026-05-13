@@ -12,6 +12,7 @@ import SupplyPage from '@/app/_pages/SupplyPage'
 import RankingPage from '@/app/_pages/RankingPage'
 import AdPage from '@/app/_pages/AdPage'
 import DataManagePage from '@/app/_pages/DataManagePage'
+import AgentPage from '@/app/_pages/AgentPage'
 
 const TABS: Record<string, React.ComponentType> = {
   '':          DashboardPage,
@@ -22,6 +23,7 @@ const TABS: Record<string, React.ComponentType> = {
   'ranking':   RankingPage,
   'ad':        AdPage,
   'datamanage': DataManagePage,
+  'agent':     AgentPage,
 }
 
 export default function AppShell() {
