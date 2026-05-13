@@ -28,14 +28,13 @@ export default function AdPage() {
   const adChartRef  = useRef<HTMLCanvasElement>(null)
   const adChartInst = useRef<Chart | null>(null)
 
-  // 쿠팡 광고 CSV 업로드분 (coupang_ad_daily) 일별 합계 — 자동 KPI/차트용
-  const [csvDaily, setCsvDaily] = useState<{
-    date: string; ad_cost: number; revenue_14d: number; revenue_1d: number;
-    impressions: number; clicks: number;
-  }[]>([])
+  // 쿠팡 광고 CSV 업로드분 (coupang_ad_daily) — 전체 일별 합계 로드 후 dateRange로 필터
+  type AdDaily = { date: string; ad_cost: number; revenue_14d: number; revenue_1d: number; impressions: number; clicks: number }
+  const [csvDailyAll, setCsvDailyAll] = useState<AdDaily[]>([])
 
   // Load from Supabase
-  useEffect(() => { loadAds(); loadCsvDaily() }, [dateRange]) // eslint-disable-line
+  useEffect(() => { loadAds() }, [dateRange]) // eslint-disable-line
+  useEffect(() => { loadCsvDaily() }, []) // CSV 전체는 한 번만 로드
 
   async function loadCsvDaily() {
     if (!supabase) return
@@ -43,13 +42,20 @@ export default function AdPage() {
       const { data, error } = await supabase
         .from('coupang_ad_daily_summary')
         .select('date, ad_cost, revenue_14d, revenue_1d, impressions, clicks')
-        .gte('date', toYMD(dateRange.from))
-        .lte('date', toYMD(dateRange.to))
         .order('date', { ascending: true })
       if (error) { console.warn('[AdPage] coupang_ad_daily_summary load error:', error.message); return }
-      setCsvDaily((data as any[]) || [])
+      setCsvDailyAll((data as AdDaily[]) || [])
     } catch (e) { console.warn('[AdPage] csv daily load:', e) }
   }
+
+  // dateRange로 필터한 CSV 데이터
+  const csvDaily = csvDailyAll.filter(r => {
+    const d = r.date
+    return d >= toYMD(dateRange.from) && d <= toYMD(dateRange.to)
+  })
+  const csvOutOfRange = csvDailyAll.length - csvDaily.length
+  const dbMinDate = csvDailyAll[0]?.date
+  const dbMaxDate = csvDailyAll[csvDailyAll.length - 1]?.date
 
   async function loadAds() {
     try {
@@ -136,10 +142,54 @@ export default function AdPage() {
     return () => { adChartInst.current?.destroy() }
   }, [filtered])
 
+  // CSV 데이터의 max 날짜 기준으로 dateRange 조정 (한 번 클릭으로)
+  function applyAdDataRange() {
+    if (!dbMinDate || !dbMaxDate) return
+    dispatch({
+      type: 'SET_DATE_RANGE',
+      payload: {
+        from: new Date(dbMinDate + 'T00:00:00'),
+        to:   new Date(dbMaxDate + 'T00:00:00'),
+        label: `광고 데이터 ${dbMinDate} ~ ${dbMaxDate}`,
+        preset: 'custom',
+      },
+    })
+  }
+
   return (
     <div>
       {/* 광고 리포트 CSV 업로드 (쿠팡 광고 어드민 → 리포트 다운로드) */}
       <CoupangAdUpload onComplete={loadCsvDaily} />
+
+      {/* dateRange 외부에 광고 데이터가 있으면 안내 */}
+      {csvDailyAll.length > 0 && csvDaily.length === 0 && (
+        <div
+          style={{
+            background: '#fef3c7', border: '1px solid #fcd34d',
+            padding: '12px 14px', borderRadius: 8, marginBottom: 12,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ fontSize: 13, color: '#78350f' }}>
+            ⚠️ 업로드된 광고 데이터 <b>{csvDailyAll.length}일치</b>가 현재 표시 기간 외부에 있어 KPI에 반영되지 않았습니다.
+            DB 데이터 범위: <b>{dbMinDate} ~ {dbMaxDate}</b>
+          </div>
+          <button
+            onClick={applyAdDataRange}
+            style={{
+              padding: '6px 14px', background: '#f59e0b', color: 'white', border: 'none',
+              borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            🎯 해당 기간으로 보기
+          </button>
+        </div>
+      )}
+      {csvDailyAll.length > 0 && csvDaily.length > 0 && csvOutOfRange > 0 && (
+        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
+          광고 데이터 표시 중: {csvDaily.length}일 / DB 전체 {csvDailyAll.length}일 ({csvOutOfRange}일은 현재 기간 밖)
+        </div>
+      )}
 
       <div className="krow">
         <div className="kpi kc-re">
