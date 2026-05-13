@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
 interface Props {
-  dateFrom: string  // 'YYYY-MM-DD'
-  dateTo: string
+  defaultDateFrom: string  // 'YYYY-MM-DD' (부모 dateRange에서 동기화)
+  defaultDateTo: string
 }
 
 type BreakdownRow = {
@@ -31,18 +31,37 @@ const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 
 type SortKey = 'ad_cost' | 'revenue_14d' | 'roas' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'orders_14d'
 
+function shiftYMD(ymd: string, deltaDays: number): string {
+  const d = new Date(ymd + 'T00:00:00')
+  d.setDate(d.getDate() + deltaDays)
+  return d.toISOString().slice(0, 10)
+}
+
 /**
- * 광고 차원별 성과 표 — 쿠팡 광고 콘솔의 캠페인/상품/키워드/노출지면 탭과 동일.
- * Supabase RPC: get_ad_breakdown(date, date, text) 사용.
- *   p_group_by: 'campaign' | 'product' | 'keyword' | 'placement'
+ * 광고 차원별 성과 표 — 독립 날짜 필터 포함.
+ *  - 부모 dateRange와 동기화 시작하지만 사용자가 별도 조정 가능
+ *  - 빠른 프리셋: 7일/14일/30일/90일 + 부모 동기화
+ *  - 사용자 정의: 시작일/종료일 달력 입력
  */
-export default function AdBreakdownTables({ dateFrom, dateTo }: Props) {
+export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Props) {
   const [tab, setTab] = useState<Tab>('campaign')
+  const [dateFrom, setDateFrom] = useState(defaultDateFrom)
+  const [dateTo, setDateTo] = useState(defaultDateTo)
+  const [syncedWithParent, setSyncedWithParent] = useState(true)
+
   const [rows, setRows] = useState<BreakdownRow[]>([])
   const [loading, setLoading] = useState(true)
   const [sortBy, setSortBy] = useState<SortKey>('ad_cost')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [limit, setLimit] = useState<number>(20)
+
+  // 부모 dateRange 변경 시 동기화 (사용자가 별도 조정 안 했으면)
+  useEffect(() => {
+    if (syncedWithParent) {
+      setDateFrom(defaultDateFrom)
+      setDateTo(defaultDateTo)
+    }
+  }, [defaultDateFrom, defaultDateTo, syncedWithParent])
 
   useEffect(() => {
     let cancelled = false
@@ -68,6 +87,20 @@ export default function AdBreakdownTables({ dateFrom, dateTo }: Props) {
     load()
     return () => { cancelled = true }
   }, [dateFrom, dateTo, tab])
+
+  function applyPreset(days: number) {
+    // 종료일 기준 N일 거꾸로 (defaultDateTo 기준 — 보통 부모의 to)
+    const to = defaultDateTo
+    const from = shiftYMD(to, -(days - 1))
+    setDateFrom(from)
+    setDateTo(to)
+    setSyncedWithParent(false)
+  }
+  function syncWithParent() {
+    setDateFrom(defaultDateFrom)
+    setDateTo(defaultDateTo)
+    setSyncedWithParent(true)
+  }
 
   const enriched = useMemo(() => {
     return rows.map(r => {
@@ -100,10 +133,8 @@ export default function AdBreakdownTables({ dateFrom, dateTo }: Props) {
     if (sortBy === k) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
     else { setSortBy(k); setSortDir('desc') }
   }
-
   const arrow = (k: SortKey) => sortBy === k ? (sortDir === 'desc' ? ' ▼' : ' ▲') : ''
 
-  // 합계
   const totals = useMemo(() => {
     return enriched.reduce((acc, r) => ({
       ad_cost: acc.ad_cost + r.ad_cost,
@@ -123,7 +154,10 @@ export default function AdBreakdownTables({ dateFrom, dateTo }: Props) {
           <div className="ch-ico">🧮</div>
           <div>
             <div className="ch-title">차원별 성과</div>
-            <div className="ch-sub">{dateFrom} ~ {dateTo} · 캠페인/상품/키워드/노출지면 분석</div>
+            <div className="ch-sub">
+              {dateFrom} ~ {dateTo}
+              {syncedWithParent ? ' (상단 기간과 동기화)' : ' (독립 기간)'}
+            </div>
           </div>
         </div>
         <div className="ch-r" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -142,6 +176,45 @@ export default function AdBreakdownTables({ dateFrom, dateTo }: Props) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* 날짜 필터 바 */}
+      <div style={{
+        padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0',
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12,
+      }}>
+        <span style={{ color: '#475569', fontWeight: 600 }}>📅 기간:</span>
+        {[7, 14, 30, 90].map(d => (
+          <button
+            key={d}
+            onClick={() => applyPreset(d)}
+            style={{
+              padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              background: 'white', color: '#475569', border: '1px solid #e2e8f0',
+            }}
+          >최근 {d}일</button>
+        ))}
+        <span style={{ color: '#cbd5e1' }}>|</span>
+        <input
+          type="date" value={dateFrom} max={dateTo}
+          onChange={e => { setDateFrom(e.target.value); setSyncedWithParent(false) }}
+          style={inputStyle}
+        />
+        <span style={{ color: '#94a3b8' }}>~</span>
+        <input
+          type="date" value={dateTo} min={dateFrom}
+          onChange={e => { setDateTo(e.target.value); setSyncedWithParent(false) }}
+          style={inputStyle}
+        />
+        {!syncedWithParent && (
+          <button
+            onClick={syncWithParent}
+            style={{
+              padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              background: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd',
+            }}
+          >🔄 상단 기간과 동기화</button>
+        )}
       </div>
 
       <div className="cb" style={{ padding: 0 }}>
@@ -173,7 +246,6 @@ export default function AdBreakdownTables({ dateFrom, dateTo }: Props) {
               </span>
             </div>
 
-            {/* 표 */}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
                 <thead>
@@ -222,3 +294,7 @@ const th: React.CSSProperties = {
   cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
 }
 const td: React.CSSProperties = { padding: '6px 10px', textAlign: 'right', color: '#334155' }
+const inputStyle: React.CSSProperties = {
+  padding: '4px 8px', fontSize: 11, border: '1px solid #e2e8f0', borderRadius: 4,
+  background: 'white', color: '#334155', fontFamily: 'inherit',
+}
