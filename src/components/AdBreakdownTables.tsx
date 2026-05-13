@@ -32,9 +32,13 @@ const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 type SortKey = 'ad_cost' | 'revenue_14d' | 'roas' | 'impressions' | 'clicks' | 'ctr' | 'cpc' | 'orders_14d'
 
 function shiftYMD(ymd: string, deltaDays: number): string {
-  const d = new Date(ymd + 'T00:00:00')
-  d.setDate(d.getDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
+  // toISOString = UTC라 KST에선 하루 밀림 → 로컬 컴포넌트 직접 조립
+  const [y, m, d] = ymd.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + deltaDays)
+  const yyyy = dt.getFullYear()
+  const mm = String(dt.getMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
 }
 function diffDays(from: string, to: string): number {
   const a = new Date(from + 'T00:00:00').getTime()

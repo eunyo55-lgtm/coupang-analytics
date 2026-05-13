@@ -27,9 +27,14 @@ function diffDays(from: string, to: string): number {
   return Math.max(1, Math.round((b - a) / 86400000) + 1)
 }
 function shiftYMD(ymd: string, deltaDays: number): string {
-  const d = new Date(ymd + 'T00:00:00')
-  d.setDate(d.getDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
+  // ⚠️ toISOString()은 UTC라서 KST(UTC+9) 환경에선 하루 밀려나옴.
+  // 로컬 날짜 컴포넌트를 직접 조립해 타임존 영향 없게 만든다.
+  const [y, m, d] = ymd.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + deltaDays)
+  const yyyy = dt.getFullYear()
+  const mm = String(dt.getMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
 }
 
 function aggregate(rows: AdDaily[]) {
@@ -201,9 +206,13 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
   return (
     <div style={{ marginBottom: 12 }}>
       {/* 비교 기간 안내 */}
-      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+      <div
+        style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}
+        title={`▲▼는 "직전 동일 기간" 대비 변동률입니다.\n선택한 기간이 ${periodDays}일이므로, 그 직전 ${periodDays}일을 비교 대상으로 잡았습니다.\n예: 5/1~5/7 선택 → 4/24~4/30과 비교 (지난 7일 vs 그 전 7일).`}
+      >
         📊 현재 기간 <b>{dateFrom} ~ {dateTo}</b> ({periodDays}일) ·
-        전 기간 <b>{prevFrom} ~ {prevTo}</b> 비교
+        ▲▼ 비교 대상 <b>{prevFrom} ~ {prevTo}</b> (직전 동일 {periodDays}일)
+        <span style={{ marginLeft: 6, color: '#cbd5e1', cursor: 'help' }}>ⓘ</span>
       </div>
 
       {/* 메인 5개 — auto-fit grid로 화면폭에 맞춰 wrap */}

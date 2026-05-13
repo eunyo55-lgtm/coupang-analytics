@@ -10,6 +10,7 @@ import AdPerformanceCharts from '@/components/AdPerformanceCharts'
 import AdBreakdownTables from '@/components/AdBreakdownTables'
 import AdKpiSparkCards from '@/components/AdKpiSparkCards'
 import AdBudgetPacing from '@/components/AdBudgetPacing'
+import AdSnapshotCards from '@/components/AdSnapshotCards'
 
 /**
  * 광고 현황 페이지 — 쿠팡 광고 콘솔 CSV 업로드 기반.
@@ -108,7 +109,10 @@ export default function AdPage() {
       {/* 💰 월 예산 페이스 (현재 월 기준 — dateRange와 무관) */}
       <AdBudgetPacing csvDailyAll={csvDailyAll} />
 
-      {/* KPI: 스파크라인 + 전 동일 기간 대비 (메인 5 + 운영 5) */}
+      {/* ⏰📅 전일/주간 스냅샷 (dateRange와 무관 — 항상 최신 어제/최근 7일) */}
+      <AdSnapshotCards csvDailyAll={csvDailyAll} />
+
+      {/* KPI: 스파크라인 + 직전 동일 기간 대비 (메인 5 + 운영 5) */}
       <AdKpiSparkCards csvDailyAll={csvDailyAll} dateFrom={dateFromY} dateTo={dateToY} />
 
       {/* 자동 신호 + 액션 가이드 */}
