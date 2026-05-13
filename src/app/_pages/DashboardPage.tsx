@@ -3,6 +3,10 @@ import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
+import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
+import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
+import DashboardTrendStrip from '@/components/dashboard/DashboardTrendStrip'
+import DashboardTabPortals from '@/components/dashboard/DashboardTabPortals'
 
 const SUPABASE_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -557,23 +561,16 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="ch">
-          <div className="ch-l"><div className="ch-ico">📣</div><div><div className="ch-title">광고 요약</div></div></div>
-          <button onClick={()=>{const nav=(window as Record<string,unknown>).navigateTo as ((p:string)=>void);nav?.('/ad')}} className="btn-g" style={{fontSize:11,padding:'5px 10px',cursor:'pointer',border:'none'}}>상세 →</button>
-        </div>
-        <div className="cb">
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
-            {[{label:'ROAS',value:'—',color:'var(--green)',note:'목표 3.5 이상'},{label:'ACoS',value:'—',color:'var(--blue)',note:'목표 25% 이하'},{label:'광고비',value:'0',color:'var(--text)',note:'기간 집행'},{label:'광고매출',value:'0',color:'var(--text)',note:'기간 기여'}].map(item=>(
-              <div key={item.label} style={{background:'var(--bg)',borderRadius:'var(--r10)',padding:11,border:'1px solid var(--border)'}}>
-                <div style={{fontSize:10,fontWeight:700,color:'var(--t3)',marginBottom:4}}>{item.label}</div>
-                <div style={{fontSize:18,fontWeight:800,color:item.color}}>{item.value}</div>
-                <div style={{fontSize:10,fontWeight:600,color:'var(--t3)',marginTop:3}}>{item.note}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      {/* ── 새 대시보드 섹션들 (priority 순) ────────────────────── */}
+      <DashboardBriefing
+        latestDate={latestDate}
+        yestQty={kpiYest?.qty}
+        yestRev={kpiYest?.rev}
+        yoyPct={kpiYest && kpiYest25 ? pct(kpiYest.qty, kpiYest25.qty) : null}
+      />
+      <DashboardActionQueue />
+      <DashboardTrendStrip latestDate={latestDate} daily26={state.daily26} />
+      <DashboardTabPortals />
 
       {salesModal&&<SalesTrendModal productName={salesModal} onClose={()=>setSalesModal(null)}/>}
       {stockModal&&<StockTrendModal productName={stockModal.name} stockHistory={stockModal.history} onClose={()=>setStockModal(null)}/>}
