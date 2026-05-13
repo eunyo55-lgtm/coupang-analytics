@@ -396,23 +396,88 @@ export default function DashboardPage() {
   const [stockCostSrc, setStockCostSrc] = useState<'master'|'coupang'>('coupang')
   const displayedStockValue = stockCostSrc === 'master' ? stockValueMaster : (stockValueCoupang || stockValueMaster)
 
-  const kpiCards:{label:string;sub:string;qty:number|null;rev:number|null;yoy:number|null;color:string;isStock:boolean}[]=[
-    {label:'판매량',sub:`전일 (${latestDate})`,qty:kpiYest?.qty??null,rev:kpiYest?.rev??null,yoy:kpiYest&&kpiYest25?pct(kpiYest.qty,kpiYest25.qty):null,color:'var(--blue)',isStock:false},
-    {label:'주간 판매량',sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`,qty:kpiWeek?.qty??null,rev:kpiWeek?.rev??null,yoy:kpiWeek&&kpiWeek25?pct(kpiWeek.qty,kpiWeek25.qty):null,color:'var(--purple)',isStock:false},
-    {label:'누적 판매량',sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`,qty:kpiCum?.qty??null,rev:kpiCum?.rev??null,yoy:kpiCum&&kpiCum25?pct(kpiCum.qty,kpiCum25.qty):null,color:'var(--green)',isStock:false},
+  // ── daily26 폴백: get_kpi_by_date/range가 의존하는 MV(mv_daily_kpi)는 stale일 수 있음.
+  //    daily26은 raw daily_sales 테이블 기반이라 항상 신선 → qty만이라도 보장.
+  //    rev는 MV에서만 옴 → MV가 stale이면 null. UI에서 "—" + "MV 미갱신" 안내.
+  const dailyMap = useMemo(() => new Map(state.daily26.map(d => [d.date, d.qty])), [state.daily26])
+  const yestQtyFallback = dailyMap.get(latestDate) ?? null
+  const weekQtyFallback = useMemo(() => {
+    let sum = 0
+    for (const d of state.daily26) {
+      if (d.date >= weekRange.from && d.date <= weekRange.to) sum += d.qty
+    }
+    return sum || null
+  }, [state.daily26, weekRange.from, weekRange.to])
+  const cumQtyFallback = useMemo(() => {
+    let sum = 0
+    for (const d of state.daily26) {
+      if (d.date >= cumRange.from && d.date <= cumRange.to) sum += d.qty
+    }
+    return sum || null
+  }, [state.daily26, cumRange.from, cumRange.to])
+
+  // 같은 방식으로 25년/24년 폴백 (전년비 계산용)
+  const dailyMap25 = useMemo(() => new Map(state.daily25.map(d => [d.date, d.qty])), [state.daily25])
+  const d25 = latestDate.replace('2026','2025')
+  const yestQtyFallback25 = dailyMap25.get(d25) ?? null
+
+  // 최종 표시값: RPC가 비면 daily 폴백 사용 (qty만)
+  const yestQtyEff = kpiYest?.qty ?? yestQtyFallback
+  const yestRevEff = kpiYest?.rev ?? null
+  const weekQtyEff = kpiWeek?.qty ?? weekQtyFallback
+  const weekRevEff = kpiWeek?.rev ?? null
+  const cumQtyEff  = kpiCum?.qty  ?? cumQtyFallback
+  const cumRevEff  = kpiCum?.rev  ?? null
+  const yestYoyEff = (kpiYest?.qty && kpiYest25?.qty) ? pct(kpiYest.qty, kpiYest25.qty)
+                   : (yestQtyFallback && yestQtyFallback25) ? pct(yestQtyFallback, yestQtyFallback25)
+                   : null
+  const usingFallback = (kpiYest === null && yestQtyFallback !== null)
+                     || (kpiWeek === null && weekQtyFallback !== null)
+                     || (kpiCum === null && cumQtyFallback !== null)
+
+  const kpiCards:{label:string;sub:string;qty:number|null;rev:number|null;yoy:number|null;color:string;isStock:boolean;revMissing?:boolean}[]=[
+    {label:'판매량',sub:`전일 (${latestDate})`,qty:yestQtyEff,rev:yestRevEff,yoy:yestYoyEff,color:'var(--blue)',isStock:false,revMissing:kpiYest===null},
+    {label:'주간 판매량',sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`,qty:weekQtyEff,rev:weekRevEff,yoy:kpiWeek&&kpiWeek25?pct(kpiWeek.qty,kpiWeek25.qty):null,color:'var(--purple)',isStock:false,revMissing:kpiWeek===null},
+    {label:'누적 판매량',sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`,qty:cumQtyEff,rev:cumRevEff,yoy:kpiCum&&kpiCum25?pct(kpiCum.qty,kpiCum25.qty):null,color:'var(--green)',isStock:false,revMissing:kpiCum===null},
     {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:displayedStockValue||null,yoy:null,color:'var(--amber)',isStock:true},
   ]
 
   return (
     <div>
+      {usingFallback && (
+        <div style={{
+          background:'#fef3c7', border:'1px solid #fcd34d', borderRadius:8,
+          padding:'8px 12px', marginBottom:10, fontSize:11, color:'#78350f',
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap'
+        }}>
+          <span>
+            ⚠️ 최신 일자의 <b>매출액 집계가 지연</b>되고 있습니다.
+            판매수량은 정확하지만 매출(원)은 "—"로 표시됩니다. Supabase에서 한 번 갱신하면 즉시 정상화돼요.
+          </span>
+          <button
+            onClick={() => {
+              const sql = 'REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily_kpi;'
+              navigator.clipboard?.writeText(sql).catch(()=>{})
+              alert('아래 SQL이 클립보드에 복사되었습니다:\n\n' + sql + '\n\nSupabase Dashboard → SQL Editor에 붙여넣고 실행하세요.')
+            }}
+            style={{padding:'4px 10px', background:'#f59e0b', color:'white', border:'none', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap'}}
+          >📋 갱신 SQL 복사</button>
+        </div>
+      )}
       <div className="ds-row" style={{marginBottom:16}}>
         {kpiCards.map((c,i)=>(
           <div key={i} className={`ds-card ds-c${i+1}`}>
             <div className="ds-lbl" style={{fontSize:11}}>{c.label}</div>
             <div style={{fontSize:9,color:'var(--t3)',marginBottom:4}}>{c.sub}</div>
             <div className="ds-val" style={{color:c.color,fontSize:22}}>{c.qty===null?<span style={{fontSize:13,color:'var(--t3)'}}>로딩...</span>:fmt(c.qty)}</div>
-            <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}}>
-              {c.isStock?`재고액 ${c.rev!==null?Math.round((c.rev||0)/100000000*10)/10+'억':'—'}`:`매출 ${c.rev!==null?fmt(c.rev||0)+'원':'—'}`}
+            <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}} title={c.revMissing?'mv_daily_kpi 갱신 대기 — 매출 집계 미반영':undefined}>
+              {c.isStock ? (
+                <>재고액 {c.rev!==null ? Math.round((c.rev||0)/100000000*10)/10+'억' : '—'}</>
+              ) : c.rev !== null ? (
+                <>매출 {fmt(c.rev||0)}원</>
+              ) : (
+                <>매출 <span style={{color:'#f59e0b'}}>— 집계중</span></>
+              )}
             </div>
             {c.isStock && (
               <div style={{display:'flex',gap:3,marginTop:4}}>
