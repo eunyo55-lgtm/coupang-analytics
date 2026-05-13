@@ -17,17 +17,40 @@ function getSupa() {
   return createClient(url, key, { db: { schema: 'public' } })
 }
 
+const VALID_JOB_TYPES = ['coupang_rank', 'naver_volume'] as const
+type JobType = typeof VALID_JOB_TYPES[number]
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}))
+    const rawJobType = typeof body?.job_type === 'string' ? body.job_type : 'coupang_rank'
+    const jobType: JobType = (VALID_JOB_TYPES as readonly string[]).includes(rawJobType)
+      ? (rawJobType as JobType) : 'coupang_rank'
+
     const supa = getSupa()
+
+    // 같은 종류 봇이 이미 pending/running이면 중복 트리거 차단
+    const { data: active } = await supa
+      .from('ranking_jobs')
+      .select('id, status')
+      .eq('job_type', jobType)
+      .in('status', ['pending', 'running'])
+      .limit(1)
+    if (active && active.length > 0) {
+      return new Response(
+        JSON.stringify({ error: `이미 진행 중인 ${jobType} 작업이 있습니다 (${active[0].status})`, job: active[0] }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } }
+      )
+    }
+
     const { data, error } = await supa
       .from('ranking_jobs')
       .insert({
         status: 'pending',
+        job_type: jobType,
         triggered_by: typeof body?.triggered_by === 'string' ? body.triggered_by : 'web',
       })
-      .select('id, status, created_at')
+      .select('id, status, job_type, created_at')
       .single()
     if (error) {
       return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })
@@ -49,18 +72,23 @@ export async function GET(req: Request) {
     if (id) {
       const { data, error } = await supa
         .from('ranking_jobs')
-        .select('id, status, created_at, started_at, finished_at, triggered_by, error, logs')
+        .select('id, status, job_type, created_at, started_at, finished_at, triggered_by, error, logs')
         .eq('id', id)
         .single()
       if (error) return new Response(JSON.stringify({ error: error.message }), { status: 404, headers: { 'Content-Type': 'application/json' } })
       return new Response(JSON.stringify({ job: data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
-    // 목록 (최근 20개)
-    const { data, error } = await supa
+    // 목록 (최근 20개). 쿼리에 ?job_type=... 있으면 필터.
+    const jobTypeFilter = url.searchParams.get('job_type')
+    let q = supa
       .from('ranking_jobs')
-      .select('id, status, created_at, started_at, finished_at, triggered_by, error')
+      .select('id, status, job_type, created_at, started_at, finished_at, triggered_by, error')
       .order('created_at', { ascending: false })
       .limit(20)
+    if (jobTypeFilter && (VALID_JOB_TYPES as readonly string[]).includes(jobTypeFilter)) {
+      q = q.eq('job_type', jobTypeFilter)
+    }
+    const { data, error } = await q
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })
     return new Response(JSON.stringify({ jobs: data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   } catch (e: any) {

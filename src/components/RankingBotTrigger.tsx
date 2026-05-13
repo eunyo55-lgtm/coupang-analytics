@@ -1,15 +1,33 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 
+type JobType = 'coupang_rank' | 'naver_volume'
+
 type Job = {
   id: string
   status: 'pending' | 'running' | 'completed' | 'failed'
+  job_type: JobType
   created_at: string
   started_at: string | null
   finished_at: string | null
   triggered_by: string | null
   error: string | null
   logs?: string | null
+}
+
+const BOT_META: Record<JobType, { label: string; icon: string; desc: string; color: string }> = {
+  coupang_rank: {
+    label: '쿠팡 랭킹 수집',
+    icon: '🛒',
+    desc: '키워드별 쿠팡 검색 결과에서 우리 상품 순위를 추적합니다.',
+    color: '#2563eb',
+  },
+  naver_volume: {
+    label: '네이버 검색량 수집',
+    icon: '🔍',
+    desc: '네이버 검색광고 API로 키워드 월간 PC/모바일 검색량을 가져옵니다.',
+    color: '#10b981',
+  },
 }
 
 const fmtKST = (iso: string | null) => {
@@ -34,9 +52,18 @@ function StatusBadge({ status }: { status: Job['status'] }) {
   )
 }
 
+function JobTypeBadge({ type }: { type: JobType }) {
+  const m = BOT_META[type]
+  return (
+    <span style={{ fontSize: 11, color: '#64748b' }}>
+      {m.icon} {m.label.replace(' 수집', '')}
+    </span>
+  )
+}
+
 export default function RankingBotTrigger() {
   const [jobs, setJobs] = useState<Job[]>([])
-  const [busy, setBusy] = useState(false)
+  const [busyType, setBusyType] = useState<JobType | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expandedLogs, setExpandedLogs] = useState<Record<string, string>>({})
@@ -60,14 +87,14 @@ export default function RankingBotTrigger() {
     } catch { /* ignore */ }
   }
 
-  async function triggerBot() {
-    setBusy(true)
+  async function triggerBot(jobType: JobType) {
+    setBusyType(jobType)
     setErrorMsg(null)
     try {
       const res = await fetch('/api/trigger-ranking-bot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ triggered_by: 'web' }),
+        body: JSON.stringify({ triggered_by: 'web', job_type: jobType }),
       })
       const j = await res.json()
       if (!res.ok) throw new Error(j?.error || '요청 실패')
@@ -75,66 +102,100 @@ export default function RankingBotTrigger() {
     } catch (e: any) {
       setErrorMsg(e?.message ?? String(e))
     } finally {
-      setBusy(false)
+      setBusyType(null)
     }
   }
 
-  // 초기 로드 + 진행 중 작업 있으면 빠른 polling
   useEffect(() => {
     loadJobs()
     pollRef.current = setInterval(() => {
       const hasActive = jobs.some(j => j.status === 'pending' || j.status === 'running')
       if (hasActive) loadJobs()
-    }, 5000) // 5초마다 활성 작업이 있으면 갱신
+    }, 5000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs.length, jobs.map(j => j.status).join(',')])
+  }, [jobs.length, jobs.map(j => j.status + j.job_type).join(',')])
 
-  const latest = jobs[0]
-  const isActive = latest && (latest.status === 'pending' || latest.status === 'running')
+  // 봇별 활성 여부
+  const activeByType = (t: JobType) =>
+    jobs.some(j => j.job_type === t && (j.status === 'pending' || j.status === 'running'))
 
-  return (
-    <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, marginBottom: 16, background: 'white' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+  function renderTriggerCard(jobType: JobType) {
+    const meta = BOT_META[jobType]
+    const isActive = activeByType(jobType)
+    const isBusy = busyType === jobType
+    return (
+      <div
+        key={jobType}
+        style={{
+          border: '1px solid #e2e8f0',
+          borderRadius: 10,
+          padding: 14,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          background: '#fafafa',
+          minWidth: 0,
+        }}
+      >
         <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>🤖 랭킹 수집 봇</div>
-          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
-            회사 PC의 봇을 원격으로 실행합니다. 결과는 자동으로 DB에 저장됩니다.
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+            {meta.icon} {meta.label}
+          </div>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 4, lineHeight: 1.5 }}>
+            {meta.desc}
           </div>
         </div>
         <button
-          onClick={triggerBot}
-          disabled={busy || isActive}
+          onClick={() => triggerBot(jobType)}
+          disabled={isBusy || isActive}
           style={{
-            padding: '8px 18px',
-            background: busy || isActive ? '#cbd5e1' : '#2563eb',
+            padding: '8px 12px',
+            background: isBusy || isActive ? '#cbd5e1' : meta.color,
             color: 'white',
             border: 'none',
             borderRadius: 8,
             fontWeight: 600,
-            fontSize: 13,
-            cursor: busy || isActive ? 'not-allowed' : 'pointer',
+            fontSize: 12,
+            cursor: isBusy || isActive ? 'not-allowed' : 'pointer',
           }}
         >
-          {busy ? '요청 중…' : isActive ? '진행 중…' : '수집 시작'}
+          {isBusy ? '요청 중…' : isActive ? '진행 중…' : '수집 시작'}
         </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, marginBottom: 16, background: 'white' }}>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>🤖 데이터 수집 봇</div>
+        <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+          회사 PC의 봇을 원격으로 실행합니다. 결과는 자동으로 DB에 저장됩니다.
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+        {renderTriggerCard('coupang_rank')}
+        {renderTriggerCard('naver_volume')}
       </div>
 
       {errorMsg && (
-        <div style={{ marginTop: 8, padding: 8, background: '#fef2f2', color: '#991b1b', borderRadius: 6, fontSize: 12 }}>
+        <div style={{ marginTop: 10, padding: 8, background: '#fef2f2', color: '#991b1b', borderRadius: 6, fontSize: 12 }}>
           {errorMsg}
         </div>
       )}
 
       {jobs.length > 0 && (
-        <details style={{ marginTop: 12 }}>
+        <details style={{ marginTop: 14 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12, color: '#64748b', fontWeight: 600 }}>
             최근 실행 기록 ({jobs.length})
           </summary>
-          <div style={{ marginTop: 8, fontSize: 12 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div style={{ marginTop: 8, fontSize: 12, overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}>
               <thead>
                 <tr style={{ background: '#f8fafc' }}>
+                  <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, color: '#475569' }}>봇</th>
                   <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, color: '#475569' }}>요청</th>
                   <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, color: '#475569' }}>완료</th>
                   <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, color: '#475569' }}>상태</th>
@@ -146,6 +207,7 @@ export default function RankingBotTrigger() {
                 {jobs.map(j => (
                   <>
                     <tr key={j.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '6px 8px' }}><JobTypeBadge type={j.job_type} /></td>
                       <td style={{ padding: '6px 8px', color: '#334155' }}>{fmtKST(j.created_at)}</td>
                       <td style={{ padding: '6px 8px', color: '#334155' }}>{fmtKST(j.finished_at)}</td>
                       <td style={{ padding: '6px 8px' }}><StatusBadge status={j.status} /></td>
@@ -165,7 +227,7 @@ export default function RankingBotTrigger() {
                     </tr>
                     {expandedId === j.id && (
                       <tr>
-                        <td colSpan={5} style={{ padding: 8, background: '#0f172a', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 11, whiteSpace: 'pre-wrap', maxHeight: 240, overflowY: 'auto' }}>
+                        <td colSpan={6} style={{ padding: 8, background: '#0f172a', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 11, whiteSpace: 'pre-wrap', maxHeight: 240, overflowY: 'auto' }}>
                           {j.error && <div style={{ color: '#fca5a5', marginBottom: 4 }}>error: {j.error}</div>}
                           {expandedLogs[j.id] || '(로그 없음)'}
                         </td>

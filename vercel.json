@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/daily-rank-trigger",
+      "schedule": "5 0 * * *"
+    }
+  ]
+}
