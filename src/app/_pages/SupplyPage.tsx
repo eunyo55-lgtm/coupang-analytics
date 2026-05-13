@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
@@ -78,6 +78,26 @@ export default function SupplyPage() {
     const lastFri = new Date(lastThu); lastFri.setDate(lastThu.getDate() - 6)
     return { from: lastFri.toISOString().slice(0,10), to: lastThu.toISOString().slice(0,10) }
   }, [])
+
+  // ── 미래 공급 예정 데이터까지 자동 확장 (페이지 진입 시 1회) ──
+  // chartTo / tableTo 초기값이 "오늘"로 박혀 있어서 다음주 공급예정이 잘림.
+  // allRows에서 가장 먼 입고예정일이 오늘보다 미래면 그 날짜로 자동 확장한다.
+  // 사용자가 직접 줄여도 다시 덮어쓰지 않도록 ref로 1회 가드.
+  const futureExtendedRef = useRef(false)
+  useEffect(() => {
+    if (futureExtendedRef.current || allRows.length === 0) return
+    let maxDate = ''
+    for (const r of allRows) {
+      const d = toD(r.입고예정일)
+      if (d && d > maxDate) maxDate = d
+    }
+    if (maxDate) {
+      if (maxDate > chartTo) setChartTo(maxDate)
+      if (maxDate > tableTo) setTableTo(maxDate)
+    }
+    futureExtendedRef.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allRows])
 
   // ── 전체 데이터 로드 (KPI용, 최초 1회 + 캐시) ──
   useEffect(() => {
