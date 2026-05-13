@@ -7,6 +7,9 @@ import { filterByRange, toYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
 import type { AdEntry } from '@/types'
 import CoupangAdUpload from '@/components/CoupangAdUpload'
+import AdSignalCards from '@/components/AdSignalCards'
+import AdPerformanceCharts from '@/components/AdPerformanceCharts'
+import AdBreakdownTables from '@/components/AdBreakdownTables'
 
 Chart.register(...registerables)
 
@@ -218,11 +221,20 @@ export default function AdPage() {
         </div>
       </div>
 
+      {/* 🚨 광고 신호 자동 탐지 (ROAS 미달 / 광고비 급증 / CTR 급락 / 신규 키워드 기회) */}
+      <AdSignalCards dateFrom={toYMD(dateRange.from)} dateTo={toYMD(dateRange.to)} />
+
+      {/* 📈 일별 추이 + 주간 집계 */}
+      <AdPerformanceCharts dateFrom={toYMD(dateRange.from)} dateTo={toYMD(dateRange.to)} />
+
+      {/* 🧮 캠페인/상품/키워드/노출지면 차원별 성과 */}
+      <AdBreakdownTables dateFrom={toYMD(dateRange.from)} dateTo={toYMD(dateRange.to)} />
+
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">➕</div><div>
             <div className="ch-title">광고 데이터 입력</div>
-            <div className="ch-sub">{dateRange.label} · 쿠팡 광고 어드민 기준</div>
+            <div className="ch-sub">{dateRange.label} · 쿠팡 광고 어드민 기준 (수동 입력)</div>
           </div></div>
         </div>
         <div className="cb">

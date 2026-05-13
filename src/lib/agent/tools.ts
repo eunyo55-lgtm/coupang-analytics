@@ -131,6 +131,78 @@ export const toolDeclarations: FunctionDeclaration[] = [
       required: ['seeds'],
     },
   },
+  // ── 광고 분석 (CSV로 업로드된 쿠팡 광고 데이터를 활용한 분석) ──
+  {
+    name: 'get_ad_performance',
+    description:
+      '지정 기간의 광고 성과 요약을 반환합니다. ' +
+      '"광고 성과는?", "이번 주 ROAS", "광고비 얼마 썼나" 같은 질문에 사용. ' +
+      '결과: { ad_cost, revenue_14d, revenue_1d, impressions, clicks, orders_14d, units_14d, roas, ctr, cpc, days_count }',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        date_from: { ...ymdField, description: '시작일 (포함)' },
+        date_to:   { ...ymdField, description: '종료일 (포함)' },
+      },
+      required: ['date_from', 'date_to'],
+    },
+  },
+  {
+    name: 'find_underperforming_campaigns',
+    description:
+      '광고 효율이 낮은 캠페인/상품/키워드를 찾습니다. ' +
+      '"ROAS 낮은 캠페인", "광고비 새는 곳", "효율 안 나오는 키워드 정리" 같은 질문에 사용. ' +
+      'roas_threshold(기본 5 = 500%) 미만이면서 ad_cost가 의미 있는 항목을 ROAS 낮은 순으로 반환. ' +
+      '결과: [{ name, ad_cost, revenue_14d, roas, clicks, orders_14d }]',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        date_from: ymdField,
+        date_to:   ymdField,
+        group_by: {
+          type: Type.STRING,
+          description: "'campaign' | 'product' | 'keyword' | 'placement' (기본 'campaign')",
+        },
+        roas_threshold: {
+          type: Type.NUMBER,
+          description: 'ROAS 임계치 (기본 5.0 = 500%). 이 미만이면 미달로 분류.',
+        },
+        min_ad_cost: {
+          type: Type.NUMBER,
+          description: '최소 광고비 (기본 10000원). 광고비가 이보다 적으면 무시.',
+        },
+        top_n: {
+          type: Type.INTEGER,
+          description: '반환 개수 (기본 10, 최대 30)',
+        },
+      },
+      required: ['date_from', 'date_to'],
+    },
+  },
+  {
+    name: 'discover_ad_keywords',
+    description:
+      '광고를 통해 매출이 발생한 키워드 중 우리가 아직 추적 등록하지 않은 키워드를 발굴합니다. ' +
+      '"새로운 키워드 후보", "광고에서 잘 나오는데 등록 안 한 키워드" 같은 질문에 사용. ' +
+      '광고 키워드 중 keywords 테이블에 없고, revenue_14d > min_revenue 이상인 것 반환. ' +
+      '결과: [{ keyword, ad_cost, revenue_14d, roas, clicks, orders_14d, is_tracked }]',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        date_from: ymdField,
+        date_to:   ymdField,
+        min_revenue: {
+          type: Type.NUMBER,
+          description: '최소 광고매출 (기본 50000원)',
+        },
+        top_n: {
+          type: Type.INTEGER,
+          description: '반환 개수 (기본 15, 최대 50)',
+        },
+      },
+      required: ['date_from', 'date_to'],
+    },
+  },
   {
     name: 'register_keyword',
     description:
@@ -342,6 +414,138 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
               `원본 에러: ${msg.slice(0, 200)}`,
             debug_env: envProbe,
           }
+        }
+      }
+      case 'get_ad_performance': {
+        const date_from = String(args.date_from)
+        const date_to = String(args.date_to)
+        const { data, error } = await supa
+          .from('coupang_ad_daily_summary')
+          .select('date, ad_cost, revenue_14d, revenue_1d, impressions, clicks, orders_14d, units_14d')
+          .gte('date', date_from)
+          .lte('date', date_to)
+        if (error) return { status: 'error', error: error.message }
+        if (!data || data.length === 0) {
+          return {
+            status: 'empty_result',
+            message: `${date_from} ~ ${date_to} 기간에 광고 데이터가 없습니다. CSV 업로드(쿠팡 광고 어드민 → 리포트 → 다운로드 → /ad 페이지에서 업로드)를 먼저 해주세요.`,
+            days_count: 0,
+          }
+        }
+        const totals = data.reduce((acc: any, r: any) => ({
+          ad_cost: acc.ad_cost + Number(r.ad_cost || 0),
+          revenue_14d: acc.revenue_14d + Number(r.revenue_14d || 0),
+          revenue_1d: acc.revenue_1d + Number(r.revenue_1d || 0),
+          impressions: acc.impressions + Number(r.impressions || 0),
+          clicks: acc.clicks + Number(r.clicks || 0),
+          orders_14d: acc.orders_14d + Number(r.orders_14d || 0),
+          units_14d: acc.units_14d + Number(r.units_14d || 0),
+        }), { ad_cost: 0, revenue_14d: 0, revenue_1d: 0, impressions: 0, clicks: 0, orders_14d: 0, units_14d: 0 })
+        const roas = totals.ad_cost > 0 ? totals.revenue_14d / totals.ad_cost : 0
+        const ctr = totals.impressions > 0 ? totals.clicks / totals.impressions * 100 : 0
+        const cpc = totals.clicks > 0 ? totals.ad_cost / totals.clicks : 0
+        const acos = totals.revenue_14d > 0 ? totals.ad_cost / totals.revenue_14d * 100 : 0
+        return {
+          status: 'success',
+          ...totals,
+          roas: Math.round(roas * 100) / 100,
+          roas_pct: Math.round(roas * 100),
+          ctr_pct: Math.round(ctr * 100) / 100,
+          cpc: Math.round(cpc),
+          acos_pct: Math.round(acos * 10) / 10,
+          days_count: data.length,
+        }
+      }
+      case 'find_underperforming_campaigns': {
+        const date_from = String(args.date_from)
+        const date_to = String(args.date_to)
+        const group_by = String(args.group_by ?? 'campaign')
+        const roas_threshold = Number(args.roas_threshold ?? 5.0)
+        const min_ad_cost = Number(args.min_ad_cost ?? 10000)
+        const top_n = Math.min(30, Math.max(1, Number(args.top_n ?? 10)))
+        const { data, error } = await supa.rpc('get_ad_breakdown', {
+          p_date_from: date_from,
+          p_date_to: date_to,
+          p_group_by: group_by,
+        })
+        if (error) return { status: 'error', error: error.message }
+        if (!data || (data as any[]).length === 0) {
+          return { status: 'empty_result', message: `${date_from}~${date_to} 광고 데이터가 없습니다.`, results: [] }
+        }
+        const filtered = (data as any[])
+          .map(r => {
+            const ad_cost = Number(r.ad_cost || 0)
+            const revenue_14d = Number(r.revenue_14d || 0)
+            const roas = ad_cost > 0 ? revenue_14d / ad_cost : 0
+            return {
+              name: r.name,
+              ad_cost,
+              revenue_14d,
+              roas: Math.round(roas * 100) / 100,
+              roas_pct: Math.round(roas * 100),
+              clicks: Number(r.clicks || 0),
+              orders_14d: Number(r.orders_14d || 0),
+            }
+          })
+          .filter(r => r.ad_cost >= min_ad_cost && r.roas < roas_threshold)
+          .sort((a, b) => a.roas - b.roas)
+          .slice(0, top_n)
+        return {
+          status: 'success',
+          group_by,
+          roas_threshold_pct: Math.round(roas_threshold * 100),
+          min_ad_cost,
+          results: filtered,
+          total_found: filtered.length,
+        }
+      }
+      case 'discover_ad_keywords': {
+        const date_from = String(args.date_from)
+        const date_to = String(args.date_to)
+        const min_revenue = Number(args.min_revenue ?? 50000)
+        const top_n = Math.min(50, Math.max(1, Number(args.top_n ?? 15)))
+
+        // 1) 광고 키워드 집계
+        const { data: adData, error: adErr } = await supa.rpc('get_ad_breakdown', {
+          p_date_from: date_from,
+          p_date_to: date_to,
+          p_group_by: 'keyword',
+        })
+        if (adErr) return { status: 'error', error: adErr.message }
+        if (!adData || (adData as any[]).length === 0) {
+          return { status: 'empty_result', message: '광고 키워드 데이터가 없습니다.', results: [] }
+        }
+
+        // 2) 등록된 키워드 셋
+        const { data: tracked } = await supa.from('keywords').select('keyword')
+        const trackedSet = new Set((tracked ?? []).map((k: any) => k.keyword as string))
+
+        const results = (adData as any[])
+          .map(r => {
+            const ad_cost = Number(r.ad_cost || 0)
+            const revenue_14d = Number(r.revenue_14d || 0)
+            const roas = ad_cost > 0 ? revenue_14d / ad_cost : 0
+            return {
+              keyword: r.name,
+              ad_cost,
+              revenue_14d,
+              roas: Math.round(roas * 100) / 100,
+              roas_pct: Math.round(roas * 100),
+              clicks: Number(r.clicks || 0),
+              orders_14d: Number(r.orders_14d || 0),
+              is_tracked: trackedSet.has(r.name),
+            }
+          })
+          .filter(r => r.keyword && r.keyword !== '(미지정)' && !r.is_tracked && r.revenue_14d >= min_revenue)
+          .sort((a, b) => b.revenue_14d - a.revenue_14d)
+          .slice(0, top_n)
+
+        return {
+          status: 'success',
+          min_revenue,
+          tracked_count: trackedSet.size,
+          results,
+          total_found: results.length,
         }
       }
       case 'register_keyword': {

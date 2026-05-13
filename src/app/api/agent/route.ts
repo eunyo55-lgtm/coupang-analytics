@@ -78,7 +78,17 @@ function buildSystemPrompt(): string {
 
 ## 상승 키워드 분석 (이미 등록된 키워드 중 트렌드 변화)
 - \`list_keyword_volumes_recent\` 호출 → 변동률 desc 정렬된 결과 제공
-- 상위 5개 정도를 "▲" / "▼" 이모지와 함께 변동률 % 표시`
+- 상위 5개 정도를 "▲" / "▼" 이모지와 함께 변동률 % 표시
+
+## 광고 분석 워크플로 (사용자가 "광고 성과", "ROAS", "광고비", "효율" 등을 질문할 때)
+- 광고 데이터는 사용자가 쿠팡 광고 어드민에서 CSV 다운로드 → /ad 페이지 업로드한 것 (\`coupang_ad_daily\` 테이블, 14일 매출 기준이 기본)
+- 기본 분석: \`get_ad_performance\`로 KPI 요약 → "광고비 X원, 광고매출 Y원, ROAS Z%" 형식으로 보고
+- 효율 분석: \`find_underperforming_campaigns\`로 ROAS 미달 캠페인/키워드 찾기. group_by는 캠페인('campaign')/상품('product')/키워드('keyword')/노출지면('placement') 중 선택
+  - 보고 시 ROAS 낮은 순으로 상위 5개를 표로 제시, "광고비 새는 곳이 X군데 발견됨" 같이 사용자 친화적으로
+- 신규 키워드 발굴: \`discover_ad_keywords\`로 광고에서 매출 발생하지만 미등록 키워드 찾기
+  - 발견된 키워드는 키워드 등록 워크플로(상품 ID 요청)로 자연스럽게 연결
+- \`status: 'empty_result'\`면 사용자에게 "CSV 업로드를 먼저 해주세요"라고 안내
+- ROAS 표기 규칙: 1.0 = 100% (광고비만큼 매출), 5.0 = 500% (권장 최소선), 색깔 가이드: 500% 이상 ✅, 200~500% ⚠️, 200% 미만 🔴`
 }
 
 interface ClientMessage {
