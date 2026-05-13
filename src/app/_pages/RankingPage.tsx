@@ -326,7 +326,11 @@ export default function RankingPage() {
   /* ─── 네이버 키워드 조회 ─── */
   async function naverLookup() {
     const keywords = naverKw.split(/[,\s]+/).filter(Boolean)
-    if (!keywords.length) return
+    if (!keywords.length) {
+      // 검색어를 비우고 조회를 눌렀거나 빈 입력 → 결과 비우기 (사용자 요청)
+      setNaverResults([])
+      return
+    }
     setNaverLoading(true)
     try {
       const res = await fetch('/api/naver-keywords', {
@@ -679,38 +683,70 @@ export default function RankingPage() {
                     <th>모바일</th>
                     <th>합계</th>
                     <th>경쟁도</th>
+                    <th>관리 추가</th>
                   </tr>
                 </thead>
                 <tbody>
                   {naverResults.length > 0 ? (
-                    naverResults.map((r, i) => (
-                      <tr key={i}>
-                        <td><span className="kw-tag">{r.keyword}</span></td>
-                        <td style={{ fontWeight: 700 }}>{fmt(r.pc)}</td>
-                        <td style={{ fontWeight: 700 }}>{fmt(r.mobile)}</td>
-                        <td style={{ fontWeight: 800 }}>{fmt(r.total)}</td>
-                        <td>
-                          <span
-                            className={`badge ${
-                              r.competition === 'high'
-                                ? 'b-re'
+                    naverResults.map((r, i) => {
+                      const alreadyTracked = keywords.some(k => k.keyword === r.keyword)
+                      return (
+                        <tr key={i}>
+                          <td><span className="kw-tag">{r.keyword}</span></td>
+                          <td style={{ fontWeight: 700 }}>{fmt(r.pc)}</td>
+                          <td style={{ fontWeight: 700 }}>{fmt(r.mobile)}</td>
+                          <td style={{ fontWeight: 800 }}>{fmt(r.total)}</td>
+                          <td>
+                            <span
+                              className={`badge ${
+                                r.competition === 'high'
+                                  ? 'b-re'
+                                  : r.competition === 'mid'
+                                  ? 'b-am'
+                                  : 'b-gr'
+                              }`}
+                            >
+                              {r.competition === 'high'
+                                ? '높음'
                                 : r.competition === 'mid'
-                                ? 'b-am'
-                                : 'b-gr'
-                            }`}
-                          >
-                            {r.competition === 'high'
-                              ? '높음'
-                              : r.competition === 'mid'
-                              ? '중간'
-                              : '낮음'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                                ? '중간'
+                                : '낮음'}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // 좌측 키워드 추가 폼에 자동 입력 + 부드러운 스크롤
+                                setNewKeyword(r.keyword)
+                                if (!newCategory) setNewCategory('')
+                                document
+                                  .querySelector('input[placeholder="필수"]')
+                                  ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                              }}
+                              disabled={alreadyTracked}
+                              style={{
+                                padding: '4px 10px',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                borderRadius: 6,
+                                border: 'none',
+                                cursor: alreadyTracked ? 'not-allowed' : 'pointer',
+                                background: alreadyTracked ? '#e2e8f0' : '#2563eb',
+                                color: alreadyTracked ? '#94a3b8' : 'white',
+                                whiteSpace: 'nowrap',
+                              }}
+                              title={alreadyTracked ? '이미 추적 중인 키워드입니다' : '좌측 키워드 추가 폼에 채웁니다'}
+                            >
+                              {alreadyTracked ? '추적 중' : '+ 추가'}
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })
                   ) : (
                     <tr>
-                      <td colSpan={5}>
+                      <td colSpan={6}>
                         <div className="empty-st" style={{ padding: 20 }}>
                           <div className="es-ico">🔎</div>
                           <div className="es-t">키워드를 입력하고 조회하세요</div>
