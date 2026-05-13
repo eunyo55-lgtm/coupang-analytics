@@ -120,12 +120,13 @@ export default function KeywordVolumeChart() {
     for (const r of rows) {
       if (r.target_date < since) continue
       if (!selectedKws.has(r.keyword)) continue
-      if (!byDate[r.target_date]) byDate[r.target_date] = { date: 0 as unknown as number } as Record<string, number>
+      if (!byDate[r.target_date]) byDate[r.target_date] = {}
       byDate[r.target_date][r.keyword] = Number(r.total_volume ?? 0)
     }
+    // 주의: 키워드 데이터를 먼저 펼치고 date를 마지막에 추가 (date 키 덮어쓰기 방지)
     return Object.entries(byDate)
-      .map(([date, kvs]) => ({ date: date.slice(5), ...kvs }))
-      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(([date, kvs]) => ({ ...kvs, date: date.slice(5) }))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
   }, [rows, selectedKws, windowDays])
 
   const visibleKws = useMemo(() => Array.from(selectedKws), [selectedKws])
