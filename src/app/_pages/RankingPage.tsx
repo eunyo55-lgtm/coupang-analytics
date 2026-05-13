@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { NaverKeywordResult } from '@/types'
+import RankingBotTrigger from '@/components/RankingBotTrigger'
 
 /* ────────────────────────────────────────────────────────────
    Types (기존 앱 스키마 기반 - keywords + keyword_rankings)
@@ -516,6 +517,8 @@ export default function RankingPage() {
   /* ──────────────────────────────────────────────────────── */
   return (
     <div>
+      {/* 봇 트리거 패널 (회사 PC의 runner.js와 연동) */}
+      <RankingBotTrigger />
       {/* KPI Row */}
       <div className="krow">
         <div className="kpi kc-bl">
