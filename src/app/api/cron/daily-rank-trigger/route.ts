@@ -1,7 +1,12 @@
-// Vercel Cron이 매일 호출하는 endpoint.
+// (2026-05-14부터 자동 cron 스케줄에서 빠짐 — vercel.json 참고)
 // 두 종류 봇(coupang_rank, naver_volume) 작업을 ranking_jobs 큐에 적재한다.
 // 회사 PC의 runner.js가 켜져 있으면 자동으로 잡아서 실행.
-// PC가 꺼져있으면 pending 상태로 기다리다가 다음 출근 시 자동 처리.
+//
+// 현재는 수동 트리거 전용:
+//   - 평소: /ranking 페이지의 "데이터 수집" 버튼으로 사용자가 직접 클릭
+//   - 필요 시: 이 endpoint를 curl로 직접 호출하면 양쪽 봇 동시 큐잉 가능
+//             curl 'https://coupang-analytics.vercel.app/api/cron/daily-rank-trigger'
+//   - 재차 자동 스케줄로 돌리고 싶으면 vercel.json crons에 다시 추가
 
 import { createClient } from '@supabase/supabase-js'
 
