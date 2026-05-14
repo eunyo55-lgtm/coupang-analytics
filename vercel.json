@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/daily-rank-trigger",
       "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/cron/refresh-mv",
+      "schedule": "8 0 * * *"
     }
   ]
 }
