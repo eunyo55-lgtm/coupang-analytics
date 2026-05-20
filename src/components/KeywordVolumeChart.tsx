@@ -51,22 +51,28 @@ export default function KeywordVolumeChart() {
           return
         }
         const since = ymdKST(-60)
-        // PostgREST 기본 limit=1000인데 60일 × 키워드 수 = 수천 row 가능.
-        // limit 명시 안 하면 오래된 1000건만 와서 최신 데이터가 잘림 → limit 크게.
-        const { data, error } = await supabase
-          .from('keyword_search_volumes')
-          .select('keyword, target_date, total_volume')
-          .in('keyword', tracked)
-          .gte('target_date', since)
-          .order('target_date', { ascending: true })
-          .limit(20000)
-        if (cancelled) return
-        if (error) {
-          console.warn('[KeywordVolumeChart] load error:', error.message)
-          setRows([])
-        } else {
-          setRows((data as VolRow[]) || [])
+        // PostgREST는 max-rows(보통 1000)를 강제로 적용해서 limit 큰 값을 줘도 무시.
+        // 37 keywords × 60일 = 2200+ rows → range() 페이지네이션으로 전부 가져옴.
+        const PAGE = 1000
+        const allRows: VolRow[] = []
+        for (let offset = 0; offset < 50000; offset += PAGE) {
+          const { data, error } = await supabase
+            .from('keyword_search_volumes')
+            .select('keyword, target_date, total_volume')
+            .in('keyword', tracked)
+            .gte('target_date', since)
+            .order('target_date', { ascending: true })
+            .range(offset, offset + PAGE - 1)
+          if (cancelled) return
+          if (error) {
+            console.warn('[KeywordVolumeChart] load error:', error.message)
+            break
+          }
+          if (!data || data.length === 0) break
+          allRows.push(...(data as VolRow[]))
+          if (data.length < PAGE) break
         }
+        setRows(allRows)
       } finally {
         if (!cancelled) setLoading(false)
       }
