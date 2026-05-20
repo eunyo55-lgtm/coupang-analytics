@@ -98,6 +98,8 @@ export default function RankingPage() {
   const [rankings, setRankings] = useState<Ranking[]>([])
   const [searchVolumes, setSearchVolumes] = useState<SearchVolume[]>([])
   const [dailySales, setDailySales] = useState<DailySale[]>([])
+  // barcode → 상품명 매핑 (같은 상품의 모든 옵션 합산용)
+  const [barcodeToName, setBarcodeToName] = useState<Map<string, string>>(new Map())
   const [loading, setLoading] = useState(false)
 
   /* 키워드 추가 폼 */
@@ -196,19 +198,55 @@ export default function RankingPage() {
       console.log('[ranking] search_volumes loaded:', svAll.length)
       setSearchVolumes(svAll)
 
-      /* 5. 주간 판매량 비교용 daily_sales (최근 14일, 등록된 바코드만) */
+      /* 5. 주간 판매량 비교용 daily_sales — 같은 상품의 모든 옵션 barcode 합산.
+         keywords.barcode는 단일 옵션이라 그것만 합산하면 실제 매출의 1/N 만 보임.
+         같은 상품명을 가진 모든 products의 barcode를 찾아서 daily_sales 합산. */
+      const initialProductNames = Array.from(new Set(
+        [...prodMap.values()].map(p => p.name).filter(Boolean)
+      )) as string[]
+      const allBarcodeMap = new Map<string, string>() // barcode -> product name
+      if (initialProductNames.length) {
+        // 같은 상품명을 가진 모든 옵션 barcode (sibling barcodes) 수집
+        // 상품명이 많으면 chunk 분할
+        const chunks: string[][] = []
+        for (let i = 0; i < initialProductNames.length; i += 50) {
+          chunks.push(initialProductNames.slice(i, i + 50))
+        }
+        for (const chunk of chunks) {
+          const { data } = await supabase
+            .from('products')
+            .select('barcode, name')
+            .in('name', chunk)
+            .limit(10000)
+          for (const p of (data || []) as any[]) {
+            if (p.barcode && p.name) allBarcodeMap.set(p.barcode, p.name)
+          }
+        }
+      }
+      console.log('[ranking] sibling barcodes resolved:', allBarcodeMap.size, 'from', initialProductNames.length, 'products')
+      setBarcodeToName(allBarcodeMap)
+
+      const allBarcodes = Array.from(allBarcodeMap.keys())
       const twoWeeksAgo = new Date()
       twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14)
-      if (barcodes.length) {
-        const dsAll = await fetchAllPages<DailySale>((from, to) =>
-          supabase!
-            .from('daily_sales')
-            .select('date, barcode, quantity')
-            .in('barcode', barcodes)
-            .gte('date', getKSTDateString(twoWeeksAgo))
-            .range(from, to),
-        )
-        console.log('[ranking] daily_sales loaded:', dsAll.length)
+      if (allBarcodes.length) {
+        // PostgREST URL 길이 한계 회피 — barcode 목록을 chunk로 나눠 병합
+        const BC_CHUNK = 200
+        const sinceStr = getKSTDateString(twoWeeksAgo)
+        const dsAll: DailySale[] = []
+        for (let i = 0; i < allBarcodes.length; i += BC_CHUNK) {
+          const chunk = allBarcodes.slice(i, i + BC_CHUNK)
+          const part = await fetchAllPages<DailySale>((from, to) =>
+            supabase!
+              .from('daily_sales')
+              .select('date, barcode, quantity')
+              .in('barcode', chunk)
+              .gte('date', sinceStr)
+              .range(from, to),
+          )
+          dsAll.push(...part)
+        }
+        console.log('[ranking] daily_sales loaded:', dsAll.length, '(across', allBarcodes.length, 'barcodes)')
         setDailySales(dsAll)
       }
     } catch (e) {
@@ -377,8 +415,8 @@ export default function RankingPage() {
     return byKw
   }, [searchVolumes])
 
-  /* 주간 판매량: 최근 7일 vs 이전 7일 (바코드 기준 합산) */
-  const salesByBarcode = useMemo(() => {
+  /* 주간 판매량: 최근 7일 vs 이전 7일 — 상품명 기준 (모든 옵션 합산) */
+  const salesByProductName = useMemo(() => {
     const result = new Map<string, { thisWeek: number; lastWeek: number }>()
     const today = new Date()
     const thisWeekStart = new Date(today)
@@ -394,13 +432,15 @@ export default function RankingPage() {
     const lwe = getKSTDateString(lastWeekEnd)
 
     dailySales.forEach(d => {
-      const cur = result.get(d.barcode) || { thisWeek: 0, lastWeek: 0 }
+      const name = barcodeToName.get(d.barcode)
+      if (!name) return
+      const cur = result.get(name) || { thisWeek: 0, lastWeek: 0 }
       if (d.date >= tws && d.date <= twe) cur.thisWeek += d.quantity || 0
       else if (d.date >= lws && d.date <= lwe) cur.lastWeek += d.quantity || 0
-      result.set(d.barcode, cur)
+      result.set(name, cur)
     })
     return result
-  }, [dailySales])
+  }, [dailySales, barcodeToName])
 
   /* 키워드별 랭킹 맵 */
   const rankingsByKw = useMemo(() => {
@@ -455,8 +495,8 @@ export default function RankingPage() {
         if (sortKey === 'volPrev') { av = aPrev; bv = bPrev }
         if (sortKey === 'volTrend') { av = aLatest - aPrev; bv = bLatest - bPrev }
       } else if (sortKey === 'salesThis' || sortKey === 'salesLast' || sortKey === 'salesWow') {
-        const aS = salesByBarcode.get(a.barcode || '') || { thisWeek: 0, lastWeek: 0 }
-        const bS = salesByBarcode.get(b.barcode || '') || { thisWeek: 0, lastWeek: 0 }
+        const aS = salesByProductName.get(a.products?.name || '') || { thisWeek: 0, lastWeek: 0 }
+        const bS = salesByProductName.get(b.products?.name || '') || { thisWeek: 0, lastWeek: 0 }
         if (sortKey === 'salesThis') { av = aS.thisWeek; bv = bS.thisWeek }
         if (sortKey === 'salesLast') { av = aS.lastWeek; bv = bS.lastWeek }
         if (sortKey === 'salesWow') { av = aS.thisWeek - aS.lastWeek; bv = bS.thisWeek - bS.lastWeek }
@@ -466,7 +506,7 @@ export default function RankingPage() {
       return 0
     })
     return arr
-  }, [keywords, sortKey, sortDir, svMap, salesByBarcode, rankingsByKw, displayDates])
+  }, [keywords, sortKey, sortDir, svMap, salesByProductName, rankingsByKw, displayDates])
 
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
@@ -937,7 +977,7 @@ export default function RankingPage() {
                     const volLatest = svArr[0]?.total_volume || 0
                     const volPrev = svArr[1]?.total_volume || 0
                     const volTrend = volLatest - volPrev
-                    const salesInfo = salesByBarcode.get(kw.barcode || '') || {
+                    const salesInfo = salesByProductName.get(kw.products?.name || '') || {
                       thisWeek: 0,
                       lastWeek: 0,
                     }
