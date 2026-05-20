@@ -1102,44 +1102,44 @@ export default function RankingPage() {
                           return (
                             <td key={date} className="rk-center" style={{ padding: '4px 2px' }}>
                               {pos > 0 ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-                                  <div>
-                                    <span
-                                      style={{
-                                        fontWeight: 800,
-                                        color:
-                                          pos === 1
-                                            ? '#dc2626'  // 1위 빨강
-                                            : pos <= 3
-                                            ? '#ea580c'  // 2~3위 주황
-                                            : pos <= 10
-                                            ? '#2563eb'  // 4~10위 파랑
-                                            : 'var(--t1, #1e293b)',  // 그 외 진한 회색
-                                      }}
-                                    >
-                                      {pos}
-                                    </span>
-                                    {prev > 0 && prev !== pos && (
-                                      <span
-                                        style={{
-                                          marginLeft: 2,
-                                          fontSize: 9,
-                                          fontWeight: 800,
-                                          color:
-                                            prev > pos ? 'var(--red)' : 'var(--blue, #386ED9)',
-                                        }}
-                                      >
-                                        {prev > pos ? '▲' : '▼'}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {(rating > 0 || reviews > 0) && (
-                                    <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.1, display: 'flex', gap: 3 }}>
-                                      {rating > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>★{rating}</span>}
-                                      {reviews > 0 && <span>({reviews.toLocaleString()})</span>}
+                                (() => {
+                                  // 순위 등급 스타일: 위로 갈수록 강조, 아래로 갈수록 흐림
+                                  const tier =
+                                    pos === 1     ? { color: '#dc2626', weight: 900, size: 16, opacity: 1 }      // 🏆 1위
+                                    : pos <= 3    ? { color: '#ea580c', weight: 800, size: 15, opacity: 1 }      // 🥈 2-3위
+                                    : pos <= 10   ? { color: '#2563eb', weight: 800, size: 14, opacity: 1 }      // 🥉 4-10위
+                                    : pos <= 20   ? { color: '#1e40af', weight: 700, size: 13, opacity: 0.95 }   // 11-20위
+                                    : pos <= 40   ? { color: '#475569', weight: 600, size: 12, opacity: 0.85 }   // 21-40위 (1페이지)
+                                    : pos <= 80   ? { color: '#94a3b8', weight: 500, size: 11, opacity: 0.6 }    // 41-80위
+                                    :               { color: '#cbd5e1', weight: 400, size: 10, opacity: 0.4 }    // 81+ / 999
+                                  return (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, opacity: tier.opacity }}>
+                                      <div>
+                                        <span style={{ fontSize: tier.size, fontWeight: tier.weight, color: tier.color }}>
+                                          {pos}
+                                        </span>
+                                        {prev > 0 && prev !== pos && (
+                                          <span
+                                            style={{
+                                              marginLeft: 2,
+                                              fontSize: 9,
+                                              fontWeight: 800,
+                                              color: prev > pos ? 'var(--red)' : 'var(--blue, #386ED9)',
+                                            }}
+                                          >
+                                            {prev > pos ? '▲' : '▼'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {(rating > 0 || reviews > 0) && (
+                                        <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.1, display: 'flex', gap: 3 }}>
+                                          {rating > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>★{rating}</span>}
+                                          {reviews > 0 && <span>({reviews.toLocaleString()})</span>}
+                                        </div>
+                                      )}
                                     </div>
-                                  )}
-                                </div>
+                                  )
+                                })()
                               ) : (
                                 <span style={{ opacity: 0.2 }}>-</span>
                               )}
