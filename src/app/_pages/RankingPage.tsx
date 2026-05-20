@@ -460,19 +460,6 @@ export default function RankingPage() {
         if (sortKey === 'salesThis') { av = aS.thisWeek; bv = bS.thisWeek }
         if (sortKey === 'salesLast') { av = aS.lastWeek; bv = bS.lastWeek }
         if (sortKey === 'salesWow') { av = aS.thisWeek - aS.lastWeek; bv = bS.thisWeek - bS.lastWeek }
-      } else if (sortKey === 'rating' || sortKey === 'reviews') {
-        const latestField = (kwId: string, field: 'rating' | 'review_count') => {
-          const arr = rankingsByKw.get(kwId) || []
-          const sorted = [...arr].sort((x, y) => y.date.localeCompare(x.date))
-          return sorted.find(r => (r[field] || 0) > 0)?.[field] || 0
-        }
-        if (sortKey === 'rating') {
-          av = latestField(a.id, 'rating')
-          bv = latestField(b.id, 'rating')
-        } else {
-          av = latestField(a.id, 'review_count')
-          bv = latestField(b.id, 'review_count')
-        }
       }
       if (av < bv) return sortDir === 'asc' ? -1 : 1
       if (av > bv) return sortDir === 'asc' ? 1 : -1
@@ -920,20 +907,10 @@ export default function RankingPage() {
                       WoW <SortArrow k="salesWow" />
                     </button>
                   </th>
-                  <th style={{ width: 70 }} title="가장 최근 추적일의 평점 (5점 만점)">
-                    <button className="th-sort" onClick={() => toggleSort('rating')}>
-                      ⭐ 별점 <SortArrow k="rating" />
-                    </button>
-                  </th>
-                  <th style={{ width: 80 }} title="가장 최근 추적일의 리뷰 수">
-                    <button className="th-sort" onClick={() => toggleSort('reviews')}>
-                      💬 리뷰 <SortArrow k="reviews" />
-                    </button>
-                  </th>
                   {displayDates.map(d => {
                     const [, m, day] = d.split('-')
                     return (
-                      <th key={d} style={{ width: 60 }}>
+                      <th key={d} style={{ width: 70 }} title="순위 / ★별점 / 💬리뷰">
                         <div style={{ fontSize: 11 }}>{`${parseInt(m)}/${parseInt(day)}`}</div>
                       </th>
                     )
@@ -944,7 +921,7 @@ export default function RankingPage() {
               <tbody>
                 {sortedKeywords.length === 0 ? (
                   <tr>
-                    <td colSpan={11 + displayDates.length + 1}>
+                    <td colSpan={9 + displayDates.length + 1}>
                       <div className="empty-st" style={{ padding: 40 }}>
                         <div className="es-ico">📊</div>
                         <div className="es-t">
@@ -1071,62 +1048,54 @@ export default function RankingPage() {
                             ? '-'
                             : ''}
                         </td>
-                        {/* 별점 + 리뷰 (가장 최근 0 초과 row 사용) */}
-                        {(() => {
-                          const sortedDesc = [...kwRanks].sort((a, b) => b.date.localeCompare(a.date))
-                          const ratedRow = sortedDesc.find(r => (r.rating || 0) > 0)
-                          const reviewedRow = sortedDesc.find(r => (r.review_count || 0) > 0)
-                          const rating = ratedRow?.rating ?? null
-                          const reviews = reviewedRow?.review_count ?? null
-                          return (
-                            <>
-                              <td className="rk-center" style={{ fontWeight: 700, color: rating ? '#f59e0b' : 'var(--t3)' }} title={ratedRow ? `${ratedRow.date} 측정` : '데이터 없음'}>
-                                {rating != null ? `★${rating}` : '-'}
-                              </td>
-                              <td className="rk-center" style={{ fontWeight: 700, color: reviews ? 'var(--t1, #1e293b)' : 'var(--t3)' }} title={reviewedRow ? `${reviewedRow.date} 측정` : '데이터 없음'}>
-                                {reviews != null ? reviews.toLocaleString() : '-'}
-                              </td>
-                            </>
-                          )
-                        })()}
-                        {/* 날짜별 순위 */}
+                        {/* 날짜별 순위 + 별점/리뷰 (한 셀에 묶음) */}
                         {displayDates.map((date, idx) => {
                           const r = kwRanks.find(x => x.date === date)
                           const pos = r?.rank_position || 0
+                          const rating = r?.rating || 0
+                          const reviews = r?.review_count || 0
                           let prev = 0
                           if (idx > 0) {
                             const prevR = kwRanks.find(x => x.date === displayDates[idx - 1])
                             prev = prevR?.rank_position || 0
                           }
                           return (
-                            <td key={date} className="rk-center">
+                            <td key={date} className="rk-center" style={{ padding: '4px 2px' }}>
                               {pos > 0 ? (
-                                <div>
-                                  <span
-                                    className={`rank-medal ${
-                                      pos === 1
-                                        ? 'rm1'
-                                        : pos <= 3
-                                        ? 'rm2'
-                                        : pos <= 10
-                                        ? 'rm3'
-                                        : 'rmn'
-                                    }`}
-                                  >
-                                    {pos}
-                                  </span>
-                                  {prev > 0 && prev !== pos && (
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                                  <div>
                                     <span
-                                      style={{
-                                        marginLeft: 2,
-                                        fontSize: 9,
-                                        fontWeight: 800,
-                                        color:
-                                          prev > pos ? 'var(--red)' : 'var(--blue, #386ED9)',
-                                      }}
+                                      className={`rank-medal ${
+                                        pos === 1
+                                          ? 'rm1'
+                                          : pos <= 3
+                                          ? 'rm2'
+                                          : pos <= 10
+                                          ? 'rm3'
+                                          : 'rmn'
+                                      }`}
                                     >
-                                      {prev > pos ? '▲' : '▼'}
+                                      {pos}
                                     </span>
+                                    {prev > 0 && prev !== pos && (
+                                      <span
+                                        style={{
+                                          marginLeft: 2,
+                                          fontSize: 9,
+                                          fontWeight: 800,
+                                          color:
+                                            prev > pos ? 'var(--red)' : 'var(--blue, #386ED9)',
+                                        }}
+                                      >
+                                        {prev > pos ? '▲' : '▼'}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {(rating > 0 || reviews > 0) && (
+                                    <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.1, display: 'flex', gap: 4 }}>
+                                      {rating > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>★{rating}</span>}
+                                      {reviews > 0 && <span>{reviews.toLocaleString()}</span>}
+                                    </div>
                                   )}
                                 </div>
                               ) : (
