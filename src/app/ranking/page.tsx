@@ -447,6 +447,20 @@ export default function RankingPage() {
         if (sortKey === 'salesThis') { av = aS.thisWeek; bv = bS.thisWeek }
         if (sortKey === 'salesLast') { av = aS.lastWeek; bv = bS.lastWeek }
         if (sortKey === 'salesWow') { av = aS.thisWeek - aS.lastWeek; bv = bS.thisWeek - bS.lastWeek }
+      } else if (sortKey === 'rating' || sortKey === 'reviews') {
+        // 가장 최근의 rating>0 / review_count>0 row를 사용
+        const latestField = (kwId: string, field: 'rating' | 'review_count') => {
+          const arr = rankingsByKw.get(kwId) || []
+          const sorted = [...arr].sort((x, y) => y.date.localeCompare(x.date))
+          return sorted.find(r => (r[field] || 0) > 0)?.[field] || 0
+        }
+        if (sortKey === 'rating') {
+          av = latestField(a.id, 'rating')
+          bv = latestField(b.id, 'rating')
+        } else {
+          av = latestField(a.id, 'review_count')
+          bv = latestField(b.id, 'review_count')
+        }
       }
       if (av < bv) return sortDir === 'asc' ? -1 : 1
       if (av > bv) return sortDir === 'asc' ? 1 : -1
@@ -815,6 +829,16 @@ export default function RankingPage() {
                       WoW <SortArrow k="salesWow" />
                     </button>
                   </th>
+                  <th style={{ width: 70 }} title="가장 최근 추적일의 평점 (5점 만점)">
+                    <button className="th-sort" onClick={() => toggleSort('rating')}>
+                      ⭐ 별점 <SortArrow k="rating" />
+                    </button>
+                  </th>
+                  <th style={{ width: 80 }} title="가장 최근 추적일의 리뷰 수">
+                    <button className="th-sort" onClick={() => toggleSort('reviews')}>
+                      💬 리뷰 <SortArrow k="reviews" />
+                    </button>
+                  </th>
                   {displayDates.map(d => {
                     const [, m, day] = d.split('-')
                     return (
@@ -829,7 +853,7 @@ export default function RankingPage() {
               <tbody>
                 {sortedKeywords.length === 0 ? (
                   <tr>
-                    <td colSpan={9 + displayDates.length + 1}>
+                    <td colSpan={11 + displayDates.length + 1}>
                       <div className="empty-st" style={{ padding: 40 }}>
                         <div className="es-ico">📊</div>
                         <div className="es-t">
@@ -956,6 +980,27 @@ export default function RankingPage() {
                             ? '-'
                             : ''}
                         </td>
+                        {/* 별점 (가장 최근 rating > 0 인 row) */}
+                        {(() => {
+                          const ratedRow = [...kwRanks]
+                            .sort((a, b) => b.date.localeCompare(a.date))
+                            .find(r => (r.rating || 0) > 0)
+                          const reviewedRow = [...kwRanks]
+                            .sort((a, b) => b.date.localeCompare(a.date))
+                            .find(r => (r.review_count || 0) > 0)
+                          const rating = ratedRow?.rating ?? null
+                          const reviews = reviewedRow?.review_count ?? null
+                          return (
+                            <>
+                              <td className="rk-center" style={{ fontWeight: 700, color: rating ? '#f59e0b' : 'var(--t3)' }} title={ratedRow ? `${ratedRow.date} 측정` : '데이터 없음'}>
+                                {rating != null ? `★${rating}` : '-'}
+                              </td>
+                              <td className="rk-center" style={{ fontWeight: 700, color: reviews ? 'var(--t1, #1e293b)' : 'var(--t3)' }} title={reviewedRow ? `${reviewedRow.date} 측정` : '데이터 없음'}>
+                                {reviews != null ? reviews.toLocaleString() : '-'}
+                              </td>
+                            </>
+                          )
+                        })()}
                         {/* 날짜별 순위 */}
                         {displayDates.map((date, idx) => {
                           const r = kwRanks.find(x => x.date === date)
