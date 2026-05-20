@@ -9,7 +9,21 @@ type VolRow = {
   total_volume: number | null
 }
 
-const COLORS = ['#2563eb','#10b981','#f97316','#ef4444','#8b5cf6','#ec4899','#14b8a6','#eab308','#06b6d4','#84cc16']
+// 12색 팔레트 (구분이 명확한 색만 골라 collision 확률 ↓)
+const COLORS = [
+  '#2563eb', // blue
+  '#10b981', // green
+  '#f97316', // orange
+  '#ef4444', // red
+  '#8b5cf6', // purple
+  '#ec4899', // pink
+  '#14b8a6', // teal
+  '#eab308', // yellow
+  '#06b6d4', // cyan
+  '#84cc16', // lime
+  '#a16207', // brown
+  '#475569', // slate
+]
 
 const ymdKST = (offsetDays = 0) => {
   const d = new Date()
@@ -106,6 +120,16 @@ export default function KeywordVolumeChart() {
       setAutoSelected(true)
     }
   }, [keywordRanking, autoSelected])
+
+  // ── 키워드별 고정 색깔 매핑 ──
+  // 추적 키워드 리스트를 알파벳 정렬해 인덱스를 색에 매핑.
+  // 키워드를 추가/삭제하지 않는 한 같은 키워드는 항상 같은 색.
+  const colorMap = useMemo(() => {
+    const m = new Map<string, string>()
+    const sorted = [...trackedKeywords].sort((a, b) => a.localeCompare(b, 'ko'))
+    sorted.forEach((kw, i) => m.set(kw, COLORS[i % COLORS.length]))
+    return m
+  }, [trackedKeywords])
 
   // 차트 데이터 — date 키 덮어쓰기 방지 위해 spread 먼저, date 마지막
   const chartData = useMemo(() => {
@@ -212,17 +236,23 @@ export default function KeywordVolumeChart() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} />
                 <YAxis tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(v) => v >= 10000 ? `${Math.round(v / 1000)}k` : String(v)} />
-                <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6, border: '1px solid #e2e8f0' }} formatter={(value: number | string) => Number(value).toLocaleString()} />
+                <Tooltip
+                  contentStyle={{ fontSize: 11, borderRadius: 6, border: '1px solid #e2e8f0' }}
+                  formatter={(value: number | string) => Number(value).toLocaleString()}
+                  itemSorter={(item) => -(Number(item.value) || 0)}
+                />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                {visibleKws.map((kw, i) => (
+                {/* 라인 = 알파벳 정렬, 색 = colorMap에서 고정 */}
+                {[...visibleKws].sort((a, b) => a.localeCompare(b, 'ko')).map((kw) => (
                   <Line
                     key={kw}
                     type="monotone"
                     dataKey={kw}
-                    stroke={COLORS[i % COLORS.length]}
+                    stroke={colorMap.get(kw) ?? '#94a3b8'}
                     strokeWidth={2}
                     dot={false}
                     isAnimationActive={false}
+                    connectNulls={false}
                   />
                 ))}
               </LineChart>
@@ -230,23 +260,29 @@ export default function KeywordVolumeChart() {
           )}
         </div>
 
-        {/* 키워드 토글 목록 (체크박스 식) */}
+        {/* 키워드 토글 목록 — 라인과 동일한 색 점 표시 */}
         <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {keywordRanking.map(({ keyword, latest }) => {
             const on = selectedKws.has(keyword)
+            const color = colorMap.get(keyword) ?? '#94a3b8'
             return (
               <button
                 key={keyword}
                 onClick={() => toggleKw(keyword)}
                 style={{
                   padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 500, cursor: 'pointer',
-                  border: on ? '1px solid #2563eb' : '1px solid #e2e8f0',
-                  background: on ? '#dbeafe' : 'white',
-                  color: on ? '#1e40af' : '#475569',
+                  border: on ? `1px solid ${color}` : '1px solid #e2e8f0',
+                  background: on ? `${color}22` : 'white',  // 22 = ~13% alpha
+                  color: on ? color : '#475569',
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
                 }}
                 title={`최신: ${latest.toLocaleString()}`}
               >
-                {on ? '✓ ' : ''}{keyword}
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  background: on ? color : '#cbd5e1',
+                }} />
+                {keyword}
               </button>
             )
           })}
