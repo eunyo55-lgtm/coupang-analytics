@@ -1065,15 +1065,17 @@ export default function RankingPage() {
                                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
                                   <div>
                                     <span
-                                      className={`rank-medal ${
-                                        pos === 1
-                                          ? 'rm1'
-                                          : pos <= 3
-                                          ? 'rm2'
-                                          : pos <= 10
-                                          ? 'rm3'
-                                          : 'rmn'
-                                      }`}
+                                      style={{
+                                        fontWeight: 800,
+                                        color:
+                                          pos === 1
+                                            ? '#dc2626'  // 1위 빨강
+                                            : pos <= 3
+                                            ? '#ea580c'  // 2~3위 주황
+                                            : pos <= 10
+                                            ? '#2563eb'  // 4~10위 파랑
+                                            : 'var(--t1, #1e293b)',  // 그 외 진한 회색
+                                      }}
                                     >
                                       {pos}
                                     </span>
@@ -1092,9 +1094,9 @@ export default function RankingPage() {
                                     )}
                                   </div>
                                   {(rating > 0 || reviews > 0) && (
-                                    <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.1, display: 'flex', gap: 4 }}>
+                                    <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.1, display: 'flex', gap: 3 }}>
                                       {rating > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>★{rating}</span>}
-                                      {reviews > 0 && <span>{reviews.toLocaleString()}</span>}
+                                      {reviews > 0 && <span>({reviews.toLocaleString()})</span>}
                                     </div>
                                   )}
                                 </div>
