@@ -51,12 +51,15 @@ export default function KeywordVolumeChart() {
           return
         }
         const since = ymdKST(-60)
+        // PostgREST 기본 limit=1000인데 60일 × 키워드 수 = 수천 row 가능.
+        // limit 명시 안 하면 오래된 1000건만 와서 최신 데이터가 잘림 → limit 크게.
         const { data, error } = await supabase
           .from('keyword_search_volumes')
           .select('keyword, target_date, total_volume')
           .in('keyword', tracked)
           .gte('target_date', since)
           .order('target_date', { ascending: true })
+          .limit(20000)
         if (cancelled) return
         if (error) {
           console.warn('[KeywordVolumeChart] load error:', error.message)

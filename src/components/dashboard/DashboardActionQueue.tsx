@@ -66,9 +66,9 @@ async function detectSignals(): Promise<ActionItem[]> {
     supabase.rpc('get_ad_breakdown', { p_date_from: sevenDaysAgo, p_date_to: today, p_group_by: 'campaign' }),
     supabase.rpc('get_ad_breakdown', { p_date_from: sevenDaysAgo, p_date_to: today, p_group_by: 'keyword' }),
     supabase.from('keywords').select('keyword'),
-    supabase.from('keyword_search_volumes').select('keyword, target_date, total_volume').gte('target_date', fourteenDaysAgo),
+    supabase.from('keyword_search_volumes').select('keyword, target_date, total_volume').gte('target_date', fourteenDaysAgo).limit(10000),
     // 최근 3일만 가져와 어제 vs 그제 비교에 충분
-    supabase.from('keyword_rankings').select('keyword_id, date, rank_position').gte('date', threeDaysAgo).order('date', { ascending: false }),
+    supabase.from('keyword_rankings').select('keyword_id, date, rank_position').gte('date', threeDaysAgo).order('date', { ascending: false }).limit(10000),
   ])
 
   // ── 1) 재고 ──

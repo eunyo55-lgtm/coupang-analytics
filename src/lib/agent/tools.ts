@@ -333,10 +333,12 @@ export async function executeTool(name: string, args: Args): Promise<unknown> {
       case 'list_keyword_volumes_recent': {
         // 최근 14일 검색량 → 7일 평균 vs 이전 7일 평균 + 변동률
         const since = new Date(Date.now() + 9 * 3600_000 - 14 * 86400_000).toISOString().slice(0, 10)
+        // PostgREST 기본 limit 1000 → 키워드 많으면 14일치 row가 1000 초과 가능
         const { data, error } = await supa
           .from('keyword_search_volumes')
           .select('keyword, target_date, total_volume')
           .gte('target_date', since)
+          .limit(10000)
         if (error) return { error: error.message }
         const today = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10)
         const cutoff = new Date(Date.now() + 9 * 3600_000 - 7 * 86400_000).toISOString().slice(0, 10)
