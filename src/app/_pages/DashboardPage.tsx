@@ -231,6 +231,10 @@ export default function DashboardPage() {
   const [stockModal,setStockModal]=useState<{name:string;history:{week:string;qty:number}[]}|null>(null)
   type TopPreset = 'yesterday' | 'week' | 'month' | 'ytd'
   const [topPreset, setTopPreset] = useState<TopPreset>('week')
+  // MV 자동 갱신: stale 감지 시 백그라운드 호출 + 완료 후 KPI 재조회
+  const [autoRefreshing, setAutoRefreshing] = useState(false)
+  const [autoRefreshed, setAutoRefreshed] = useState(false)
+  const [kpiRefetchTick, setKpiRefetchTick] = useState(0)
 
   // 프리셋에서 (from, to) 계산 — latestDate 기준
   function rangeFromPreset(p: TopPreset, anchor: string): { from: string; to: string } {
@@ -330,7 +334,8 @@ export default function DashboardPage() {
       if (c25Kpi) setKpiCum25(c25Kpi)
     })
     return () => { cancelled = true }
-  },[latestDate,weekRange.from,weekRange.to,cumRange.from,cumRange.to])
+    // kpiRefetchTick: MV 자동 갱신 후 KPI 재조회 트리거
+  },[latestDate,weekRange.from,weekRange.to,cumRange.from,cumRange.to,kpiRefetchTick])
 
   useEffect(()=>{
     // latestDate 로드되기 전에는 호출 스킵 (race condition 방지)
@@ -463,6 +468,31 @@ export default function DashboardPage() {
                      || (kpiWeek === null && weekQtyFallback !== null)
                      || (kpiCum === null && cumQtyFallback !== null)
 
+  // ── 자동 MV 갱신: stale 감지하면 백그라운드에서 refresh API 호출, 완료 후 KPI 재조회 ──
+  useEffect(() => {
+    if (!usingFallback) return
+    if (autoRefreshing || autoRefreshed) return
+    setAutoRefreshing(true)
+    fetch('/api/cron/refresh-mv', { cache: 'no-store' })
+      .then(r => r.json().catch(() => ({})))
+      .then(j => {
+        console.log('[CA] auto MV refresh result:', j)
+        // 캐시 무효화: refresh 후 stale 캐시가 다시 표시되지 않게
+        try {
+          Object.keys(localStorage).forEach(k => {
+            if (k.startsWith('ca_rpc_get_kpi')) localStorage.removeItem(k)
+          })
+        } catch {}
+        setAutoRefreshed(true)
+        setKpiRefetchTick(t => t + 1)
+      })
+      .catch(e => {
+        console.warn('[CA] auto MV refresh failed:', e)
+        setAutoRefreshed(true)  // 실패해도 더는 시도 안 함 (무한 루프 방지)
+      })
+      .finally(() => setAutoRefreshing(false))
+  }, [usingFallback, autoRefreshing, autoRefreshed])
+
   const kpiCards:{label:string;sub:string;qty:number|null;rev:number|null;yoy:number|null;color:string;isStock:boolean;revMissing?:boolean}[]=[
     {label:'판매량',sub:`전일 (${latestDate})`,qty:yestQtyEff,rev:yestRevEff,yoy:yestYoyEff,color:'var(--blue)',isStock:false,revMissing:kpiYest===null},
     {label:'주간 판매량',sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`,qty:weekQtyEff,rev:weekRevEff,yoy:kpiWeek&&kpiWeek25?pct(kpiWeek.qty,kpiWeek25.qty):null,color:'var(--purple)',isStock:false,revMissing:kpiWeek===null},
@@ -472,24 +502,30 @@ export default function DashboardPage() {
 
   return (
     <div>
-      {usingFallback && (
+      {(usingFallback || autoRefreshing) && (
         <div style={{
-          background:'#fef3c7', border:'1px solid #fcd34d', borderRadius:8,
-          padding:'8px 12px', marginBottom:10, fontSize:11, color:'#78350f',
+          background: autoRefreshing ? '#dbeafe' : '#fef3c7',
+          border: `1px solid ${autoRefreshing ? '#93c5fd' : '#fcd34d'}`,
+          borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:11,
+          color: autoRefreshing ? '#1e40af' : '#78350f',
           display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap'
         }}>
           <span>
-            ⚠️ 최신 일자의 <b>매출액 집계가 지연</b>되고 있습니다.
-            판매수량은 정확하지만 매출(원)은 "—"로 표시됩니다. Supabase에서 한 번 갱신하면 즉시 정상화돼요.
+            {autoRefreshing ? (
+              <>🔄 <b>최신 매출액을 자동 갱신 중</b>입니다... (5~15초). 완료되면 매출(원)이 자동 표시됩니다.</>
+            ) : (
+              <>⚠️ 최신 일자의 <b>매출액 자동 갱신에 실패</b>했습니다. 판매수량은 정확하지만 매출(원)은 "—"로 표시됩니다.</>
+            )}
           </span>
-          <button
-            onClick={() => {
-              const sql = 'REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily_kpi;'
-              navigator.clipboard?.writeText(sql).catch(()=>{})
-              alert('아래 SQL이 클립보드에 복사되었습니다:\n\n' + sql + '\n\nSupabase Dashboard → SQL Editor에 붙여넣고 실행하세요.')
-            }}
-            style={{padding:'4px 10px', background:'#f59e0b', color:'white', border:'none', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap'}}
-          >📋 갱신 SQL 복사</button>
+          {!autoRefreshing && (
+            <button
+              onClick={() => {
+                setAutoRefreshed(false)  // 재시도 허용
+                setKpiRefetchTick(t => t + 1)
+              }}
+              style={{padding:'4px 10px', background:'#f59e0b', color:'white', border:'none', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap'}}
+            >🔄 다시 시도</button>
+          )}
         </div>
       )}
       <div className="ds-row" style={{marginBottom:16}}>
