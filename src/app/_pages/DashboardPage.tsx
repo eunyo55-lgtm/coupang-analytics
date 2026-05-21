@@ -229,15 +229,43 @@ export default function DashboardPage() {
   const [loadingTop,setLoadingTop]=useState(false)
   const [salesModal,setSalesModal]=useState<string|null>(null)
   const [stockModal,setStockModal]=useState<{name:string;history:{week:string;qty:number}[]}|null>(null)
+  type TopPreset = 'yesterday' | 'week' | 'month' | 'ytd'
+  const [topPreset, setTopPreset] = useState<TopPreset>('week')
 
-  // latestDate 로드 후 차트/TOP 기간 초기화 (30일 전 ~ latestDate)
+  // 프리셋에서 (from, to) 계산 — latestDate 기준
+  function rangeFromPreset(p: TopPreset, anchor: string): { from: string; to: string } {
+    if (!anchor) return { from: '', to: '' }
+    const a = new Date(anchor + 'T00:00:00')
+    if (p === 'yesterday') return { from: anchor, to: anchor }
+    if (p === 'week') {
+      const d = new Date(a); d.setDate(d.getDate() - 6)
+      return { from: toYMD(d), to: anchor }
+    }
+    if (p === 'month') {
+      const d = new Date(a); d.setDate(d.getDate() - 29)
+      return { from: toYMD(d), to: anchor }
+    }
+    // ytd: 1/1 ~ latestDate
+    const y = a.getFullYear()
+    return { from: `${y}-01-01`, to: anchor }
+  }
+
+  // latestDate 로드 후 차트/TOP 기간 초기화
   useEffect(()=>{
     if(!latestDate) return
     const d=new Date(latestDate); d.setDate(d.getDate()-30)
-    const from30 = toYMD(d)
-    setChartFrom(from30); setChartTo(latestDate)
-    setTopFrom(from30); setTopTo(latestDate)
+    setChartFrom(toYMD(d)); setChartTo(latestDate)
+    // TOP은 프리셋에서 계산
+    const r = rangeFromPreset(topPreset, latestDate)
+    setTopFrom(r.from); setTopTo(r.to)
   },[latestDate])
+
+  // 프리셋 변경 시 TOP 기간 재계산
+  useEffect(()=>{
+    if(!latestDate) return
+    const r = rangeFromPreset(topPreset, latestDate)
+    setTopFrom(r.from); setTopTo(r.to)
+  },[topPreset, latestDate])
 
   useEffect(()=>{
     if(!latestDate) return
@@ -535,11 +563,33 @@ export default function DashboardPage() {
       <div className="g2" style={{marginBottom:12}}>
         <div className="card">
           <div className="ch">
-            <div className="ch-l"><div className="ch-ico">🥇</div><div><div className="ch-title">판매 TOP 10</div><div className="ch-sub">상품명 기준 바코드 합산</div></div></div>
-            <div style={{display:'flex',alignItems:'center',gap:6}}>
-              <input type="date" value={topFrom} onChange={e=>setTopFrom(e.target.value)} style={{fontSize:11,padding:'4px 8px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg)',color:'var(--text)'}}/>
-              <span style={{fontSize:11,color:'var(--t3)'}}>~</span>
-              <input type="date" value={topTo} onChange={e=>setTopTo(e.target.value)} style={{fontSize:11,padding:'4px 8px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg)',color:'var(--text)'}}/>
+            <div className="ch-l"><div className="ch-ico">🥇</div><div>
+              <div className="ch-title">판매 TOP 10</div>
+              <div className="ch-sub">
+                {topFrom === topTo ? `${topFrom}` : `${topFrom} ~ ${topTo}`} · 상품명 기준 바코드 합산
+              </div>
+            </div></div>
+            <div style={{display:'flex',alignItems:'center',gap:4}}>
+              {([
+                {k:'yesterday',label:'전일'},
+                {k:'week',label:'주간'},
+                {k:'month',label:'월간'},
+                {k:'ytd',label:'누적'},
+              ] as {k:TopPreset;label:string}[]).map(({k,label})=>{
+                const on = topPreset === k
+                return (
+                  <button
+                    key={k}
+                    onClick={()=>setTopPreset(k)}
+                    style={{
+                      padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:600,
+                      cursor:'pointer', border:'1px solid var(--border)',
+                      background: on ? '#2563eb' : 'var(--bg)',
+                      color: on ? 'white' : 'var(--t2)',
+                    }}
+                  >{label}</button>
+                )
+              })}
             </div>
           </div>
           <div className="cb" style={{padding:'4px 14px 10px'}}>
