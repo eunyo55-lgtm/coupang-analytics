@@ -98,29 +98,28 @@ export default function SupplyPage() {
     return { from: lastFri.toISOString().slice(0,10), to: lastThu.toISOString().slice(0,10) }
   }, [])
 
-  // ── 미래 공급 예정 데이터까지 자동 확장 (페이지 진입 시 1회) ──
-  // chartTo / tableTo 초기값이 "오늘"로 박혀 있어서 다음주 공급예정이 잘림.
-  // allRows에서 가장 먼 입고예정일이 오늘보다 미래면 그 날짜로 자동 확장한다.
-  // 사용자가 직접 줄여도 다시 덮어쓰지 않도록 ref로 1회 가드.
-  const futureExtendedRef = useRef(false)
+  // ── 미래 공급 예정 데이터까지 자동 확장 ──
+  // allRows의 가장 먼 미래 날짜를 추적. 새 데이터 업로드로 max가 미래로 늘어나면 자동 확장.
+  // (한 번만 실행하던 옛 로직은 업로드 후 새 미래 날짜를 못 잡았음)
+  const lastSeenMaxRef = useRef<string>('')
   useEffect(() => {
-    if (futureExtendedRef.current || allRows.length === 0) return
+    if (allRows.length === 0) return
     let maxDate = ''
     for (const r of allRows) {
       const d = toD(r.입고예정일)
       if (d && d > maxDate) maxDate = d
     }
-    if (maxDate) {
-      if (maxDate > chartTo) setChartTo(maxDate)
-      if (maxDate > tableTo) setTableTo(maxDate)
-    }
-    futureExtendedRef.current = true
+    if (!maxDate || maxDate <= lastSeenMaxRef.current) return  // 새로 늘어난 게 아니면 패스
+    lastSeenMaxRef.current = maxDate
+    if (maxDate > chartTo) setChartTo(maxDate)
+    if (maxDate > tableTo) setTableTo(maxDate)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allRows])
 
-  // ── 전체 데이터 로드 (KPI용, 최초 1회 + 캐시) ──
+  // ── 전체 데이터 로드 — stale-while-revalidate ──
+  // 캐시 있으면 즉시 표시 + 항상 백그라운드 fresh fetch.
+  // (이전엔 _cacheLoaded=true면 fresh fetch 영원히 안 해서 업로드 후 새 데이터 안 보임)
   useEffect(() => {
-    if (_cacheLoaded) return  // 캐시 있으면 재로딩 안 함
     async function loadAll() {
       const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
       let all: SupplyRow[] = [], offset = 0
@@ -165,21 +164,22 @@ export default function SupplyPage() {
     loadAll()
   }, [])
 
-  // ── 날짜 필터 기간 데이터 로드 (차트/테이블용, 캐시 포함) ──
+  // ── 날짜 필터 기간 데이터 로드 — stale-while-revalidate ──
   useEffect(() => {
     const cacheKey = `${dateFrom}-${dateTo}`
+    let cancelled = false
     if (_cachedRows[cacheKey]) {
-      // 캐시 히트 — prodMap 적용 후 바로 세팅
+      // 캐시 즉시 표시 (체감 0초) — 그리고 항상 백그라운드 갱신
       setRows(_cachedRows[cacheKey].map(r => ({
         ...r,
         name:      _cachedProdMap[r['SKU Barcode']]?.name || r['SKU 이름'],
         image_url: _cachedProdMap[r['SKU Barcode']]?.image_url || '',
       })))
       setLoading(false)
-      return
+      // fresh fetch는 그래도 진행 (return 안 함)
     }
     async function load() {
-      setLoading(true)
+      if (!_cachedRows[cacheKey]) setLoading(true)
       try {
         const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
         const from = dateFrom
@@ -206,11 +206,12 @@ export default function SupplyPage() {
           image_url: prodMap[r['SKU Barcode']]?.image_url || '',
         }))
         _cachedRows[cacheKey] = mapped  // 캐시 저장
-        setRows(mapped)
+        if (!cancelled) setRows(mapped)
       } catch (e) { console.warn(e) }
-      setLoading(false)
+      if (!cancelled) setLoading(false)
     }
     load()
+    return () => { cancelled = true }
   }, [dateFrom, dateTo, prodMap])
 
   // 검색어 적용된 rows (차트/테이블용)

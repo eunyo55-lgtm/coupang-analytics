@@ -314,6 +314,11 @@ export default function DataManagePage() {
         const saved = await upsertSupplyStatus(result.data, dispatch)
         if (saved > 0) {
           dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 supply_status 저장 완료` })
+          // SupplyPage 캐시 무효화 — 다음 진입 시 새 데이터 즉시 표시
+          try {
+            localStorage.removeItem('swr_supply_all_v1')
+            dispatch({ type: 'APPEND_LOG', payload: `🧹 공급 현황 캐시 비움 — 페이지 진입 시 최신 데이터 표시` })
+          } catch { /* ignore */ }
         } else {
           dispatch({ type: 'APPEND_LOG', payload: `⚠️ supply_status 저장 실패 — 로그 확인` })
         }
