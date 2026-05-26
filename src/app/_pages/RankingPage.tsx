@@ -541,20 +541,24 @@ export default function RankingPage() {
   }
   const productRight = stickyLeft.product + productColWidth
 
-  /* ─── KPI 계산: 전일 기준 랭크 구간 집계 ─── */
+  /* ─── KPI 계산: 가장 최근 "유효 측정일" 기준 (못찾음 100%인 날은 skip) ─── */
   const kpiData = useMemo(() => {
-    /* 전일(어제) 날짜 계산 */
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yStr = getKSTDateString(yesterday)
-
-    /* 전일자 랭킹: 없으면 allDates 중 가장 최근으로 fallback */
-    let targetDate = yStr
-    if (!rankings.some(r => r.date === yStr)) {
-      targetDate = allDates[allDates.length - 1] || yStr
+    // 1) allDates는 오름차순. 뒤에서부터 봐서 rank_position > 0 인 row가 있는 첫 날짜 사용
+    let targetDate = ''
+    for (let i = allDates.length - 1; i >= 0; i--) {
+      const d = allDates[i]
+      const hasValid = rankings.some(r => r.date === d && r.rank_position > 0)
+      if (hasValid) { targetDate = d; break }
     }
+    if (!targetDate) targetDate = allDates[allDates.length - 1] || ''
 
-    const dayRanks = rankings.filter(r => r.date === targetDate && r.rank_position > 0)
+    // 2) 같은 키워드에 여러 row가 있으면 가장 최근 updated 1개만 (방어적 dedup)
+    const seen = new Map<string, typeof rankings[number]>()
+    for (const r of rankings) {
+      if (r.date !== targetDate) continue
+      if (!seen.has(r.keyword_id)) seen.set(r.keyword_id, r)
+    }
+    const dayRanks = Array.from(seen.values()).filter(r => r.rank_position > 0)
     const inRange = (lo: number, hi: number) =>
       dayRanks.filter(r => r.rank_position >= lo && r.rank_position <= hi).length
 
@@ -563,6 +567,7 @@ export default function RankingPage() {
       top10: inRange(1, 10),
       mid: inRange(11, 27),
       low: inRange(28, 54),
+      notFound: seen.size > 0 ? seen.size - dayRanks.length : 0,
     }
   }, [rankings, allDates])
 
@@ -583,19 +588,19 @@ export default function RankingPage() {
           <div className="kpi-top"><div className="kpi-ico">🥇</div></div>
           <div className="kpi-lbl">1~10위 랭킹</div>
           <div className="kpi-val">{kpiData.top10}</div>
-          <div className="kpi-foot">전일 기준</div>
+          <div className="kpi-foot">{kpiData.targetDate || '측정 없음'} 기준</div>
         </div>
         <div className="kpi kc-gr">
           <div className="kpi-top"><div className="kpi-ico">📍</div></div>
           <div className="kpi-lbl">11~27위 랭킹</div>
           <div className="kpi-val">{kpiData.mid}</div>
-          <div className="kpi-foot">전일 기준</div>
+          <div className="kpi-foot">{kpiData.targetDate || '측정 없음'} 기준</div>
         </div>
         <div className="kpi kc-pu">
           <div className="kpi-top"><div className="kpi-ico">📊</div></div>
           <div className="kpi-lbl">28~54위 랭킹</div>
           <div className="kpi-val">{kpiData.low}</div>
-          <div className="kpi-foot">전일 기준</div>
+          <div className="kpi-foot">{kpiData.targetDate || '측정 없음'} 기준</div>
         </div>
       </div>
 
