@@ -194,10 +194,11 @@ export interface HistoricalData {
   masterData: PersistedData['masterData']
 }
 
-// ── Historical 캐시 (10분 TTL) — salesData는 크지만 stringify해도 보통 1~5MB
-// v2: VAT 별도 적용으로 캐시 무효화
-const HISTORICAL_CACHE_KEY = 'swr_historical_v2'
+// ── Historical 캐시 (10분 TTL)
+// v3: 60일 cap + lazy products (성능 개선)
+const HISTORICAL_CACHE_KEY = 'swr_historical_v3'
 const HISTORICAL_TTL_MS = 10 * 60 * 1000
+const HISTORICAL_DAYS_BACK = 60  // YTD 대신 60일 (성능 vs 범위 균형)
 
 export function readHistoricalFromCache(): { data: HistoricalData; stale: boolean } | null {
   const r = readSwrCache<HistoricalData>(HISTORICAL_CACHE_KEY, HISTORICAL_TTL_MS)
@@ -217,29 +218,58 @@ export function cacheHistorical(data: HistoricalData) {
 export async function loadHistorical(): Promise<HistoricalData | null> {
   if (typeof window === 'undefined') return null
   try {
+    const tStart = Date.now()
     const today = new Date().toISOString().slice(0, 10)
-    const yearStart = `${new Date().getFullYear()}-01-01`
-    const ninetyAgo = new Date()
-    ninetyAgo.setDate(ninetyAgo.getDate() - 90)
-    const from90 = ninetyAgo.toISOString().slice(0, 10)
-    const fromLoad = yearStart < from90 ? yearStart : from90
+    const back = new Date()
+    back.setDate(back.getDate() - HISTORICAL_DAYS_BACK)
+    const fromLoad = back.toISOString().slice(0, 10)
 
-    const [salesRaw, productsRaw] = await Promise.all([
-      fetchAllPages(
-        `daily_sales?select=date,barcode,quantity&date=gte.${fromLoad}&date=lte.${today}&quantity=gt.0&order=date.asc`
-      ),
-      (async () => {
-        try {
-          return await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category,hq_stock&barcode=not.is.null&name=not.is.null')
-        } catch {
-          try {
-            return await fetchAllPages('products?select=barcode,name,option_value,cost,season,image_url,category&barcode=not.is.null&name=not.is.null')
-          } catch {
-            return await fetchAllPages('products?select=barcode,name,option_value,cost&barcode=not.is.null&name=not.is.null')
-          }
+    // 1) 매출 row 먼저 (메인 페이로드)
+    const salesRaw = await fetchAllPages(
+      `daily_sales?select=date,barcode,quantity&date=gte.${fromLoad}&date=lte.${today}&quantity=gt.0&order=date.asc`
+    )
+    console.log(`[CA] daily_sales ${salesRaw.length}행 (${Date.now()-tStart}ms)`)
+
+    // 2) Lazy products — sales에 등장한 unique barcode만 조회 (33k → 보통 3-5k)
+    const usedBarcodes = Array.from(new Set(
+      (salesRaw as Record<string,unknown>[]).map(r => String(r['barcode'] || '')).filter(Boolean)
+    ))
+    console.log(`[CA] unique barcodes in sales: ${usedBarcodes.length}`)
+
+    const productsRaw: Record<string,unknown>[] = []
+    if (usedBarcodes.length > 0) {
+      const tProd = Date.now()
+      // PostgREST URL 길이 한계 회피 — 200개씩 chunk + 병렬
+      const CHUNK = 200
+      const chunks: string[][] = []
+      for (let i = 0; i < usedBarcodes.length; i += CHUNK) {
+        chunks.push(usedBarcodes.slice(i, i + CHUNK))
+      }
+      const fetchProductChunk = async (chunk: string[]) => {
+        const inList = chunk.map(b => `"${b}"`).join(',')
+        const tryFetch = async (selectCols: string) => {
+          const r = await fetch(
+            `${SUPA_URL}/rest/v1/products?select=${selectCols}&barcode=in.(${encodeURIComponent(inList)})`,
+            { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } }
+          )
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          return await r.json()
         }
-      })(),
-    ])
+        try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category,hq_stock') }
+        catch {
+          try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category') }
+          catch { return await tryFetch('barcode,name,option_value,cost') }
+        }
+      }
+      // 4개씩 병렬 (네트워크 동시연결 한도 고려)
+      const PARALLEL = 4
+      for (let i = 0; i < chunks.length; i += PARALLEL) {
+        const batch = chunks.slice(i, i + PARALLEL)
+        const results = await Promise.all(batch.map(fetchProductChunk))
+        results.forEach(arr => { if (Array.isArray(arr)) productsRaw.push(...arr) })
+      }
+      console.log(`[CA] products lazy-load ${productsRaw.length}행 (${Date.now()-tProd}ms)`)
+    }
 
     interface ProductInfo {
       name: string; option: string; cost: number;
