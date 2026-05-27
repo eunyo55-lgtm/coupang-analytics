@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { vatExcluded } from '@/lib/vatUtils'
 
 interface Props {
   latestDate: string
@@ -47,10 +48,10 @@ export default function DashboardBriefing({ latestDate, yestRev, yoyPct }: Props
           .limit(1)
         if (!cancelled && ad && ad.length > 0) {
           const r = ad[0]
-          const cost = Number(r.ad_cost || 0)
-          const rev = Number(r.revenue_14d || 0)
+          const cost = vatExcluded(Number(r.ad_cost || 0))
+          const rev = vatExcluded(Number(r.revenue_14d || 0))
           setAdCost(cost)
-          setAdRoas(cost > 0 ? rev / cost : 0)
+          setAdRoas(cost > 0 ? rev / cost : 0)  // 비율은 동일
           setAdDate(r.date)
         }
         // 1페이지 점유 키워드 (가장 최근 스냅샷 기준, rank<=40)

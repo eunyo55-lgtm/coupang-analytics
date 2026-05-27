@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
+import { vatExcluded } from '@/lib/vatUtils'
 import DualActionBoard from './DualActionBoard'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -120,13 +121,13 @@ export default function InventoryPage() {
     hq_stock: Number(r.hq_stock || 0),
     coupang_stock: Number(r.coupang_stock || 0),
     supply_qty: Number(r.supply_qty || 0),
-    cost_avg: Number(r.cost_avg || 0),
-    coupang_cost_avg: Number(r.coupang_cost_avg || 0),
+    cost_avg: vatExcluded(Number(r.cost_avg || 0)),
+    coupang_cost_avg: vatExcluded(Number(r.coupang_cost_avg || 0)),
     daily_sales: Number(r.daily_sales || 0),
     days_left: r.days_left == null ? null : Number(r.days_left),
     total_qty_range: Number(r.total_qty_range || 0),
-    stock_value_master: Number(r.stock_value_master || 0),
-    stock_value_coupang: Number(r.stock_value_coupang || 0),
+    stock_value_master: vatExcluded(Number(r.stock_value_master || 0)),
+    stock_value_coupang: vatExcluded(Number(r.stock_value_coupang || 0)),
     option_count: Number(r.option_count || 0),
     season: r.season && r.season.trim() ? r.season : '미지정',
     category: extractCategory(r.name),
@@ -135,7 +136,8 @@ export default function InventoryPage() {
   // 5분 stale-while-revalidate: 캐시가 있으면 즉시 표시, 백그라운드에서 갱신
   useEffect(() => {
     if (!from || !to) return
-    const cacheKey = `swr_inv_summary_${from}_${to}`
+    // _v2: VAT 별도 적용으로 캐시 무효화
+    const cacheKey = `swr_inv_summary_v2_${from}_${to}`
     const TTL = 5 * 60 * 1000
 
     let cancelled = false
@@ -269,8 +271,8 @@ export default function InventoryPage() {
     const data = await rpc('get_inventory_options', { p_name: name, p_from: from, p_to: to })
     const opts = (data as OptionRow[]).map(o => ({
       ...o,
-      cost: Number(o.cost || 0),
-      coupang_cost: Number(o.coupang_cost || 0),
+      cost: vatExcluded(Number(o.cost || 0)),
+      coupang_cost: vatExcluded(Number(o.coupang_cost || 0)),
       hq_stock: Number(o.hq_stock || 0),
       coupang_stock: Number(o.coupang_stock || 0),
       supply_qty: Number(o.supply_qty || 0),
@@ -287,8 +289,8 @@ export default function InventoryPage() {
     const data = await rpc('get_inventory_options', { p_name: name, p_from: from, p_to: to })
     const opts = (data as OptionRow[]).map(o => ({
       ...o,
-      cost: Number(o.cost || 0),
-      coupang_cost: Number(o.coupang_cost || 0),
+      cost: vatExcluded(Number(o.cost || 0)),
+      coupang_cost: vatExcluded(Number(o.coupang_cost || 0)),
       hq_stock: Number(o.hq_stock || 0),
       coupang_stock: Number(o.coupang_stock || 0),
       supply_qty: Number(o.supply_qty || 0),

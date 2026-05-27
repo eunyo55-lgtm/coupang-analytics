@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store'
 import { supabase } from '@/lib/supabase'
 import { toYMD } from '@/lib/dateUtils'
 import CoupangAdUpload from '@/components/CoupangAdUpload'
+import { vatExcluded } from '@/lib/vatUtils'
 import AdSignalCards from '@/components/AdSignalCards'
 import AdPerformanceCharts from '@/components/AdPerformanceCharts'
 import AdBreakdownTables from '@/components/AdBreakdownTables'
@@ -47,7 +48,14 @@ export default function AdPage() {
         if (res2.error) { console.warn('[AdPage] csv daily load:', res2.error.message); return }
         data = res2.data as any
       }
-      setCsvDailyAll((data as AdDaily[]) || [])
+      // VAT 별도 변환 — 모든 광고 금액 (광고비, 광고매출)에 적용
+      const xform = (rows: AdDaily[]) => rows.map(r => ({
+        ...r,
+        ad_cost: vatExcluded(r.ad_cost),
+        revenue_14d: vatExcluded(r.revenue_14d),
+        revenue_1d: vatExcluded(r.revenue_1d),
+      }))
+      setCsvDailyAll(xform((data as AdDaily[]) || []))
     } catch (e) { console.warn('[AdPage] csv daily load:', e) }
   }
 

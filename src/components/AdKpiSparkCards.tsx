@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
 import { supabase } from '@/lib/supabase'
+import { vatExcluded } from '@/lib/vatUtils'
 
 interface AdDaily {
   date: string
@@ -139,7 +140,11 @@ export default function AdKpiSparkCards({ csvDailyAll, dateFrom, dateTo }: Props
           setSalesRpcAvailable(false)
           return
         }
-        setSalesDaily((data as SalesDaily[]) || [])
+        // 전체매출 — VAT 별도
+        setSalesDaily(((data as SalesDaily[]) || []).map(r => ({
+          ...r,
+          total_revenue: vatExcluded(Number(r.total_revenue || 0)),
+        })))
       } catch (e) {
         if (!cancelled) setSalesRpcAvailable(false)
       }

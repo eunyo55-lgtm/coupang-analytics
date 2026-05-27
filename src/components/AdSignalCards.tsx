@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { vatExcluded } from '@/lib/vatUtils'
 
 interface Props {
   dateFrom: string  // 'YYYY-MM-DD'
@@ -51,9 +52,9 @@ export default function AdSignalCards({ dateFrom, dateTo }: Props) {
             .filter(c => Number(c.ad_cost) > 10000)
             .map(c => ({
               name: c.name,
-              cost: Number(c.ad_cost),
-              rev: Number(c.revenue_14d),
-              roas: Number(c.ad_cost) > 0 ? Number(c.revenue_14d) / Number(c.ad_cost) : 0,
+              cost: vatExcluded(Number(c.ad_cost)),
+              rev: vatExcluded(Number(c.revenue_14d)),
+              roas: Number(c.ad_cost) > 0 ? Number(c.revenue_14d) / Number(c.ad_cost) : 0,  // 비율은 동일
             }))
             .filter(c => c.roas < 5)
             .sort((a, b) => a.roas - b.roas)
@@ -85,8 +86,8 @@ export default function AdSignalCards({ dateFrom, dateTo }: Props) {
           const latest = daily[0]
           const prev7 = daily.slice(1)
           // 광고비 급증
-          const avgCost = prev7.reduce((s, r) => s + Number(r.ad_cost || 0), 0) / prev7.length
-          const latestCost = Number(latest.ad_cost || 0)
+          const avgCost = vatExcluded(prev7.reduce((s, r) => s + Number(r.ad_cost || 0), 0) / prev7.length)
+          const latestCost = vatExcluded(Number(latest.ad_cost || 0))
           if (avgCost > 0 && latestCost > avgCost * 1.8) {
             list.push({
               level: 'warning',
@@ -125,6 +126,7 @@ export default function AdSignalCards({ dateFrom, dateTo }: Props) {
             .filter(k => k.name !== '(미지정)' && !trackedSet.has(k.name))
             .filter(k => Number(k.revenue_14d) > 50000)
             .sort((a, b) => Number(b.revenue_14d) - Number(a.revenue_14d))
+            .map(k => ({ ...k, revenue_14d: vatExcluded(Number(k.revenue_14d || 0)), ad_cost: vatExcluded(Number(k.ad_cost || 0)) }))
           const totalNewRev = newOnes.reduce((s, k) => s + Number(k.revenue_14d || 0), 0)
           if (newOnes.length > 0) {
             list.push({

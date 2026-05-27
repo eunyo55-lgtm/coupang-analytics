@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { toYMD } from '@/lib/dateUtils'
+import { vatExcluded } from '@/lib/vatUtils'
 
 type Priority = 'critical' | 'warning' | 'info'
 
@@ -109,8 +110,8 @@ async function detectSignals(): Promise<ActionItem[]> {
     const under = ((campRes.value as any).data as C[])
       .map(c => ({
         name: c.name,
-        cost: Number(c.ad_cost || 0),
-        rev: Number(c.revenue_14d || 0),
+        cost: vatExcluded(Number(c.ad_cost || 0)),
+        rev: vatExcluded(Number(c.revenue_14d || 0)),
         roas: Number(c.ad_cost || 0) > 0 ? Number(c.revenue_14d || 0) / Number(c.ad_cost || 0) : 0,
       }))
       .filter(c => c.cost >= 10000 && c.roas < 5)
@@ -134,6 +135,7 @@ async function detectSignals(): Promise<ActionItem[]> {
     const newOnes = ((kwAdRes.value as any).data as K[])
       .filter(k => k.name && k.name !== '(미지정)' && !trackedSet.has(k.name) && Number(k.revenue_14d || 0) > 50000)
       .sort((a, b) => Number(b.revenue_14d) - Number(a.revenue_14d))
+      .map(k => ({ ...k, revenue_14d: vatExcluded(Number(k.revenue_14d || 0)) }))
     if (newOnes.length > 0) {
       const totalRev = newOnes.reduce((s, k) => s + Number(k.revenue_14d || 0), 0)
       list.push({

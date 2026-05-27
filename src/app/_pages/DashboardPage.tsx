@@ -5,6 +5,7 @@ import { toYMD } from '@/lib/dateUtils'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
 import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
 import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
+import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
 
 const SUPABASE_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -61,7 +62,8 @@ async function rpc(fn: string, params: Record<string,unknown> = {}, timeoutMs = 
 // ── RPC 결과 캐시 (localStorage, 10분 TTL, stale-while-revalidate) ──
 // 같은 파라미터로 자주 호출되는 KPI/TOP 응답을 캐시.
 // 캐시 hit 시 즉시 사용하고 백그라운드에서 fresh fetch는 호출부 useEffect가 진행.
-const RPC_CACHE_PREFIX = 'ca_rpc_'
+// v2: VAT 별도 적용으로 캐시 무효화
+const RPC_CACHE_PREFIX = 'ca_rpc2_'
 const RPC_CACHE_TTL_MS = 10 * 60 * 1000  // 10분
 type CacheEntry<T> = { ts: number; data: T }
 
@@ -287,7 +289,7 @@ export default function DashboardPage() {
       return pickRow(res.value)
     }
     const toKpi = (row: {total_qty?:number;total_revenue?:number}|null) =>
-      row ? { qty: Number(row.total_qty||0), rev: Number(row.total_revenue||0) } : null
+      row ? { qty: Number(row.total_qty||0), rev: vatExcluded(Number(row.total_revenue||0)) } : null
 
     // Param 묶음 정의 — 캐시 lookup과 fresh fetch 모두에서 동일하게 사용
     const calls: Array<[string, Record<string,unknown>]> = [
@@ -363,8 +365,10 @@ export default function DashboardPage() {
     const applyAll = (p26: TopProduct[], p25: TopProduct[], p24: TopProduct[], stocks: Stock[]) => {
       const map25=new Map<string,number>(); p25.forEach(r=>map25.set(r.product_name,r.total_qty))
       const map24=new Map<string,number>(); p24.forEach(r=>map24.set(r.product_name,r.total_qty))
-      setTopProducts(p26.map(r=>({...r,qty_26:r.total_qty,qty_25:map25.get(r.product_name)||0,qty_24:map24.get(r.product_name)||0})))
-      setTopStock(stocks)
+      // 매출/재고액 모든 금액에 VAT 별도 적용
+      const xp = (r: TopProduct) => ({ ...r, total_revenue: vatExcluded(r.total_revenue) })
+      setTopProducts(p26.map(r=>({...xp(r),qty_26:r.total_qty,qty_25:map25.get(r.product_name)||0,qty_24:map24.get(r.product_name)||0})))
+      setTopStock(stocks.map(s=>({ ...s, stock_value: vatExcluded(s.stock_value) })))
     }
 
     // 1) 캐시가 있으면 즉시 표시
@@ -424,8 +428,8 @@ export default function DashboardPage() {
   const totalStock=useMemo(()=>topStock.reduce((s,r)=>s+r.total_stock,0),[topStock])
   const pct=(now:number,prev:number)=>prev?Math.round((now-prev)/prev*100):0
   const s=state.stockSummary
-  const stockValueMaster  = (s as {stock_value_master?:number}).stock_value_master  ?? s.stock_value
-  const stockValueCoupang = (s as {stock_value_coupang?:number}).stock_value_coupang ?? 0
+  const stockValueMaster  = vatExcluded((s as {stock_value_master?:number}).stock_value_master  ?? s.stock_value)
+  const stockValueCoupang = vatExcluded((s as {stock_value_coupang?:number}).stock_value_coupang ?? 0)
   const [stockCostSrc, setStockCostSrc] = useState<'master'|'coupang'>('coupang')
   const displayedStockValue = stockCostSrc === 'master' ? stockValueMaster : (stockValueCoupang || stockValueMaster)
 
@@ -480,7 +484,7 @@ export default function DashboardPage() {
         // 캐시 무효화: refresh 후 stale 캐시가 다시 표시되지 않게
         try {
           Object.keys(localStorage).forEach(k => {
-            if (k.startsWith('ca_rpc_get_kpi')) localStorage.removeItem(k)
+            if (k.startsWith('ca_rpc2_get_kpi') || k.startsWith('ca_rpc_get_kpi')) localStorage.removeItem(k)
           })
         } catch {}
         setAutoRefreshed(true)
@@ -502,6 +506,12 @@ export default function DashboardPage() {
 
   return (
     <div>
+      <div style={{
+        display:'inline-block', fontSize:10, color:'#64748b', background:'#f1f5f9',
+        padding:'2px 8px', borderRadius:999, marginBottom:6, fontWeight:600,
+      }} title="매출/재고액/광고비/매입가 모두 부가세 별도 기준으로 표시됩니다.">
+        💱 모든 금액 표시: {VAT_LABEL}
+      </div>
       {(usingFallback || autoRefreshing) && (
         <div style={{
           background: autoRefreshing ? '#dbeafe' : '#fef3c7',
@@ -534,7 +544,7 @@ export default function DashboardPage() {
             <div className="ds-lbl" style={{fontSize:11}}>{c.label}</div>
             <div style={{fontSize:9,color:'var(--t3)',marginBottom:4}}>{c.sub}</div>
             <div className="ds-val" style={{color:c.color,fontSize:22}}>{c.qty===null?<span style={{fontSize:13,color:'var(--t3)'}}>로딩...</span>:fmt(c.qty)}</div>
-            <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}} title={c.revMissing?'mv_daily_kpi 갱신 대기 — 매출 집계 미반영':undefined}>
+            <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}} title={c.revMissing?'mv_daily_kpi 갱신 대기':VAT_LABEL}>
               {c.isStock ? (
                 <>재고액 {c.rev!==null ? Math.round((c.rev||0)/100000000*10)/10+'억' : '—'}</>
               ) : c.rev !== null ? (

@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
+import { vatExcluded } from '@/lib/vatUtils'
 
 const SUPPLY_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -40,7 +41,8 @@ function getWeekLabel(dateStr: string): string {
 // ── 모듈 레벨 캐시 (탭 이동 시 데이터 유지) + localStorage 백킹 ──
 // 모듈 변수는 SPA 내 탭 이동에 빠르지만 새로고침 시 사라짐.
 // localStorage(SWR 5분 TTL)로 백킹해 새로고침에서도 즉시 표시.
-const SUPPLY_ALL_KEY = 'swr_supply_all_v1'
+// v2: VAT 별도 적용으로 캐시 무효화
+const SUPPLY_ALL_KEY = 'swr_supply_all_v2'
 const SUPPLY_PRODMAP_KEY = 'swr_supply_prodmap_v1'
 
 interface SupplyAllCache {
@@ -133,7 +135,7 @@ export default function SupplyPage() {
         all = all.concat(page.map(r => ({
           ...r,
           'SKU 이름': '', 발주수량: toN(r.발주수량),
-          확정수량: toN(r.확정수량), 입고수량: toN(r.입고수량), 매입가: toN(r.매입가),
+          확정수량: toN(r.확정수량), 입고수량: toN(r.입고수량), 매입가: vatExcluded(toN(r.매입가)),
         })))
         if (page.length < 1000) break
         offset += 1000
@@ -201,7 +203,7 @@ export default function SupplyPage() {
         const mapped = allData.map(r => ({
           ...r,
           발주수량: toN(r.발주수량), 확정수량: toN(r.확정수량),
-          입고수량: toN(r.입고수량), 매입가: toN(r.매입가),
+          입고수량: toN(r.입고수량), 매입가: vatExcluded(toN(r.매입가)),
           name:      prodMap[r['SKU Barcode']]?.name || r['SKU 이름'],
           image_url: prodMap[r['SKU Barcode']]?.image_url || '',
         }))

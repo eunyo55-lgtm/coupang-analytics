@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { vatExcluded } from '@/lib/vatUtils'
 
 interface Props {
   defaultDateFrom: string  // 'YYYY-MM-DD' (부모 dateRange에서 동기화)
@@ -92,13 +93,24 @@ export default function AdBreakdownTables({ defaultDateFrom, defaultDateTo }: Pr
           console.warn('[AdBreakdownTables] load curr:', currRes.error.message)
           setRows([])
         } else {
-          setRows((currRes.data as BreakdownRow[]) || [])
+          // VAT 별도 적용 (광고비/매출)
+          setRows(((currRes.data as BreakdownRow[]) || []).map(r => ({
+            ...r,
+            ad_cost: vatExcluded(Number(r.ad_cost || 0)),
+            revenue_14d: vatExcluded(Number(r.revenue_14d || 0)),
+            revenue_1d: vatExcluded(Number(r.revenue_1d || 0)),
+          })))
         }
         if (prevRes.error) {
           console.warn('[AdBreakdownTables] load prev:', prevRes.error.message)
           setPrevRows([])
         } else {
-          setPrevRows((prevRes.data as BreakdownRow[]) || [])
+          setPrevRows(((prevRes.data as BreakdownRow[]) || []).map(r => ({
+            ...r,
+            ad_cost: vatExcluded(Number(r.ad_cost || 0)),
+            revenue_14d: vatExcluded(Number(r.revenue_14d || 0)),
+            revenue_1d: vatExcluded(Number(r.revenue_1d || 0)),
+          })))
         }
       } finally {
         if (!cancelled) setLoading(false)

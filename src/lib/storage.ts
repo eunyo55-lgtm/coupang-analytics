@@ -2,6 +2,7 @@
 
 import { supabase } from '@/lib/supabase'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
+import { vatExcluded } from '@/lib/vatUtils'
 
 const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -102,7 +103,8 @@ async function fetchAllPages(path: string, extraHeaders: Record<string,string> =
 
 // ── localStorage 캐시 (Essential 데이터만, 5분 TTL) ──
 // 같은 세션 내 빠른 재방문 시 즉시 화면 표시 (백그라운드에서 fresh 로드)
-const CACHE_KEY = 'ca_essential_v2'
+// v3: VAT 별도 적용으로 캐시 무효화
+const CACHE_KEY = 'ca_essential_v3'
 const CACHE_TTL_MS = 5 * 60 * 1000  // 5분
 
 interface EssentialCache {
@@ -193,7 +195,8 @@ export interface HistoricalData {
 }
 
 // ── Historical 캐시 (10분 TTL) — salesData는 크지만 stringify해도 보통 1~5MB
-const HISTORICAL_CACHE_KEY = 'swr_historical_v1'
+// v2: VAT 별도 적용으로 캐시 무효화
+const HISTORICAL_CACHE_KEY = 'swr_historical_v2'
 const HISTORICAL_TTL_MS = 10 * 60 * 1000
 
 export function readHistoricalFromCache(): { data: HistoricalData; stale: boolean } | null {
@@ -260,18 +263,20 @@ export async function loadHistorical(): Promise<HistoricalData | null> {
       const bc   = String(r['barcode'] || '')
       const info = barcodeMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
       const qty  = Number(r['quantity'] || 0)
+      // VAT 별도: cost(매입가)를 변환하면 revenue(=cost*qty)도 자동 별도 처리됨
+      const costExcl = vatExcluded(info.cost)
       return {
         date:        String(r['date']),
         productName: info.name,
         option:      info.option,
         barcode:     bc,
         qty,
-        revenue:     info.cost * qty,
+        revenue:     costExcl * qty,
         isReturn:    false,
         season:      info.season,
         imageUrl:    info.imageUrl,
         category:    info.category,
-        cost:        info.cost,
+        cost:        costExcl,
       }
     })
 
@@ -359,18 +364,20 @@ export async function loadData(): Promise<PersistedData | null> {
       const bc   = String(r['barcode'] || '')
       const info = barcodeMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
       const qty  = Number(r['quantity'] || 0)
+      // VAT 별도: cost(매입가)를 변환하면 revenue(=cost*qty)도 자동 별도 처리됨
+      const costExcl = vatExcluded(info.cost)
       return {
         date:        String(r['date']),
         productName: info.name,
         option:      info.option,
         barcode:     bc,
         qty,
-        revenue:     info.cost * qty,
+        revenue:     costExcl * qty,
         isReturn:    false,
         season:      info.season,
         imageUrl:    info.imageUrl,
         category:    info.category,
-        cost:        info.cost,
+        cost:        costExcl,
       }
     })
 

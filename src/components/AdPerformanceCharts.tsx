@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { vatExcluded } from '@/lib/vatUtils'
 import {
   ComposedChart, LineChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, Legend,
@@ -59,11 +60,18 @@ export default function AdPerformanceCharts({ dateFrom, dateTo }: Props) {
         }
         const revMap: Record<string, number> = {}
         for (const r of (sales as Array<{ sale_date: string; total_revenue: number }> | null) ?? []) {
-          revMap[r.sale_date] = Number(r.total_revenue || 0)
+          revMap[r.sale_date] = vatExcluded(Number(r.total_revenue || 0))
         }
 
         if (!cancelled) {
-          setRows((ad as AdDailyRow[]) || [])
+          // 광고비/매출에 VAT 별도 적용
+          const xformAd = ((ad as AdDailyRow[]) || []).map(r => ({
+            ...r,
+            ad_cost: vatExcluded(Number(r.ad_cost || 0)),
+            revenue_14d: vatExcluded(Number(r.revenue_14d || 0)),
+            revenue_1d: vatExcluded(Number(r.revenue_1d || 0)),
+          }))
+          setRows(xformAd)
           setTotalDailyRevenue(revMap)
         }
       } finally {
