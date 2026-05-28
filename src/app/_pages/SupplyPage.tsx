@@ -69,6 +69,21 @@ function getOneMonthLater() {
   const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0,10)
 }
 
+// 캐시된 allRows의 가장 먼 미래 날짜를 즉시 계산.
+// 캐시 없으면 today+30 — 일반적인 미래 공급 일정 cover.
+// 이걸 초기 chartTo/tableTo로 쓰면 첫 fetch가 미래까지 한 번에 처리되어
+// "오늘까지 → 미래까지" 2번 fetch 문제 해결.
+function getInitialTo(cachedAllRows: SupplyRow[]): string {
+  let maxDate = ''
+  for (const r of cachedAllRows) {
+    const d = toD(r.입고예정일)
+    if (d && d > maxDate) maxDate = d
+  }
+  if (maxDate) return maxDate
+  const d = new Date(); d.setDate(d.getDate() + 30)
+  return d.toISOString().slice(0,10)
+}
+
 export default function SupplyPage() {
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
   const today = new Date().toISOString().slice(0, 10)
@@ -80,12 +95,12 @@ export default function SupplyPage() {
   const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>(_cachedProdMap)
   const [loading, setLoading] = useState(!_cacheLoaded)
 
-  // 차트용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 오늘
+  // 차트/테이블 날짜 필터 — 기본: 1달 전 ~ (캐시된 max future or today+30)
+  // 초기값이 미래까지 cover하므로 첫 fetch에서 모든 데이터를 한 번에 받음.
   const [chartFrom, setChartFrom] = useState(() => getOneMonthAgo())
-  const [chartTo,   setChartTo]   = useState(() => new Date().toISOString().slice(0,10))
-  // 테이블용 날짜 필터 — 기본: 오늘 기준 최근 1달 ~ 오늘
+  const [chartTo,   setChartTo]   = useState(() => getInitialTo(_cachedAllRows))
   const [tableFrom, setTableFrom] = useState(() => getOneMonthAgo())
-  const [tableTo,   setTableTo]   = useState(() => new Date().toISOString().slice(0,10))
+  const [tableTo,   setTableTo]   = useState(() => getInitialTo(_cachedAllRows))
   // DB 로드용 = 두 필터의 min/max
   const dateFrom = useMemo(() => chartFrom < tableFrom ? chartFrom : tableFrom, [chartFrom, tableFrom])
   const dateTo   = useMemo(() => chartTo > tableTo ? chartTo : tableTo, [chartTo, tableTo])
