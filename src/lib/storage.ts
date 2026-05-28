@@ -78,7 +78,7 @@ async function rpcFetch(fn: string, params: Record<string,unknown> = {}) {
 // 테이블 직접 페이지네이션 — 병렬 fetch.
 // PostgREST max-rows = 1000. 페이지를 동시에 N개 발사해 round-trip 지연(평균 250ms/페이지)을
 // 압축. 100k+ row 다운로드를 30초 → 2~3초로 단축.
-async function fetchAllPages(path: string, extraHeaders: Record<string,string> = {}, concurrency = 8) {
+async function fetchAllPages(path: string, extraHeaders: Record<string,string> = {}, concurrency = 16) {
   if (typeof window === 'undefined') return []
   const all: Record<string,unknown>[] = []
   const PAGE = 1000

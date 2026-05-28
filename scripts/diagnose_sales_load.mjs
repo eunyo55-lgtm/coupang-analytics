@@ -32,7 +32,7 @@ const cnt = await fetch(`${URL}/rest/v1/daily_sales?select=count&date=gte.${from
 const total = cnt.headers.get('content-range')
 console.log(`daily_sales 행 수: ${total}  (${Date.now()-t0}ms)`)
 
-// 페이지네이션 전체 다운로드 시간 측정
+// 페이지네이션 전체 다운로드 시간 측정 — 순차
 const t1 = Date.now()
 let offset = 0, all = 0
 while (true) {
@@ -47,7 +47,29 @@ while (true) {
   offset += 1000
   if (all > 200000) break
 }
-console.log(`daily_sales 전체 다운로드: ${all}행, ${Date.now()-t1}ms`)
+console.log(`daily_sales 순차 다운로드: ${all}행, ${Date.now()-t1}ms`)
+
+// 병렬 비교
+const t1p = Date.now()
+let allP = 0
+let nextOff = 0
+let doneP = false
+while (!doneP) {
+  const offs = Array.from({length: 8}, (_, i) => nextOff + i * 1000)
+  const arrs = await Promise.all(offs.map(o =>
+    fetch(`${URL}/rest/v1/daily_sales?select=date,barcode,quantity&date=gte.${fromLoad}&date=lte.${today}&quantity=gt.0&order=date.asc&limit=1000&offset=${o}`, { headers: H })
+      .then(r => r.json())
+  ))
+  for (const arr of arrs) {
+    if (Array.isArray(arr)) {
+      allP += arr.length
+      if (arr.length < 1000) doneP = true
+    }
+  }
+  nextOff += 8000
+  if (allP > 200000) break
+}
+console.log(`daily_sales 병렬 다운로드 (8개씩): ${allP}행, ${Date.now()-t1p}ms`)
 
 // products 다운로드 시간
 const t2 = Date.now()
