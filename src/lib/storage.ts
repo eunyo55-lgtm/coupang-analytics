@@ -202,25 +202,171 @@ export interface HistoricalData {
   masterData: PersistedData['masterData']
 }
 
-// ── Historical 캐시 (10분 TTL)
-// v4: 병렬 페이지네이션 + lazy products로 ~3-5초로 단축, 90일 복원
-const HISTORICAL_CACHE_KEY = 'swr_historical_v4'
-const HISTORICAL_TTL_MS = 10 * 60 * 1000
-const HISTORICAL_DAYS_BACK = 90  // 병렬 페치라 90일도 ~3초
+// ── Historical 캐시
+// v5: 증분 동기화 — 캐시에 lastSyncDate 저장, 이후엔 새 날짜만 fetch
+const HISTORICAL_CACHE_KEY = 'swr_historical_v5'
+const HISTORICAL_TTL_MS = 30 * 60 * 1000  // 30분: stale 표시용 (store.tsx 백그라운드 fetch 트리거)
+const HISTORICAL_DAYS_BACK = 90           // 캐시에 유지할 최대 기간
+const FULL_REFRESH_AFTER_DAYS = 7         // 마지막 동기화가 7일 이상 지났으면 풀 리로드
 
-export function readHistoricalFromCache(): { data: HistoricalData; stale: boolean } | null {
-  const r = readSwrCache<HistoricalData>(HISTORICAL_CACHE_KEY, HISTORICAL_TTL_MS)
-  return r ? { data: r.data, stale: r.stale } : null
+interface HistoricalCacheV5 extends HistoricalData {
+  lastSyncDate: string  // 캐시에 들어있는 가장 마지막 날짜 (YYYY-MM-DD)
 }
 
-export function cacheHistorical(data: HistoricalData) {
-  // 4MB 초과면 캐시 스킵 (localStorage 5~10MB 한도)
+export function readHistoricalFromCache(): { data: HistoricalData; stale: boolean } | null {
+  const r = readSwrCache<HistoricalCacheV5>(HISTORICAL_CACHE_KEY, HISTORICAL_TTL_MS)
+  if (!r) return null
+  return {
+    data: { salesData: r.data.salesData, masterData: r.data.masterData },
+    stale: r.stale,
+  }
+}
+
+function readHistoricalRaw(): HistoricalCacheV5 | null {
+  // TTL 무시하고 raw 데이터 — 증분 동기화에 사용
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(HISTORICAL_CACHE_KEY)
+    if (!raw) return null
+    const c = JSON.parse(raw) as { ts: number; data: HistoricalCacheV5 }
+    return c.data || null
+  } catch { return null }
+}
+
+export function cacheHistorical(_data: HistoricalData) {
+  // No-op: loadHistorical()이 직접 캐시를 쓴다 (lastSyncDate 포함).
+  // 호환성 위해 export는 유지.
+}
+
+function writeHistoricalCache(data: HistoricalCacheV5) {
   const approxBytes = data.salesData.length * 200 + data.masterData.length * 100
-  if (approxBytes > 4 * 1024 * 1024) {
+  if (approxBytes > 5 * 1024 * 1024) {
     console.log('[CA] historical too large for cache, skipping localStorage')
     return
   }
   writeSwrCache(HISTORICAL_CACHE_KEY, data)
+}
+
+function ymdShift(ymd: string, deltaDays: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + deltaDays)
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`
+}
+function ymdDaysBetween(a: string, b: string): number {
+  const [ay, am, ad] = a.split('-').map(Number)
+  const [by, bm, bd] = b.split('-').map(Number)
+  return Math.round((Date.UTC(ay, am-1, ad) - Date.UTC(by, bm-1, bd)) / 86400_000)
+}
+
+interface ProductInfo {
+  name: string; option: string; cost: number;
+  season: string; imageUrl: string; category: string; hqStock: number
+}
+
+async function fetchProductsByBarcodes(barcodes: string[]): Promise<Record<string,unknown>[]> {
+  if (barcodes.length === 0) return []
+  const out: Record<string,unknown>[] = []
+  const CHUNK = 200
+  const chunks: string[][] = []
+  for (let i = 0; i < barcodes.length; i += CHUNK) chunks.push(barcodes.slice(i, i + CHUNK))
+
+  const fetchChunk = async (chunk: string[]) => {
+    const inList = chunk.map(b => `"${b}"`).join(',')
+    const tryFetch = async (cols: string) => {
+      const r = await fetch(
+        `${SUPA_URL}/rest/v1/products?select=${cols}&barcode=in.(${encodeURIComponent(inList)})`,
+        { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } }
+      )
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      return await r.json()
+    }
+    try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category,hq_stock') }
+    catch {
+      try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category') }
+      catch { return await tryFetch('barcode,name,option_value,cost') }
+    }
+  }
+
+  // 4 parallel
+  for (let i = 0; i < chunks.length; i += 4) {
+    const batch = chunks.slice(i, i + 4)
+    const results = await Promise.all(batch.map(fetchChunk))
+    results.forEach(arr => { if (Array.isArray(arr)) out.push(...arr) })
+  }
+  return out
+}
+
+function buildBarcodeMapFromProducts(productsRaw: Record<string,unknown>[]): Map<string, ProductInfo> {
+  const m = new Map<string, ProductInfo>()
+  productsRaw.forEach(r => {
+    const bc = String(r['barcode'] || '')
+    if (bc) m.set(bc, {
+      name:     String(r['name'] || bc),
+      option:   String(r['option_value'] || ''),
+      cost:     Number(r['cost'] || 0),
+      season:   String(r['season'] || ''),
+      imageUrl: String(r['image_url'] || ''),
+      category: String(r['category'] || ''),
+      hqStock:  Number(r['hq_stock'] || 0),
+    })
+  })
+  return m
+}
+
+function buildBarcodeMapFromSales(rows: PersistedData['salesData']): Map<string, ProductInfo> {
+  // 캐시된 salesData row에는 productName/cost/season 등이 이미 포함되어 있음 → 재활용
+  const m = new Map<string, ProductInfo>()
+  for (const r of rows) {
+    if (r.barcode && !m.has(r.barcode)) {
+      m.set(r.barcode, {
+        name:     r.productName,
+        option:   r.option || '',
+        cost:     Number(r.cost || 0),
+        season:   r.season || '',
+        imageUrl: r.imageUrl || '',
+        category: r.category || '',
+        hqStock:  0,
+      })
+    }
+  }
+  return m
+}
+
+function processSalesRows(
+  rawRows: Record<string,unknown>[],
+  bcMap: Map<string, ProductInfo>
+): PersistedData['salesData'] {
+  return rawRows.map(r => {
+    const bc = String(r['barcode'] || '')
+    const info = bcMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
+    const qty = Number(r['quantity'] || 0)
+    // VAT 별도: cost를 변환하면 revenue(=cost*qty)도 자동 처리
+    const costExcl = vatExcluded(info.cost)
+    return {
+      date:        String(r['date']),
+      productName: info.name,
+      option:      info.option,
+      barcode:     bc,
+      qty,
+      revenue:     costExcl * qty,
+      isReturn:    false,
+      season:      info.season,
+      imageUrl:    info.imageUrl,
+      category:    info.category,
+      cost:        costExcl,
+    }
+  })
+}
+
+function buildMasterData(salesData: PersistedData['salesData']): PersistedData['masterData'] {
+  const seen = new Set<string>()
+  return salesData.reduce((acc: Record<string,unknown>[], r) => {
+    if (!seen.has(r.productName)) {
+      seen.add(r.productName)
+      acc.push({ 상품명: r.productName, 옵션: r.option, 바코드: r.barcode || '' })
+    }
+    return acc
+  }, [])
 }
 
 export async function loadHistorical(): Promise<HistoricalData | null> {
@@ -228,106 +374,73 @@ export async function loadHistorical(): Promise<HistoricalData | null> {
   try {
     const tStart = Date.now()
     const today = new Date().toISOString().slice(0, 10)
-    const back = new Date()
-    back.setDate(back.getDate() - HISTORICAL_DAYS_BACK)
-    const fromLoad = back.toISOString().slice(0, 10)
+    const ninetyAgo = ymdShift(today, -HISTORICAL_DAYS_BACK)
 
-    // 1) 매출 row 먼저 (메인 페이로드)
+    // 1) 캐시 읽기 (TTL 무시)
+    const cached = readHistoricalRaw()
+    const canIncremental =
+      cached &&
+      Array.isArray(cached.salesData) && cached.salesData.length > 0 &&
+      typeof cached.lastSyncDate === 'string' && cached.lastSyncDate.length === 10 &&
+      ymdDaysBetween(today, cached.lastSyncDate) <= FULL_REFRESH_AFTER_DAYS
+
+    if (canIncremental) {
+      // ── 증분 동기화 경로 ──
+      const fromDate = ymdShift(cached!.lastSyncDate, 1)
+      if (fromDate > today) {
+        // 더 가져올 새 데이터 없음
+        const trimmed = cached!.salesData.filter(r => r.date >= ninetyAgo)
+        console.log(`[CA] historical cache up-to-date (lastSync=${cached!.lastSyncDate}, rows=${trimmed.length})`)
+        return { salesData: trimmed, masterData: buildMasterData(trimmed) }
+      }
+
+      const newRaw = await fetchAllPages(
+        `daily_sales?select=date,barcode,quantity&date=gte.${fromDate}&date=lte.${today}&quantity=gt.0&order=date.asc`
+      )
+      console.log(`[CA] historical incremental ${fromDate}~${today}: ${newRaw.length}행 (${Date.now()-tStart}ms)`)
+
+      // 캐시 row에서 barcode info 재활용 + 새 barcode만 추가 fetch
+      const bcMap = buildBarcodeMapFromSales(cached!.salesData)
+      const newBcs = Array.from(new Set(
+        (newRaw as Record<string,unknown>[]).map(r => String(r['barcode'] || '')).filter(Boolean)
+      ))
+      const missing = newBcs.filter(bc => !bcMap.has(bc))
+      if (missing.length > 0) {
+        const tProd = Date.now()
+        const fetched = await fetchProductsByBarcodes(missing)
+        buildBarcodeMapFromProducts(fetched).forEach((v, k) => bcMap.set(k, v))
+        console.log(`[CA] new products fetched: ${fetched.length} (${Date.now()-tProd}ms)`)
+      }
+
+      const newSales = processSalesRows(newRaw as Record<string,unknown>[], bcMap)
+      const merged = [...cached!.salesData, ...newSales].filter(r => r.date >= ninetyAgo)
+      const masterData = buildMasterData(merged)
+
+      writeHistoricalCache({ salesData: merged, masterData, lastSyncDate: today })
+      console.log(`[CA] ✅ incremental done: +${newSales.length}행, total ${merged.length} (${Date.now()-tStart}ms)`)
+      return { salesData: merged, masterData }
+    }
+
+    // ── Cold load (캐시 없음 or 7일 이상 stale) ──
+    const fromLoad = ninetyAgo
     const salesRaw = await fetchAllPages(
       `daily_sales?select=date,barcode,quantity&date=gte.${fromLoad}&date=lte.${today}&quantity=gt.0&order=date.asc`
     )
-    console.log(`[CA] daily_sales ${salesRaw.length}행 (${Date.now()-tStart}ms)`)
+    console.log(`[CA] historical FULL load: daily_sales ${salesRaw.length}행 (${Date.now()-tStart}ms)`)
 
-    // 2) Lazy products — sales에 등장한 unique barcode만 조회 (33k → 보통 3-5k)
     const usedBarcodes = Array.from(new Set(
       (salesRaw as Record<string,unknown>[]).map(r => String(r['barcode'] || '')).filter(Boolean)
     ))
-    console.log(`[CA] unique barcodes in sales: ${usedBarcodes.length}`)
+    const tProd = Date.now()
+    const productsRaw = await fetchProductsByBarcodes(usedBarcodes)
+    console.log(`[CA] products lazy-load ${productsRaw.length}행 (${Date.now()-tProd}ms)`)
 
-    const productsRaw: Record<string,unknown>[] = []
-    if (usedBarcodes.length > 0) {
-      const tProd = Date.now()
-      // PostgREST URL 길이 한계 회피 — 200개씩 chunk + 병렬
-      const CHUNK = 200
-      const chunks: string[][] = []
-      for (let i = 0; i < usedBarcodes.length; i += CHUNK) {
-        chunks.push(usedBarcodes.slice(i, i + CHUNK))
-      }
-      const fetchProductChunk = async (chunk: string[]) => {
-        const inList = chunk.map(b => `"${b}"`).join(',')
-        const tryFetch = async (selectCols: string) => {
-          const r = await fetch(
-            `${SUPA_URL}/rest/v1/products?select=${selectCols}&barcode=in.(${encodeURIComponent(inList)})`,
-            { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } }
-          )
-          if (!r.ok) throw new Error(`HTTP ${r.status}`)
-          return await r.json()
-        }
-        try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category,hq_stock') }
-        catch {
-          try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category') }
-          catch { return await tryFetch('barcode,name,option_value,cost') }
-        }
-      }
-      // 4개씩 병렬 (네트워크 동시연결 한도 고려)
-      const PARALLEL = 4
-      for (let i = 0; i < chunks.length; i += PARALLEL) {
-        const batch = chunks.slice(i, i + PARALLEL)
-        const results = await Promise.all(batch.map(fetchProductChunk))
-        results.forEach(arr => { if (Array.isArray(arr)) productsRaw.push(...arr) })
-      }
-      console.log(`[CA] products lazy-load ${productsRaw.length}행 (${Date.now()-tProd}ms)`)
-    }
+    const bcMap = buildBarcodeMapFromProducts(productsRaw)
+    const salesData = processSalesRows(salesRaw as Record<string,unknown>[], bcMap)
+    const masterData = buildMasterData(salesData)
 
-    interface ProductInfo {
-      name: string; option: string; cost: number;
-      season: string; imageUrl: string; category: string; hqStock: number
-    }
-    const barcodeMap = new Map<string, ProductInfo>()
-    productsRaw.forEach(r => {
-      const bc = String(r['barcode'] || '')
-      if (bc) barcodeMap.set(bc, {
-        name:     String(r['name'] || bc),
-        option:   String(r['option_value'] || ''),
-        cost:     Number(r['cost'] || 0),
-        season:   String(r['season'] || ''),
-        imageUrl: String(r['image_url'] || ''),
-        category: String(r['category'] || ''),
-        hqStock:  Number(r['hq_stock'] || 0),
-      })
-    })
-
-    const salesData = (salesRaw as Record<string,unknown>[]).map(r => {
-      const bc   = String(r['barcode'] || '')
-      const info = barcodeMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
-      const qty  = Number(r['quantity'] || 0)
-      // VAT 별도: cost(매입가)를 변환하면 revenue(=cost*qty)도 자동 별도 처리됨
-      const costExcl = vatExcluded(info.cost)
-      return {
-        date:        String(r['date']),
-        productName: info.name,
-        option:      info.option,
-        barcode:     bc,
-        qty,
-        revenue:     costExcl * qty,
-        isReturn:    false,
-        season:      info.season,
-        imageUrl:    info.imageUrl,
-        category:    info.category,
-        cost:        costExcl,
-      }
-    })
-
-    const seen = new Set<string>()
-    const masterData = salesData.reduce((acc: Record<string,unknown>[], r) => {
-      if (!seen.has(r.productName)) {
-        seen.add(r.productName)
-        acc.push({ 상품명: r.productName, 옵션: r.option, 바코드: r.barcode || '' })
-      }
-      return acc
-    }, [])
-
-    console.log('[CA] 📦 Historical 로드 완료:', { salesYTD: salesData.length, products: productsRaw.length })
+    writeHistoricalCache({ salesData, masterData, lastSyncDate: today })
+    console.log(`[CA] ✅ FULL load done: ${salesData.length}행 (${Date.now()-tStart}ms)`)
     return { salesData, masterData }
   } catch (e) {
     console.warn('[storage] loadHistorical error:', e)
