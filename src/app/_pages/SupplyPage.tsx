@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 import { vatExcluded } from '@/lib/vatUtils'
 
@@ -267,7 +267,8 @@ export default function SupplyPage() {
   const kpiCum    = useMemo(() => calcKpi(filteredAll.filter(r => toD(r.입고예정일) >= '2026-01-01')), [filteredAll])
   const kpiMoving = useMemo(() => calcKpi(filteredAll.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)), [filteredAll])
 
-  // 차트 — chartFrom~chartTo 필터
+  // 차트 — chartFrom~chartTo 필터.
+  // 발주는 이산적 이벤트라 막대로 표시. 공급률(확정/발주)은 선으로 overlay.
   const chartData = useMemo(() => {
     const byDate: Record<string, { ord: number; qty: number; rec: number }> = {}
     filtered.filter(r => { const d=toD(r.입고예정일); return d>=chartFrom&&d<=chartTo }).forEach(r => {
@@ -277,8 +278,18 @@ export default function SupplyPage() {
       byDate[d].qty += toN(r.확정수량)
       byDate[d].rec += toN(r.입고수량)
     })
+    const todayStr = new Date().toISOString().slice(0,10)
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
-      .map(([date, v]) => ({ date: date.slice(5), ...v }))
+      .map(([date, v]) => {
+        const isPast = date <= todayStr
+        const confirmRate = v.ord > 0 ? Math.round((v.qty / v.ord) * 100) : null
+        const fulfillRate = isPast && v.qty > 0 ? Math.round((v.rec / v.qty) * 100) : null
+        return {
+          date: date.slice(5),
+          ord: v.ord, qty: v.qty, rec: v.rec,
+          confirmRate, fulfillRate,
+        }
+      })
   }, [filtered, chartFrom, chartTo])
 
   // 공급 현황 테이블 — tableFrom~tableTo 필터, 입고예정일 내림차순
@@ -388,20 +399,30 @@ export default function SupplyPage() {
         </div>
         <div className="cb">
           {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={chartData} margin={{ top:8, right:20, left:0, bottom:5 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <ComposedChart data={chartData} margin={{ top:8, right:20, left:0, bottom:5 }} barCategoryGap="20%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
                 <XAxis dataKey="date" tick={{ fontSize:10 }} interval="preserveStartEnd"/>
-                <YAxis tick={{ fontSize:10 }} width={45}/>
-                <Tooltip formatter={(val:number, name:string) => [fmt(val)+'개', name]} labelFormatter={l=>`날짜: ${l}`}/>
+                <YAxis yAxisId="left" tick={{ fontSize:10 }} width={45}/>
+                <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize:10, fill:'#94a3b8' }} width={36} unit="%"/>
+                <Tooltip
+                  formatter={(val:number, name:string) => {
+                    if (name === '공급률' || name === '입고율') return [val == null ? '-' : `${val}%`, name]
+                    return [fmt(val) + '개', name]
+                  }}
+                  labelFormatter={l => `날짜: ${l}`}
+                />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:11 }}/>
-                <Line type="monotone" dataKey="ord" name="발주수량" stroke="#3B82F6" strokeWidth={2} dot={false}/>
-                <Line type="monotone" dataKey="qty" name="확정수량" stroke="#A855F7" strokeWidth={2.5} dot={false}/>
-                <Line type="monotone" dataKey="rec" name="입고수량" stroke="#10B981" strokeWidth={2} dot={false} strokeDasharray="4 2"/>
-              </LineChart>
+                {/* 발주/확정/입고: 그룹 막대 (이산적 이벤트라 추세선보다 막대가 적합) */}
+                <Bar yAxisId="left" dataKey="ord" name="발주수량" fill="#93C5FD" radius={[3,3,0,0]}/>
+                <Bar yAxisId="left" dataKey="qty" name="확정수량" fill="#A855F7" radius={[3,3,0,0]}/>
+                <Bar yAxisId="left" dataKey="rec" name="입고수량" fill="#10B981" radius={[3,3,0,0]}/>
+                {/* 공급률(확정/발주) — 우측 축, % 단위 */}
+                <Line yAxisId="right" type="monotone" dataKey="confirmRate" name="공급률" stroke="#f59e0b" strokeWidth={1.5} dot={{ r:2 }} connectNulls={false}/>
+              </ComposedChart>
             </ResponsiveContainer>
           ) : (
-            <div className="empty-st" style={{ height:260 }}><div className="es-ico">📈</div><div className="es-t">{loading?'로딩 중...':'데이터 없음'}</div></div>
+            <div className="empty-st" style={{ height:280 }}><div className="es-ico">📊</div><div className="es-t">{loading?'로딩 중...':'데이터 없음'}</div></div>
           )}
         </div>
       </div>
