@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine } from 'recharts'
 
 type VolRow = {
   keyword: string
@@ -255,6 +255,13 @@ export default function KeywordVolumeChart() {
                     connectNulls={false}
                   />
                 ))}
+                {(() => {
+                  const t = new Date()
+                  const md = `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+                  return chartData.some(d => d.date === md)
+                    ? <ReferenceLine x={md} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value:'오늘', position:'top', fontSize:10, fill:'#dc2626', fontWeight:700 }}/>
+                    : null
+                })()}
               </LineChart>
             </ResponsiveContainer>
           )}

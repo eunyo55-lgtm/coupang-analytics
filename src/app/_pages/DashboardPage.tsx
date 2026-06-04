@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
 import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
@@ -591,6 +591,12 @@ export default function DashboardPage() {
                 <Line type="monotone" dataKey="26년" stroke="#1D4ED8" strokeWidth={2.5} dot={false}/>
                 <Line type="monotone" dataKey="25년" stroke="#7C3AED" strokeWidth={1.5} dot={false} strokeDasharray="5 3"/>
                 <Line type="monotone" dataKey="24년" stroke="#065F46" strokeWidth={1.5} dot={false} strokeDasharray="2 2"/>
+                {(() => {
+                  const t = new Date()
+                  const todayMD = `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+                  const exists = yoyChartData.some(d => d.date === todayMD)
+                  return exists ? <ReferenceLine x={todayMD} stroke="#f59e0b" strokeDasharray="4 3" label={{ value:'오늘', position:'top', fontSize:10, fill:'#f59e0b', fontWeight:700 }}/> : null
+                })()}
               </LineChart>
             </ResponsiveContainer>
           ):<div className="empty-st" style={{height:300}}><div className="es-ico">📈</div><div className="es-t">데이터 로딩 중...</div></div>}

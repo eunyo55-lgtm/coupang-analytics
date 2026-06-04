@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { vatExcluded } from '@/lib/vatUtils'
 import {
   ComposedChart, LineChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, Legend,
+  CartesianGrid, Legend, ReferenceLine,
 } from 'recharts'
 
 interface Props {
@@ -189,6 +189,13 @@ export default function AdPerformanceCharts({ dateFrom, dateTo }: Props) {
                 <Bar yAxisId="left" dataKey="전체매출" fill="#bfdbfe" />
                 <Bar yAxisId="left" dataKey="광고매출" fill="#2563eb" />
                 <Line yAxisId="right" type="monotone" dataKey="광고비" stroke="#ef4444" strokeWidth={2} dot={false} />
+                {(() => {
+                  const t = new Date()
+                  const md = `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+                  return dailyChartData.some(d => d.date === md)
+                    ? <ReferenceLine yAxisId="left" x={md} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value:'오늘', position:'top', fontSize:10, fill:'#dc2626', fontWeight:700 }}/>
+                    : null
+                })()}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -221,6 +228,17 @@ export default function AdPerformanceCharts({ dateFrom, dateTo }: Props) {
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey="광고매출" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="광고비" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
+                  {(() => {
+                    // 이번 주(월요일 시작) 라벨
+                    const t = new Date()
+                    const dow = t.getDay()
+                    const monOffset = dow === 0 ? -6 : 1 - dow
+                    const mon = new Date(t); mon.setDate(t.getDate() + monOffset)
+                    const md = `${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`
+                    return weeklyChartData.some(d => d.week === md)
+                      ? <ReferenceLine x={md} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value:'이번 주', position:'top', fontSize:10, fill:'#dc2626', fontWeight:700 }}/>
+                      : null
+                  })()}
                 </LineChart>
               </ResponsiveContainer>
             </div>

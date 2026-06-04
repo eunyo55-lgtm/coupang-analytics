@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea } from 'recharts'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 import { vatExcluded } from '@/lib/vatUtils'
 
@@ -429,6 +429,26 @@ export default function SupplyPage() {
                 <Bar yAxisId="left" dataKey="recAmt" name="입고금액" fill="#10B981" radius={[3,3,0,0]}/>
                 {/* 공급률(확정/발주, 금액 기준) — 우측 축, % */}
                 <Line yAxisId="right" type="monotone" dataKey="confirmRate" name="공급률" stroke="#f59e0b" strokeWidth={1.5} dot={{ r:2 }} connectNulls={false}/>
+                {(() => {
+                  const t = new Date()
+                  const todayMD = `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+                  // 이번 주 (월~일) 범위
+                  const dow = t.getDay()
+                  const monOffset = dow === 0 ? -6 : 1 - dow
+                  const mon = new Date(t); mon.setDate(t.getDate() + monOffset)
+                  const sun = new Date(mon); sun.setDate(mon.getDate() + 6)
+                  const monMD = `${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`
+                  const sunMD = `${String(sun.getMonth()+1).padStart(2,'0')}-${String(sun.getDate()).padStart(2,'0')}`
+                  const dataDates = chartData.map(d => d.date)
+                  const weekShown = dataDates.some(d => d >= monMD && d <= sunMD)
+                  const todayShown = dataDates.includes(todayMD)
+                  return (
+                    <>
+                      {weekShown && <ReferenceArea yAxisId="left" x1={monMD} x2={sunMD} fill="#fde68a" fillOpacity={0.15} ifOverflow="hidden"/>}
+                      {todayShown && <ReferenceLine yAxisId="left" x={todayMD} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value:'오늘', position:'top', fontSize:10, fill:'#dc2626', fontWeight:700 }}/>}
+                    </>
+                  )
+                })()}
               </ComposedChart>
             </ResponsiveContainer>
           ) : (
