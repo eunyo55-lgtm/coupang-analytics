@@ -268,26 +268,26 @@ export default function SupplyPage() {
   const kpiMoving = useMemo(() => calcKpi(filteredAll.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)), [filteredAll])
 
   // 차트 — chartFrom~chartTo 필터.
-  // 발주는 이산적 이벤트라 막대로 표시. 공급률(확정/발주)은 선으로 overlay.
+  // 막대는 금액(원) 기준 (qty × 매입가). 공급률은 금액 비율로 계산.
   const chartData = useMemo(() => {
-    const byDate: Record<string, { ord: number; qty: number; rec: number }> = {}
+    const byDate: Record<string, { ordAmt: number; qtyAmt: number; recAmt: number }> = {}
     filtered.filter(r => { const d=toD(r.입고예정일); return d>=chartFrom&&d<=chartTo }).forEach(r => {
       const d = toD(r.입고예정일)
-      if (!byDate[d]) byDate[d] = { ord: 0, qty: 0, rec: 0 }
-      byDate[d].ord += toN(r.발주수량)
-      byDate[d].qty += toN(r.확정수량)
-      byDate[d].rec += toN(r.입고수량)
+      const mp = toN(r.매입가)  // 이미 VAT 별도 적용된 값
+      if (!byDate[d]) byDate[d] = { ordAmt: 0, qtyAmt: 0, recAmt: 0 }
+      byDate[d].ordAmt += toN(r.발주수량) * mp
+      byDate[d].qtyAmt += toN(r.확정수량) * mp
+      byDate[d].recAmt += toN(r.입고수량) * mp
     })
-    const todayStr = new Date().toISOString().slice(0,10)
     return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
       .map(([date, v]) => {
-        const isPast = date <= todayStr
-        const confirmRate = v.ord > 0 ? Math.round((v.qty / v.ord) * 100) : null
-        const fulfillRate = isPast && v.qty > 0 ? Math.round((v.rec / v.qty) * 100) : null
+        const confirmRate = v.ordAmt > 0 ? Math.round((v.qtyAmt / v.ordAmt) * 100) : null
         return {
           date: date.slice(5),
-          ord: v.ord, qty: v.qty, rec: v.rec,
-          confirmRate, fulfillRate,
+          ordAmt: Math.round(v.ordAmt),
+          qtyAmt: Math.round(v.qtyAmt),
+          recAmt: Math.round(v.recAmt),
+          confirmRate,
         }
       })
   }, [filtered, chartFrom, chartTo])
@@ -386,8 +386,8 @@ export default function SupplyPage() {
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📈</div><div>
-            <div className="ch-title">발주 · 확정 · 입고 비교</div>
-            <div className="ch-sub">입고예정일 기준 수량 추이</div>
+            <div className="ch-title">발주 · 확정 · 입고 금액 비교</div>
+            <div className="ch-sub">입고예정일 기준 · 매입가 × 수량 (VAT 별도)</div>
           </div></div>
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <input type="date" value={chartFrom} onChange={e => setChartFrom(e.target.value)}
@@ -403,21 +403,31 @@ export default function SupplyPage() {
               <ComposedChart data={chartData} margin={{ top:8, right:20, left:0, bottom:5 }} barCategoryGap="20%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
                 <XAxis dataKey="date" tick={{ fontSize:10 }} interval="preserveStartEnd"/>
-                <YAxis yAxisId="left" tick={{ fontSize:10 }} width={45}/>
+                <YAxis
+                  yAxisId="left"
+                  tick={{ fontSize:10 }}
+                  width={56}
+                  tickFormatter={(v:number) => {
+                    if (v >= 100_000_000) return `${(v/100_000_000).toFixed(1)}억`
+                    if (v >= 10_000_000) return `${Math.round(v/1_000_000)}백만`
+                    if (v >= 10_000) return `${Math.round(v/10_000)}만`
+                    return String(v)
+                  }}
+                />
                 <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize:10, fill:'#94a3b8' }} width={36} unit="%"/>
                 <Tooltip
                   formatter={(val:number, name:string) => {
-                    if (name === '공급률' || name === '입고율') return [val == null ? '-' : `${val}%`, name]
-                    return [fmt(val) + '개', name]
+                    if (name === '공급률') return [val == null ? '-' : `${val}%`, name]
+                    return [fmt(val) + '원', name]
                   }}
                   labelFormatter={l => `날짜: ${l}`}
                 />
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:11 }}/>
-                {/* 발주/확정/입고: 그룹 막대 (이산적 이벤트라 추세선보다 막대가 적합) */}
-                <Bar yAxisId="left" dataKey="ord" name="발주수량" fill="#93C5FD" radius={[3,3,0,0]}/>
-                <Bar yAxisId="left" dataKey="qty" name="확정수량" fill="#A855F7" radius={[3,3,0,0]}/>
-                <Bar yAxisId="left" dataKey="rec" name="입고수량" fill="#10B981" radius={[3,3,0,0]}/>
-                {/* 공급률(확정/발주) — 우측 축, % 단위 */}
+                {/* 발주/확정/입고 금액 (qty × 매입가, VAT 별도): 그룹 막대 */}
+                <Bar yAxisId="left" dataKey="ordAmt" name="발주금액" fill="#93C5FD" radius={[3,3,0,0]}/>
+                <Bar yAxisId="left" dataKey="qtyAmt" name="확정금액" fill="#A855F7" radius={[3,3,0,0]}/>
+                <Bar yAxisId="left" dataKey="recAmt" name="입고금액" fill="#10B981" radius={[3,3,0,0]}/>
+                {/* 공급률(확정/발주, 금액 기준) — 우측 축, % */}
                 <Line yAxisId="right" type="monotone" dataKey="confirmRate" name="공급률" stroke="#f59e0b" strokeWidth={1.5} dot={{ r:2 }} connectNulls={false}/>
               </ComposedChart>
             </ResponsiveContainer>
