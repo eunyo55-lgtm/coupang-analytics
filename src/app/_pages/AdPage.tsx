@@ -30,7 +30,7 @@ export default function AdPage() {
 
   useEffect(() => { loadCsvDaily() }, [])
 
-  async function loadCsvDaily() {
+  async function loadCsvDaily(opts: { applyRange?: boolean } = {}) {
     if (!supabase) return
     try {
       // 1차: orders_14d 포함 (CPA 계산용)
@@ -55,7 +55,23 @@ export default function AdPage() {
         revenue_14d: vatExcluded(r.revenue_14d),
         revenue_1d: vatExcluded(r.revenue_1d),
       }))
-      setCsvDailyAll(xform((data as AdDaily[]) || []))
+      const transformed = xform((data as AdDaily[]) || [])
+      setCsvDailyAll(transformed)
+
+      // 업로드 직후 자동 dateRange 적용 — 업로드한 데이터를 즉시 화면에서 보이게
+      if (opts.applyRange && transformed.length > 0) {
+        const min = transformed[0].date
+        const max = transformed[transformed.length - 1].date
+        dispatch({
+          type: 'SET_DATE_RANGE',
+          payload: {
+            from:  new Date(min + 'T00:00:00'),
+            to:    new Date(max + 'T00:00:00'),
+            label: `광고 데이터 ${min} ~ ${max}`,
+            preset:'custom',
+          },
+        })
+      }
     } catch (e) { console.warn('[AdPage] csv daily load:', e) }
   }
 
@@ -83,8 +99,8 @@ export default function AdPage() {
 
   return (
     <div>
-      {/* 광고 리포트 CSV 업로드 */}
-      <CoupangAdUpload onComplete={loadCsvDaily} />
+      {/* 광고 리포트 CSV 업로드 — 업로드 후 dateRange 자동 적용 */}
+      <CoupangAdUpload onComplete={() => loadCsvDaily({ applyRange: true })} />
 
       {/* dateRange 외부에 광고 데이터가 있으면 안내 */}
       {csvDailyAll.length > 0 && csvDaily.length === 0 && (
