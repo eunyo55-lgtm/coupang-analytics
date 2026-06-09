@@ -92,6 +92,7 @@ export default function SupplyPage() {
 
   const [rows, setRows] = useState<SupplyRow[]>(_cachedAllRows.length ? _cachedRows[`${getOneMonthAgo()}-${getOneMonthLater()}`] || [] : [])
   const [allRows, setAllRows] = useState<SupplyRow[]>(_cachedAllRows)
+  const [prevYearRows, setPrevYearRows] = useState<SupplyRow[]>([])
   const [prodMap, setProdMap] = useState<Record<string,{name:string;image_url:string}>>(_cachedProdMap)
   const [loading, setLoading] = useState(!_cacheLoaded)
 
@@ -180,6 +181,40 @@ export default function SupplyPage() {
     }
     loadAll()
   }, [])
+
+  // ── 전년도 동일 기간 데이터 (입고액 YoY 비교용) ──
+  useEffect(() => {
+    if (!chartFrom || !chartTo) return
+    const prevFrom = chartFrom.replace(/^\d{4}/, m => String(+m - 1))
+    const prevTo   = chartTo.replace(/^\d{4}/, m => String(+m - 1))
+    if (!prevFrom || !prevTo) return
+    let cancelled = false
+    async function loadPrev() {
+      const h = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
+      try {
+        let all: SupplyRow[] = [], offset = 0
+        while (true) {
+          const r = await fetch(
+            `${SUPA_URL}/rest/v1/supply_status?select=입고예정일,입고수량,매입가,SKU Barcode&입고예정일=gte.${prevFrom}&입고예정일=lte.${prevTo}&order=입고예정일.asc&limit=1000&offset=${offset}`,
+            { headers: h }
+          )
+          if (cancelled) return
+          const page: SupplyRow[] = await r.json()
+          if (!Array.isArray(page) || page.length === 0) break
+          all = all.concat(page.map(r => ({
+            ...r,
+            'SKU 이름': '', 발주수량: 0, 확정수량: 0,
+            입고수량: toN(r.입고수량), 매입가: vatExcluded(toN(r.매입가)),
+          })))
+          if (page.length < 1000) break
+          offset += 1000
+        }
+        if (!cancelled) setPrevYearRows(all)
+      } catch (e) { console.warn('[supply prev year]', e) }
+    }
+    loadPrev()
+    return () => { cancelled = true }
+  }, [chartFrom, chartTo])
 
   // ── 날짜 필터 기간 데이터 로드 — stale-while-revalidate ──
   useEffect(() => {
@@ -291,6 +326,32 @@ export default function SupplyPage() {
         }
       })
   }, [filtered, chartFrom, chartTo])
+
+  // 전년도 동일 기간 입고액 비교 — MM-DD 기준 매칭
+  const yoyChartData = useMemo(() => {
+    const cur: Record<string, number> = {}
+    const prev: Record<string, number> = {}
+    filtered.filter(r => { const d=toD(r.입고예정일); return d>=chartFrom && d<=chartTo }).forEach(r => {
+      const d = toD(r.입고예정일); if (!d) return
+      const md = d.slice(5)
+      cur[md] = (cur[md] || 0) + toN(r.입고수량) * toN(r.매입가)
+    })
+    prevYearRows.forEach(r => {
+      const d = toD(r.입고예정일); if (!d) return
+      const md = d.slice(5)
+      prev[md] = (prev[md] || 0) + toN(r.입고수량) * toN(r.매입가)
+    })
+    const allMDs = new Set([...Object.keys(cur), ...Object.keys(prev)])
+    const yearNow = new Date().getFullYear()
+    return Array.from(allMDs).sort().map(md => ({
+      date: md,
+      [`${yearNow}년`]: Math.round(cur[md] || 0),
+      [`${yearNow - 1}년`]: Math.round(prev[md] || 0),
+    }))
+  }, [filtered, chartFrom, chartTo, prevYearRows])
+
+  const yearNow = new Date().getFullYear()
+  const yearPrev = yearNow - 1
 
   // 주간 집계 — 일별 데이터를 월요일 시작 주차로 묶음
   const weeklyChartData = useMemo(() => {
@@ -491,6 +552,50 @@ export default function SupplyPage() {
           )}
         </div>
       </div>
+
+      {/* 전년도 입고액 비교 — 같은 MM-DD 기준 */}
+      {yoyChartData.some(d => (d as any)[`${yearPrev}년`] > 0) && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="ch">
+            <div className="ch-l"><div className="ch-ico">📈</div><div>
+              <div className="ch-title">전년도 입고액 비교</div>
+              <div className="ch-sub">{yearNow}년 vs {yearPrev}년 · 같은 MM-DD 매칭 (VAT 별도)</div>
+            </div></div>
+          </div>
+          <div className="cb">
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={yoyChartData} margin={{ top:8, right:20, left:0, bottom:5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                <XAxis dataKey="date" tick={{ fontSize:10 }} interval="preserveStartEnd"/>
+                <YAxis
+                  tick={{ fontSize:10 }}
+                  width={56}
+                  tickFormatter={(v:number) => {
+                    if (v >= 100_000_000) return `${(v/100_000_000).toFixed(1)}억`
+                    if (v >= 10_000_000) return `${Math.round(v/1_000_000)}백만`
+                    if (v >= 10_000) return `${Math.round(v/10_000)}만`
+                    return String(v)
+                  }}
+                />
+                <Tooltip
+                  formatter={(val:number, name:string) => [fmt(val) + '원', name]}
+                  labelFormatter={l => `날짜(월일): ${l}`}
+                />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:11 }}/>
+                <Line type="monotone" dataKey={`${yearNow}년`} stroke="#10B981" strokeWidth={2.5} dot={false} connectNulls={false}/>
+                <Line type="monotone" dataKey={`${yearPrev}년`} stroke="#94a3b8" strokeWidth={2} dot={false} strokeDasharray="5 3" connectNulls={false}/>
+                {(() => {
+                  const t = new Date()
+                  const md = `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+                  return yoyChartData.some(d => d.date === md)
+                    ? <ReferenceLine x={md} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value:'오늘', position:'top', fontSize:10, fill:'#dc2626', fontWeight:700 }}/>
+                    : null
+                })()}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* 주간 집계 차트 — 일별을 월요일 시작 주차로 묶음 */}
       {weeklyChartData.length >= 2 && (
