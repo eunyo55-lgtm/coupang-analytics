@@ -104,6 +104,9 @@ export default function RankingPage() {
 
   /* 키워드 추가 폼 */
   const [newCategory, setNewCategory] = useState('')
+  // UI collapse 상태 — 차트 영역 더 확보 위해 추가/검색 카드 기본 접힘
+  const [addPanelOpen, setAddPanelOpen] = useState(false)
+  const [naverPanelOpen, setNaverPanelOpen] = useState(false)
   const [newKeyword, setNewKeyword] = useState('')
   const [newCoupangId, setNewCoupangId] = useState('')
   const [newBarcode, setNewBarcode] = useState('')
@@ -576,47 +579,21 @@ export default function RankingPage() {
     <div>
       {/* 봇 트리거 패널 (회사 PC의 runner.js와 연동) */}
       <RankingBotTrigger />
-      {/* KPI Row */}
-      <div className="krow">
-        <div className="kpi kc-bl">
-          <div className="kpi-top"><div className="kpi-ico">🔑</div></div>
-          <div className="kpi-lbl">등록 키워드</div>
-          <div className="kpi-val">{keywords.length}</div>
-          <div className="kpi-foot">추적 중</div>
-        </div>
-        <div className="kpi kc-am">
-          <div className="kpi-top"><div className="kpi-ico">🥇</div></div>
-          <div className="kpi-lbl">1~10위 랭킹</div>
-          <div className="kpi-val">{kpiData.top10}</div>
-          <div className="kpi-foot">{kpiData.targetDate || '측정 없음'} 기준</div>
-        </div>
-        <div className="kpi kc-gr">
-          <div className="kpi-top"><div className="kpi-ico">📍</div></div>
-          <div className="kpi-lbl">11~27위 랭킹</div>
-          <div className="kpi-val">{kpiData.mid}</div>
-          <div className="kpi-foot">{kpiData.targetDate || '측정 없음'} 기준</div>
-        </div>
-        <div className="kpi kc-pu">
-          <div className="kpi-top"><div className="kpi-ico">📊</div></div>
-          <div className="kpi-lbl">28~54위 랭킹</div>
-          <div className="kpi-val">{kpiData.low}</div>
-          <div className="kpi-foot">{kpiData.targetDate || '측정 없음'} 기준</div>
-        </div>
-      </div>
 
-      {/* 키워드 추가 + 네이버 조회 (2열) */}
+      {/* 키워드 추가 + 네이버 조회 — 기본 접힘 (제목 클릭으로 펼침) */}
       <div className="g2">
         {/* 키워드 추가 카드 */}
         <div className="card">
-          <div className="ch">
+          <div className="ch" style={{ cursor: 'pointer' }} onClick={() => setAddPanelOpen(o => !o)}>
             <div className="ch-l">
               <div className="ch-ico">➕</div>
               <div>
-                <div className="ch-title">키워드 추가</div>
-                <div className="ch-sub">추적할 키워드 & 연결상품 등록</div>
+                <div className="ch-title">키워드 추가 <span style={{ fontSize: 10, color: 'var(--t3)' }}>{addPanelOpen ? '▼' : '▶'}</span></div>
+                <div className="ch-sub">{addPanelOpen ? '추적할 키워드 & 연결상품 등록' : `현재 ${keywords.length}개 추적 중 · 클릭하여 추가`}</div>
               </div>
             </div>
           </div>
+          {addPanelOpen && (
           <div className="cb">
             <form onSubmit={handleAddKeyword}>
               <div className="fgrid" style={{ marginBottom: 10 }}>
@@ -700,19 +677,21 @@ export default function RankingPage() {
               </button>
             </form>
           </div>
+          )}
         </div>
 
         {/* 네이버 검색량 카드 */}
         <div className="card">
-          <div className="ch">
+          <div className="ch" style={{ cursor: 'pointer' }} onClick={() => setNaverPanelOpen(o => !o)}>
             <div className="ch-l">
               <div className="ch-ico">🔎</div>
               <div>
-                <div className="ch-title">네이버 키워드 검색량</div>
-                <div className="ch-sub">네이버 검색광고 API 조회</div>
+                <div className="ch-title">네이버 키워드 검색량 <span style={{ fontSize: 10, color: 'var(--t3)' }}>{naverPanelOpen ? '▼' : '▶'}</span></div>
+                <div className="ch-sub">{naverPanelOpen ? '네이버 검색광고 API 조회' : '클릭하여 키워드 검색량 조회'}</div>
               </div>
             </div>
           </div>
+          {naverPanelOpen && (
           <div className="cb">
             <div className="frow">
               <input
@@ -852,6 +831,7 @@ export default function RankingPage() {
               </table>
             </div>
           </div>
+          )}
         </div>
       </div>
 

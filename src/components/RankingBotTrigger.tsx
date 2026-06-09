@@ -75,6 +75,29 @@ export default function RankingBotTrigger() {
     }
   }
 
+  // 두 봇을 한 번에 트리거 (이미 진행 중인 건 스킵)
+  async function triggerAll() {
+    setErrorMsg(null)
+    const types: JobType[] = ['coupang_rank', 'naver_volume']
+    for (const t of types) {
+      if (activeByType(t)) continue  // 이미 pending/running이면 스킵
+      setBusyType(t)
+      try {
+        const res = await fetch('/api/trigger-ranking-bot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ triggered_by: 'web', job_type: t }),
+        })
+        const j = await res.json()
+        if (!res.ok && res.status !== 409) throw new Error(j?.error || '요청 실패')
+      } catch (e: any) {
+        setErrorMsg(e?.message ?? String(e))
+      }
+    }
+    setBusyType(null)
+    await loadJobs()
+  }
+
   async function cancelJob(id: string) {
     if (!confirm('이 작업을 취소하시겠습니까? (로컬 봇이 안 켜져 있으면 큐를 비우는 데 유용합니다.)')) return
     try {
@@ -166,6 +189,13 @@ export default function RankingBotTrigger() {
     )
   }
 
+  // 통합 상태: 둘 중 하나라도 진행 중이면 active
+  const anyActive = activeByType('coupang_rank') || activeByType('naver_volume')
+  const anyBusy = busyType !== null
+  const anyOffline = jobs.some(isLikelyOffline)
+  const latestCoupang = latestByType('coupang_rank')
+  const latestNaver = latestByType('naver_volume')
+
   return (
     <div
       style={{
@@ -175,21 +205,58 @@ export default function RankingBotTrigger() {
         padding: '8px 14px', marginBottom: 12,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>🤖 데이터 수집</span>
-        {renderCompactButton('coupang_rank')}
-        {renderCompactButton('naver_volume')}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <button
+          onClick={triggerAll}
+          disabled={anyBusy || anyActive}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '7px 16px', borderRadius: 999, border: 'none',
+            background: anyBusy || anyActive ? '#cbd5e1' : '#2563eb',
+            color: 'white', fontSize: 13, fontWeight: 700,
+            cursor: anyBusy || anyActive ? 'not-allowed' : 'pointer',
+          }}
+        >
+          🤖 데이터 수집 {anyBusy ? '· 요청 중…' : anyActive ? '· 진행 중…' : ''}
+        </button>
+        {(latestCoupang || latestNaver) && (
+          <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#64748b' }}>
+            {latestCoupang && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: STATUS_COLOR[latestCoupang.status] }} />
+                🛒 {STATUS_LABEL[latestCoupang.status]} {fmtKST(latestCoupang.finished_at || latestCoupang.started_at || latestCoupang.created_at)}
+              </span>
+            )}
+            {latestNaver && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: STATUS_COLOR[latestNaver.status] }} />
+                🔍 {STATUS_LABEL[latestNaver.status]} {fmtKST(latestNaver.finished_at || latestNaver.started_at || latestNaver.created_at)}
+              </span>
+            )}
+          </div>
+        )}
+        {anyOffline && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b',
+            fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          }}>
+            🔌 봇 오프라인
+            <button
+              onClick={async () => {
+                try {
+                  await fetch('/api/trigger-ranking-bot', { method: 'DELETE' })
+                  await loadJobs()
+                } catch {}
+              }}
+              style={{
+                background: '#991b1b', color: 'white', border: 'none', borderRadius: 4,
+                padding: '1px 6px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+              }}
+            >대기 취소</button>
+          </span>
+        )}
       </div>
-      {jobs.some(isLikelyOffline) && (
-        <div style={{
-          width: '100%', marginTop: 4, padding: '8px 12px',
-          background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6,
-          fontSize: 11, color: '#991b1b', lineHeight: 1.55,
-        }}>
-          ⚠️ <b>로컬 봇이 응답하지 않습니다.</b> 회사 PC에서 <code>C:\Users\onlin\Desktop\Sales\scraper\start_runner.bat</code>을 실행하세요.
-          정상 작동하면 클릭 후 15~30초 안에 "실행 중"으로 바뀝니다.
-        </div>
-      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {errorMsg && (
           <span style={{ fontSize: 11, color: '#ef4444' }}>{errorMsg.slice(0, 80)}</span>

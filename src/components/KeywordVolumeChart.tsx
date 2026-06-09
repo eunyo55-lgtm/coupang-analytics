@@ -221,7 +221,7 @@ export default function KeywordVolumeChart() {
         </div>
 
         {/* 차트 */}
-        <div style={{ width: '100%', height: 320 }}>
+        <div style={{ width: '100%', height: 440 }}>
           {visibleKws.length === 0 ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#94a3b8', fontSize: 13 }}>
               아래 키워드 목록에서 선택하거나 &quot;상위 N&quot; 버튼을 눌러주세요.
