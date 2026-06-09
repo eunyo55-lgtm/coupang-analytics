@@ -292,6 +292,41 @@ export default function SupplyPage() {
       })
   }, [filtered, chartFrom, chartTo])
 
+  // 주간 집계 — 일별 데이터를 월요일 시작 주차로 묶음
+  const weeklyChartData = useMemo(() => {
+    const buckets: Record<string, { ordAmt: number; qtyAmt: number; recAmt: number; weekStart: string }> = {}
+    filtered.filter(r => { const d=toD(r.입고예정일); return d>=chartFrom && d<=chartTo }).forEach(r => {
+      const d = toD(r.입고예정일)
+      if (!d) return
+      const [y, m, dd] = d.split('-').map(Number)
+      const dt = new Date(y, m - 1, dd)
+      const dow = dt.getDay()  // 0=일, 1=월
+      const monOffset = dow === 0 ? -6 : 1 - dow
+      const mon = new Date(dt); mon.setDate(dt.getDate() + monOffset)
+      const wk = `${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`
+      const mp = toN(r.매입가)
+      if (!buckets[wk]) buckets[wk] = { ordAmt: 0, qtyAmt: 0, recAmt: 0, weekStart: wk }
+      buckets[wk].ordAmt += toN(r.발주수량) * mp
+      buckets[wk].qtyAmt += toN(r.확정수량) * mp
+      buckets[wk].recAmt += toN(r.입고수량) * mp
+    })
+    return Object.values(buckets)
+      .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+      .map(v => {
+        const confirmRate = v.ordAmt > 0 ? Math.round((v.qtyAmt / v.ordAmt) * 100) : null
+        const fulfillRate = v.qtyAmt > 0 ? Math.round((v.recAmt / v.qtyAmt) * 100) : null
+        return {
+          week: v.weekStart.slice(5),  // MM-DD 형식
+          weekFull: v.weekStart,
+          ordAmt: Math.round(v.ordAmt),
+          qtyAmt: Math.round(v.qtyAmt),
+          recAmt: Math.round(v.recAmt),
+          confirmRate,
+          fulfillRate,
+        }
+      })
+  }, [filtered, chartFrom, chartTo])
+
   // 공급 현황 테이블 — tableFrom~tableTo 필터, 입고예정일 내림차순
   const tableByDate = useMemo(() => {
     const byDate: Record<string, { ord:number; qty:number; rec:number; unp:number; ordAmt:number; confAmt:number; recAmt:number; count:number }> = {}
@@ -456,6 +491,61 @@ export default function SupplyPage() {
           )}
         </div>
       </div>
+
+      {/* 주간 집계 차트 — 일별을 월요일 시작 주차로 묶음 */}
+      {weeklyChartData.length >= 2 && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="ch">
+            <div className="ch-l"><div className="ch-ico">📅</div><div>
+              <div className="ch-title">주간 발주 · 확정 · 입고 금액</div>
+              <div className="ch-sub">월요일 시작 주차 · 매입가 × 수량 합계 (VAT 별도)</div>
+            </div></div>
+          </div>
+          <div className="cb">
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={weeklyChartData} margin={{ top:8, right:20, left:0, bottom:5 }} barCategoryGap="25%">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                <XAxis dataKey="week" tick={{ fontSize:10 }} />
+                <YAxis
+                  yAxisId="left"
+                  tick={{ fontSize:10 }}
+                  width={56}
+                  tickFormatter={(v:number) => {
+                    if (v >= 100_000_000) return `${(v/100_000_000).toFixed(1)}억`
+                    if (v >= 10_000_000) return `${Math.round(v/1_000_000)}백만`
+                    if (v >= 10_000) return `${Math.round(v/10_000)}만`
+                    return String(v)
+                  }}
+                />
+                <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize:10, fill:'#94a3b8' }} width={36} unit="%"/>
+                <Tooltip
+                  formatter={(val:number, name:string) => {
+                    if (name === '공급률' || name === '입고율') return [val == null ? '-' : `${val}%`, name]
+                    return [fmt(val) + '원', name]
+                  }}
+                  labelFormatter={l => `주 시작: ${l}`}
+                />
+                <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize:11 }}/>
+                <Bar yAxisId="left" dataKey="ordAmt" name="발주금액" fill="#93C5FD" radius={[3,3,0,0]}/>
+                <Bar yAxisId="left" dataKey="qtyAmt" name="확정금액" fill="#A855F7" radius={[3,3,0,0]}/>
+                <Bar yAxisId="left" dataKey="recAmt" name="입고금액" fill="#10B981" radius={[3,3,0,0]}/>
+                <Line yAxisId="right" type="monotone" dataKey="confirmRate" name="공급률" stroke="#f59e0b" strokeWidth={1.5} dot={{ r:2 }} connectNulls={false}/>
+                <Line yAxisId="right" type="monotone" dataKey="fulfillRate" name="입고율" stroke="#0891b2" strokeWidth={1.5} dot={{ r:2 }} strokeDasharray="3 3" connectNulls={false}/>
+                {(() => {
+                  const t = new Date()
+                  const dow = t.getDay()
+                  const monOffset = dow === 0 ? -6 : 1 - dow
+                  const mon = new Date(t); mon.setDate(t.getDate() + monOffset)
+                  const md = `${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`
+                  return weeklyChartData.some(d => d.week === md)
+                    ? <ReferenceLine yAxisId="left" x={md} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value:'이번 주', position:'top', fontSize:10, fill:'#dc2626', fontWeight:700 }}/>
+                    : null
+                })()}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* 공급 현황 테이블 */}
       <div className="card" style={{ marginBottom: 12 }}>
