@@ -1174,7 +1174,8 @@ export default function RankingPage() {
         .rk-scroll-wrap {
           overflow-x: scroll;
           overflow-y: auto;
-          max-height: 70vh;
+          /* 20행 이상 한 번에 보이게 — 행 ~45px × 20 + 헤더 ≈ 960px, 작은 화면은 90vh로 cap */
+          max-height: min(1000px, 90vh);
         }
         /* 크롬/사파리: 가로 스크롤바 항상 보이게 */
         .rk-scroll-wrap::-webkit-scrollbar {
