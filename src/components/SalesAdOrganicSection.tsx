@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
 import {
-  ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis,
+  ResponsiveContainer, BarChart, Bar, LineChart, Line, CartesianGrid, XAxis, YAxis,
   Tooltip, Legend, ReferenceLine, LabelList,
 } from 'recharts'
 
@@ -18,22 +18,30 @@ type Props = {
   dailyTrend: DailyTrend[]
   chartFrom: string
   chartTo: string
+  mode: 'qty' | 'rev'
+  salesDataLoading: boolean
 }
 
 type AdDailyRow = {
   date: string
   ad_cost: number
-  revenue_1d: number   // 동일 일자 광고 매출 (VAT 포함 — 여기서 별도 변환)
+  revenue_1d: number
 }
+
+// 톤 다운된 팔레트 (slate + warm khaki)
+const COLOR_ORGANIC = '#7C9CBF'   // 차분한 스틸 블루
+const COLOR_AD      = '#C49B6C'   // 따뜻한 카키/탠
+const COLOR_LINE    = '#475569'   // slate-700 (qty mode 선)
 
 const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 
-export default function SalesAdOrganicSection({ dailyTrend, chartFrom, chartTo }: Props) {
+export default function SalesAdOrganicSection({
+  dailyTrend, chartFrom, chartTo, mode, salesDataLoading,
+}: Props) {
   const [adRows, setAdRows] = useState<AdDailyRow[]>([])
   const [loading, setLoading] = useState(false)
   const [hasAdData, setHasAdData] = useState<boolean | null>(null)
 
-  // 광고 데이터 로드 (기간 변경 시 재조회)
   useEffect(() => {
     let cancelled = false
     if (!chartFrom || !chartTo) return
@@ -54,7 +62,6 @@ export default function SalesAdOrganicSection({ dailyTrend, chartFrom, chartTo }
           setHasAdData(false)
           return
         }
-        // VAT 별도 변환
         const rows = ((data || []) as AdDailyRow[]).map(r => ({
           date: r.date,
           ad_cost: vatExcluded(Number(r.ad_cost || 0)),
@@ -73,7 +80,7 @@ export default function SalesAdOrganicSection({ dailyTrend, chartFrom, chartTo }
     return () => { cancelled = true }
   }, [chartFrom, chartTo])
 
-  // 날짜별 병합 — 총 매출 + 광고 매출 + 오가닉 매출
+  // 날짜별 병합
   const merged = useMemo(() => {
     const adByDate: Record<string, AdDailyRow> = {}
     adRows.forEach(r => { adByDate[r.date] = r })
@@ -82,14 +89,13 @@ export default function SalesAdOrganicSection({ dailyTrend, chartFrom, chartTo }
       const adRev = ad ? ad.revenue_1d : 0
       const adCost = ad ? ad.ad_cost : 0
       const total = d.rev
-      // 오가닉 = 총 매출 - 광고 매출 (음수 방지: 광고 어트리뷰션이 총 매출보다 큰 이상치 케이스)
       const organic = Math.max(0, total - adRev)
-      // 음수가 되면 광고만 표시
       const adShown = total >= adRev ? adRev : total
       const ratio = total > 0 ? (adRev / total) * 100 : 0
       return {
         date: d.date,
         fullDate: d.fullDate,
+        qty: d.qty,
         total,
         adRev: adShown,
         adCost,
@@ -101,93 +107,87 @@ export default function SalesAdOrganicSection({ dailyTrend, chartFrom, chartTo }
 
   // 기간 합계
   const totals = useMemo(() => {
-    const t = { total: 0, adRev: 0, adCost: 0, organic: 0 }
+    const t = { total: 0, adRev: 0, adCost: 0, organic: 0, qty: 0 }
     merged.forEach(r => {
       t.total += r.total
       t.adRev += r.adRev
       t.adCost += r.adCost
       t.organic += r.organic
+      t.qty += r.qty
     })
     const ratio = t.total > 0 ? (t.adRev / t.total) * 100 : 0
     const roas = t.adCost > 0 ? (t.adRev / t.adCost) * 100 : 0
     return { ...t, ratio, roas }
   }, [merged])
 
-  const todayYmd = (() => {
-    const d = new Date()
-    return new Date(d.getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const todayMD = (() => {
+    const t = new Date()
+    return `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
   })()
-  const todayMD = todayYmd.slice(5)
 
-  if (hasAdData === false && adRows.length === 0) {
-    // 광고 데이터 자체가 없음 — 안내
-    return (
-      <div className="card" style={{ marginTop: 12 }}>
-        <div className="ch">
-          <div className="ch-l">
-            <div className="ch-ico">📢</div>
-            <div>
-              <div className="ch-title">광고 매출 vs 오가닉 매출</div>
-              <div className="ch-sub">광고 데이터 없음 · 광고 현황 탭에서 CSV 업로드 후 확인 가능</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const isRev = mode === 'rev'
+  const showEmpty = merged.length === 0
+  const emptyIcon = salesDataLoading ? '⏳' : '📭'
+  const emptyText = salesDataLoading ? '판매 데이터 불러오는 중...' : '기간 내 매출 데이터가 없어요'
 
   return (
-    <div className="card" style={{ marginTop: 12 }}>
+    <div className="card" style={{ marginBottom: 12 }}>
       <div className="ch">
         <div className="ch-l">
-          <div className="ch-ico">📢</div>
+          <div className="ch-ico">📈</div>
           <div>
-            <div className="ch-title">광고 매출 vs 오가닉 매출</div>
+            <div className="ch-title">
+              일별 판매 추이 {isRev ? '(매출 · 광고 vs 오가닉)' : '(수량)'}
+            </div>
             <div className="ch-sub">
-              동일 일자 광고 전환 기준(1일 어트리뷰션) · {VAT_LABEL} · {chartFrom} ~ {chartTo}
+              {chartFrom} ~ {chartTo} · {merged.length}일
+              {isRev && ' · 1일 어트리뷰션 · ' + VAT_LABEL}
               {loading && ' · 불러오는 중...'}
             </div>
           </div>
         </div>
       </div>
       <div className="cb">
-        {/* KPI 카드 4개 */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
-          <KpiCard
-            label="총 매출"
-            value={fmt(totals.total) + '원'}
-            color="#0F172A"
-          />
-          <KpiCard
-            label="광고 매출"
-            value={fmt(totals.adRev) + '원'}
-            sub={`광고비 ${fmt(totals.adCost)}원 · ROAS ${totals.roas.toFixed(0)}%`}
-            color="#F97316"
-          />
-          <KpiCard
-            label="오가닉 매출"
-            value={fmt(totals.organic) + '원'}
-            sub={`전체의 ${(100 - totals.ratio).toFixed(1)}%`}
-            color="#0EA5E9"
-          />
-          <KpiCard
-            label="광고 의존도"
-            value={totals.ratio.toFixed(1) + '%'}
-            sub={
-              totals.ratio >= 50 ? '⚠️ 높음 — 오가닉 보강 필요' :
-              totals.ratio >= 30 ? '⚖️ 적정' :
-              totals.ratio >  0  ? '👍 낮음 — 오가닉 강함' : '광고 매출 없음'
-            }
-            color={
-              totals.ratio >= 50 ? '#DC2626' :
-              totals.ratio >= 30 ? '#D97706' :
-              '#059669'
-            }
-          />
-        </div>
+        {/* KPI 카드 — rev 모드만 (광고 vs 오가닉 의미 있음) */}
+        {isRev && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+            <KpiCard label="총 매출"      value={fmt(totals.total) + '원'} color="#0F172A" />
+            <KpiCard
+              label="광고 매출"
+              value={fmt(totals.adRev) + '원'}
+              sub={hasAdData ? `광고비 ${fmt(totals.adCost)}원 · ROAS ${totals.roas.toFixed(0)}%` : '광고 데이터 없음'}
+              color={COLOR_AD}
+            />
+            <KpiCard
+              label="오가닉 매출"
+              value={fmt(totals.organic) + '원'}
+              sub={`전체의 ${(100 - totals.ratio).toFixed(1)}%`}
+              color={COLOR_ORGANIC}
+            />
+            <KpiCard
+              label="광고 의존도"
+              value={totals.ratio.toFixed(1) + '%'}
+              sub={
+                totals.ratio >= 50 ? '⚠️ 높음 — 오가닉 보강' :
+                totals.ratio >= 30 ? '⚖️ 적정' :
+                totals.ratio >  0  ? '👍 낮음 — 오가닉 강함' : '광고 매출 없음'
+              }
+              color={
+                totals.ratio >= 50 ? '#B45309' :
+                totals.ratio >= 30 ? '#A16207' :
+                                     '#15803D'
+              }
+            />
+          </div>
+        )}
 
-        {/* Stacked bar chart */}
-        {merged.length > 0 ? (
+        {showEmpty ? (
+          <div className="empty-st" style={{ height: 280 }}>
+            <div className="es-ico">{emptyIcon}</div>
+            <div className="es-t">{emptyText}</div>
+          </div>
+        ) : isRev ? (
+          /* 매출 모드 — Stacked Bar (오가닉 + 광고) */
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={merged} margin={{ top: 24, right: 20, left: 0, bottom: 40 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
@@ -201,34 +201,62 @@ export default function SalesAdOrganicSection({ dailyTrend, chartFrom, chartTo }
               />
               <YAxis
                 tick={{ fontSize: 10, fill: '#56606E' }}
-                tickFormatter={v => Number(v).toLocaleString('ko-KR')}
+                tickFormatter={(v: number) => {
+                  if (v >= 100_000_000) return `${(v/100_000_000).toFixed(1)}억`
+                  if (v >= 10_000_000) return `${Math.round(v/1_000_000)}백만`
+                  if (v >= 10_000) return `${Math.round(v/10_000)}만`
+                  return String(v)
+                }}
               />
               <Tooltip
                 formatter={(v: any, name: string) => [Number(v).toLocaleString('ko-KR') + '원', name]}
                 labelFormatter={(label, payload) => {
-                  const p = payload?.[0]?.payload
+                  const p: any = payload?.[0]?.payload
                   if (!p) return label
                   return `${p.fullDate} · 광고 의존도 ${p.ratio}%`
                 }}
               />
               <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-              <ReferenceLine x={todayMD} stroke="#EF4444" strokeDasharray="3 3" label={{ value: '오늘', fill: '#EF4444', fontSize: 10, position: 'top' }} />
-              <Bar dataKey="organic" stackId="rev" name="오가닉 매출" fill="#0EA5E9" />
-              <Bar dataKey="adRev" stackId="rev" name="광고 매출" fill="#F97316">
+              <ReferenceLine x={todayMD} stroke="#94A3B8" strokeDasharray="3 3" label={{ value: '오늘', fill: '#64748B', fontSize: 10, position: 'top' }} />
+              <Bar dataKey="organic" stackId="rev" name="오가닉 매출" fill={COLOR_ORGANIC} />
+              <Bar dataKey="adRev" stackId="rev" name="광고 매출" fill={COLOR_AD}>
                 <LabelList
                   dataKey="ratio"
                   position="top"
                   fontSize={9}
-                  fill="#C2410C"
+                  fill="#92400E"
                   formatter={(v: number) => v > 5 ? `${v}%` : ''}
                 />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="empty-st" style={{ height: 200 }}>
-            <div className="es-ico">📭</div>
-            <div className="es-t">기간 내 매출 데이터가 없어요</div>
+          /* 수량 모드 — 단순 Line */
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={merged} margin={{ top: 8, right: 20, left: 0, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10 }} width={45} />
+              <Tooltip
+                formatter={(v: any) => [Math.round(Number(v)).toLocaleString('ko-KR') + '개', '수량']}
+                labelFormatter={l => `날짜: ${l}`}
+              />
+              <Line
+                type="monotone"
+                dataKey="qty"
+                stroke={COLOR_LINE}
+                strokeWidth={2.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+              <ReferenceLine x={todayMD} stroke="#94A3B8" strokeDasharray="3 3" label={{ value: '오늘', position: 'top', fontSize: 10, fill: '#64748B', fontWeight: 700 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+
+        {hasAdData === false && isRev && (
+          <div style={{ marginTop: 10, padding: '8px 12px', background: '#F1F5F9', borderRadius: 6, fontSize: 11, color: '#64748B' }}>
+            💡 광고 데이터가 없어 모든 매출이 오가닉으로 표시됩니다. 광고 현황 탭에서 CSV 업로드 시 광고/오가닉 분리가 활성화됩니다.
           </div>
         )}
       </div>
