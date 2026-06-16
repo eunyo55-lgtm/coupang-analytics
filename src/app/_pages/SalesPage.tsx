@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD, fromYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 
 Chart.register(...registerables)
 
@@ -335,6 +336,20 @@ export default function SalesPage() {
     return { ytdQty, ytdRev, weekQty, weekRev, rangeDaily }
   }, [visible, tableDates])
 
+  // ─── 일별 판매 추이 (시계열) ───
+  const dailyTrend = useMemo(() => {
+    const byDate: Record<string, { qty: number; rev: number }> = {}
+    for (const r of salesData) {
+      if (r.isReturn) continue
+      if (r.date < chartFrom || r.date > chartTo) continue
+      if (!byDate[r.date]) byDate[r.date] = { qty: 0, rev: 0 }
+      byDate[r.date].qty += r.qty
+      byDate[r.date].rev += r.revenue
+    }
+    return Object.entries(byDate).sort(([a],[b]) => a.localeCompare(b))
+      .map(([date, v]) => ({ date: date.slice(5), fullDate: date, qty: v.qty, rev: Math.round(v.rev) }))
+  }, [salesData, chartFrom, chartTo])
+
   // ─── 차트용 시즌별 / 카테고리별 ───
   const bySeason = useMemo(() => {
     const m = new Map<string, { qty: number; rev: number }>()
@@ -506,6 +521,61 @@ export default function SalesPage() {
               }}
             >금액 보기</button>
           </div>
+        </div>
+      </div>
+
+      {/* ─── 일별 판매 추이 (시계열) ─── */}
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="ch">
+          <div className="ch-l">
+            <div className="ch-ico">📈</div>
+            <div>
+              <div className="ch-title">일별 판매 추이 ({mode === 'qty' ? '수량' : '매출'})</div>
+              <div className="ch-sub">{chartFrom} ~ {chartTo} · {dailyTrend.length}일</div>
+            </div>
+          </div>
+        </div>
+        <div className="cb">
+          {dailyTrend.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={dailyTrend} margin={{ top: 8, right: 20, left: 0, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  width={mode === 'rev' ? 60 : 45}
+                  tickFormatter={(v: number) => {
+                    if (mode !== 'rev') return String(v)
+                    if (v >= 100_000_000) return `${(v/100_000_000).toFixed(1)}억`
+                    if (v >= 10_000_000) return `${Math.round(v/1_000_000)}백만`
+                    if (v >= 10_000) return `${Math.round(v/10_000)}만`
+                    return String(v)
+                  }}
+                />
+                <Tooltip
+                  formatter={(v: number) => mode === 'rev' ? [Math.round(v).toLocaleString('ko-KR') + '원', '매출'] : [Math.round(v).toLocaleString('ko-KR') + '개', '수량']}
+                  labelFormatter={l => `날짜: ${l}`}
+                />
+                <Line
+                  type="monotone"
+                  dataKey={mode === 'qty' ? 'qty' : 'rev'}
+                  stroke="#1D4ED8"
+                  strokeWidth={2.5}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+                {(() => {
+                  const t = new Date()
+                  const md = `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`
+                  return dailyTrend.some(d => d.date === md)
+                    ? <ReferenceLine x={md} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{ value: '오늘', position: 'top', fontSize: 10, fill: '#dc2626', fontWeight: 700 }} />
+                    : null
+                })()}
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="empty-st" style={{ height: 280 }}><div className="es-ico">📈</div><div className="es-t">기간 내 판매 데이터가 없어요</div></div>
+          )}
         </div>
       </div>
 
