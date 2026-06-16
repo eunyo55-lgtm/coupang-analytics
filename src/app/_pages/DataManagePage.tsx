@@ -101,7 +101,8 @@ async function upsertProducts(
   const nameCol  = detectColumn(s0, ['상품명', 'productname', '상품이름', 'item', '노출상품명', 'SKU 명', 'SKU명'])
   const optCol   = detectColumn(s0, ['옵션', 'option', '옵션명', '옵션값', '속성'])
   const costCol  = detectColumn(s0, ['원가', '매입원가', 'cost'])  // 재고액 계산용 — 공급가/매입가는 제외
-  const salePriceCol = detectColumn(s0, ['판매가', '시중가', 'sale_price', '소비자가', '판매단가', '시판가', '정가'])
+  // 시중가 우선 — 이지어드민 등에서는 시중가가 실제 판매가, '판매가' 컬럼은 다른 의미(할인가 등)일 수 있음
+  const salePriceCol = detectColumn(s0, ['시중가', '소비자가', '판매가', 'sale_price', '판매단가', '시판가', '정가'])
   const seasonCol   = detectColumn(s0, ['시즌', 'season', '시즌구분'])
   const imageCol    = detectColumn(s0, ['이미지', 'image', '이미지URL', '이미지주소', 'image_url', '대표이미지'])
   const categoryCol = detectColumn(s0, ['카테고리', 'category', '분류', '상품분류', '대분류', '품목'])

@@ -91,7 +91,27 @@ export async function parseFile(
             codepage: 949,
           })
           const ws = wb.Sheets[wb.SheetNames[0]]
-          data = XLSX.utils.sheet_to_json(ws, { defval: '' }) as Record<string, unknown>[]
+          // 1행이 HTML meta/공백/안내문일 수 있는 어드민 export 대응:
+          //  먼저 array-of-arrays로 읽고, 실제 헤더 행을 자동 탐지한 뒤 객체로 변환
+          const rawArr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as unknown[][]
+          const headerIdx = detectHeaderRow(rawArr)
+          if (headerIdx >= 0) {
+            const headers = rawArr[headerIdx].map((h, i) =>
+              h != null && String(h).trim() !== '' ? String(h).trim() : `__col_${i}`
+            )
+            data = rawArr.slice(headerIdx + 1).map(row => {
+              const obj: Record<string, unknown> = {}
+              for (let i = 0; i < headers.length; i++) {
+                obj[headers[i]] = row[i] ?? ''
+              }
+              return obj
+            })
+            // 빈 행 제거 — 모든 값이 빈 문자열
+            data = data.filter(r => Object.values(r).some(v => v !== '' && v != null))
+          } else {
+            // fallback: 기존 방식
+            data = XLSX.utils.sheet_to_json(ws, { defval: '' }) as Record<string, unknown>[]
+          }
         }
 
         resolve({
