@@ -240,16 +240,25 @@ export default function DashboardPage() {
   const [kpiRefetchTick, setKpiRefetchTick] = useState(0)
 
   // 공급 KPI용 supply_status raw 데이터 (SWR 캐시 + 병렬 fetch)
+  // 공급 데이터는 하루 1-2회만 업로드되므로 TTL을 길게 (6시간) 두고,
+  // 캐시가 있으면 즉시 표시 + 백그라운드 갱신 (사용자 대기 없음)
   type SupplyRaw = { 입고예정일: string; 확정수량: number; 입고수량: number; 매입가: number }
   const SUPPLY_CACHE_KEY = 'swr_dash_supply_v1'
-  const SUPPLY_TTL = 10 * 60 * 1000
+  const SUPPLY_TTL = 6 * 60 * 60 * 1000  // 6시간 (공급 데이터 업로드 주기)
 
   const _initialSupply = typeof window !== 'undefined' ? readSwrCache<SupplyRaw[]>(SUPPLY_CACHE_KEY, SUPPLY_TTL) : null
   const [supplyRaw, setSupplyRaw] = useState<SupplyRaw[]>(_initialSupply?.data ?? [])
-  const [supplyLoading, setSupplyLoading] = useState(!_initialSupply || _initialSupply.stale)
+  // 캐시 데이터가 있으면 loading=false (사용자에게 즉시 보여줌)
+  const [supplyLoading, setSupplyLoading] = useState(!_initialSupply || _initialSupply.data.length === 0)
 
-  // 대시보드 진입 시 supply_status 병렬 로드 (YTD + 미래)
+  // 대시보드 진입 시 supply_status 로드
+  //  - 캐시 신선 (<TTL): 백그라운드 fetch 생략 (네트워크 절약)
+  //  - 캐시 stale 또는 없음: 백그라운드 fetch + 완료되면 silent update
   useEffect(() => {
+    // 캐시 fresh → 백그라운드 fetch 생략 (가장 흔한 경우)
+    if (_initialSupply && !_initialSupply.stale && _initialSupply.data.length > 0) {
+      return
+    }
     let cancelled = false
     async function load() {
       const yearStart = `${new Date().getFullYear()}-01-01`
