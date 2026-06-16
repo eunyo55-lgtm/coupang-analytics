@@ -145,7 +145,8 @@ export default function SalesAdOrganicSection({
       t.qty += r.qty
     })
     const ratio = t.qty > 0 ? (t.adUnits / t.qty) * 100 : 0  // 광고 의존도(%)는 수량 기준
-    const roas = t.adCost > 0 ? (t.adRev / t.adCost) * 100 : 0
+    // ROAS는 업계 표준대로 판매가 기준 광고 매출 / 광고비 (쿠팡 광고센터와 동일)
+    const roas = t.adCost > 0 ? (t.adRevConsumer / t.adCost) * 100 : 0
     return { ...t, ratio, roas }
   }, [merged])
 
@@ -192,26 +193,24 @@ export default function SalesAdOrganicSection({
         )}
       </div>
       <div className="cb">
-        {/* KPI 카드 4개 */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+        {/* KPI 카드 — 1행: 매출 분포 (공급가 기준) */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 10 }}>
           <KpiCard
             label="총 매출 (공급가)"
             value={fmt(totals.total) + '원'}
-            sub={`총 ${totals.qty.toLocaleString()}개`}
+            sub={`총 ${totals.qty.toLocaleString()}개 판매`}
             color="#0F172A"
           />
           <KpiCard
             label="광고 매출 (공급가 추정)"
             value={fmt(totals.adRev) + '원'}
-            sub={hasAdData
-              ? `광고 ${totals.adUnits.toLocaleString()}개 · 광고비 ${fmt(totals.adCost)}원`
-              : '광고 데이터 없음'}
+            sub={hasAdData ? `광고로 ${totals.adUnits.toLocaleString()}개 판매` : '광고 데이터 없음'}
             color={COLOR_AD}
           />
           <KpiCard
-            label="오가닉 매출"
+            label="오가닉 매출 (공급가)"
             value={fmt(totals.organic) + '원'}
-            sub={`오가닉 ${(totals.qty - totals.adUnits).toLocaleString()}개 · 전체의 ${(100 - totals.ratio).toFixed(1)}%`}
+            sub={`오가닉 ${(totals.qty - totals.adUnits).toLocaleString()}개 판매`}
             color={COLOR_ORGANIC}
           />
           <KpiCard
@@ -229,6 +228,35 @@ export default function SalesAdOrganicSection({
             }
           />
         </div>
+
+        {/* KPI 카드 — 2행: 광고 효과 (판매가 기준 ROAS) */}
+        {hasAdData && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+            <KpiCard
+              label="광고 매출 (판매가)"
+              value={fmt(totals.adRevConsumer) + '원'}
+              sub={`쿠팡 광고센터와 동일 · ${VAT_LABEL}`}
+              color="#7C3AED"
+            />
+            <KpiCard
+              label="광고비"
+              value={fmt(totals.adCost) + '원'}
+              sub={`${VAT_LABEL}`}
+              color="#DC2626"
+            />
+            <KpiCard
+              label="ROAS (판매가/광고비)"
+              value={totals.roas.toFixed(0) + '%'}
+              sub={
+                totals.roas >= 500 ? '🏆 우수 (5배 이상)' :
+                totals.roas >= 300 ? '👍 양호 (3배 이상)' :
+                totals.roas >= 100 ? '⚖️ 보통 (1배 이상)' :
+                                     '⚠️ 손익 점검 필요'
+              }
+              color="#0891B2"
+            />
+          </div>
+        )}
 
         {showEmpty ? (
           <div className="empty-st" style={{ height: 280 }}>
@@ -288,29 +316,34 @@ export default function SalesAdOrganicSection({
 
         <details style={{ marginTop: 12, fontSize: 11, color: '#64748B' }}>
           <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#475569' }}>
-            ℹ️ 계산 방식 + 쿠팡 광고센터 숫자와의 차이
+            ℹ️ 카드별 계산 기준 + 쿠팡 광고센터 숫자와의 차이
           </summary>
           <div style={{ marginTop: 8, padding: 12, background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7 }}>
-            <div><b>왜 옵션ID로 직접 매칭을 못 하나?</b></div>
-            <div>• 광고 CSV의 옵션ID는 쿠팡 내부 ID (긴 숫자)</div>
-            <div>• 우리 products.barcode는 SKU 코드 (영문+숫자)</div>
-            <div>• 두 식별자 간 매핑 데이터가 없음 (정확 매칭 0건 확인됨)</div>
-            <div style={{ marginTop: 8 }}><b>그래서 어떻게 계산하나? (수량 비율 기반):</b></div>
-            <div>• 일별 광고 의존도 = 광고 판매수량 / 총 판매수량</div>
-            <div>• 광고 매출 (공급가 추정) = 총 매출 × 광고 의존도</div>
-            <div>• 광고 의존도 % 는 정확. 매출 절대값은 광고가 비싼/싼 상품에 편향됐을 때 ±편차 가능</div>
-            <div style={{ marginTop: 8 }}><b>쿠팡 광고센터 비교:</b></div>
-            <div>• 광고센터: 소비자가 기준 (절대값 큼) · <b>의존도 % 비교</b>가 정확</div>
-            <div>• 우리: 공급가 기준 (절대값 작음, 마진율만큼) · 의존도 % 는 같아야 함</div>
+            <div><b>1행 — 매출 분포 (공급가 기준, 우리 실수령액)</b></div>
+            <div>• 총 매출 = 일별 판매수량 × 공급가 (서플라이 허브 실수령)</div>
+            <div>• 광고 매출 (공급가 추정) = 총 매출 × 광고 의존도(수량 기준)</div>
+            <div>• 오가닉 매출 = 총 매출 - 광고 매출</div>
+            <div>• 광고 의존도 = 광고 판매수량 / 총 판매수량 (수량 기준이라 정확)</div>
+            <div style={{ marginTop: 8 }}><b>2행 — 광고 효과 (판매가 기준, 쿠팡 광고센터와 동일)</b></div>
+            <div>• 광고 매출 (판매가) = 광고 CSV revenue_14d (소비자가)</div>
+            <div>• 광고비 = 광고 CSV ad_cost</div>
+            <div>• <b>ROAS = 판매가 광고매출 / 광고비</b> — 업계 표준 · 쿠팡 광고센터 ROAS와 동일</div>
+            <div style={{ marginTop: 8 }}><b>왜 매출 절대값이 작은가? (1행 공급가 vs 광고센터 소비자가)</b></div>
+            <div>• 우리 1행 매출은 서플라이 허브 실수령 (공급가, {VAT_LABEL})</div>
+            <div>• 광고센터 전체 매출은 소비자가 (VAT 포함, 마진 포함) → 절대값 ~3배 큼</div>
+            <div>• <b>비율(광고 의존도)은 두 기준 모두 비슷해야 정상</b></div>
+            <div style={{ marginTop: 8 }}><b>왜 옵션ID로 직접 매칭을 못 하나?</b></div>
+            <div>• 광고 CSV 옵션ID(긴 숫자) ↔ products.barcode(SKU) 매핑 데이터 없음 — 정확 매칭 0건 확인</div>
+            <div>• 그래서 수량 비율 기반으로 추정 (의존도 % 는 정확)</div>
             {hasAdData && (
               <div style={{ marginTop: 8, padding: 8, background: '#fff', borderRadius: 4 }}>
-                <div>참고 — 광고 CSV의 소비자가 광고 매출 합계: <b>{fmt(totals.adRevConsumer)}원</b> ({VAT_LABEL})</div>
                 <div>광고 판매수량: <b>{totals.adUnits.toLocaleString()}개</b> / 총 <b>{totals.qty.toLocaleString()}개</b></div>
-                <div>광고 의존도 (수량 기준): <b>{totals.ratio.toFixed(1)}%</b></div>
+                <div>광고 의존도 (수량): <b>{totals.ratio.toFixed(1)}%</b> — 쿠팡 광고센터의 광고매출/전체매출 비율과 비교</div>
+                <div>ROAS: <b>{totals.roas.toFixed(0)}%</b> (판매가 기준)</div>
               </div>
             )}
             <div style={{ marginTop: 8, color: '#475569' }}>
-              <b>📌 향후 정확도 향상:</b> 옵션ID ↔ 바코드 매핑 테이블을 한 번 채우면 수량/매출 모두 정확하게 옵션별 분리 가능.
+              <b>📌 향후 정확도 향상:</b> 옵션ID ↔ 바코드 매핑 테이블 채우면 수량/매출 모두 옵션별 정확 분리 가능.
             </div>
           </div>
         </details>
