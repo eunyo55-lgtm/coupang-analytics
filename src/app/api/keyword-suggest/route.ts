@@ -68,18 +68,23 @@ async function expandSeedsWithClaude(seeds: string[]): Promise<string[]> {
   if (!key) return seeds
   if (seeds.length === 0) return seeds
 
-  const sys = `너는 한국 쇼핑몰 SEO 전문가야. 주어진 상품명/키워드/카테고리를 보고
-- 시즌 변형 (2026 SS, 여름, 가을 등)
+  const sys = `너는 한국 키즈·유아·베이비 쇼핑몰 SEO 전문가야. 이 쇼핑몰은 **0~12세 어린이 상품만** 판매하므로, 성인용 키워드는 절대 만들지 마.
+
+주어진 상품명/키워드/카테고리를 보고:
+- 시즌 변형 (여름, 봄/가을, 사계절 등)
 - 트렌드 변형 (인기, 베스트, 신상 등)
 - 사용자 의도 변형 (추천, 후기, 비교 등)
-- 타겟 변형 (여아용, 남아용, 베이비, 키즈 등 적절한 경우)
+- 타겟 변형 (유아, 베이비, 키즈, 여아, 남아, 아동, 초등 등)
+- 연령/사이즈 변형 (3살, 5세, 100호, 110호 등 적절한 경우)
 를 고려해 네이버 쇼핑에서 실제로 검색될 만한 한국어 키워드 후보를 만들어줘.
 
 규칙:
 1. 각 시드당 5~8개 후보 생성
-2. 너무 일반적이지 않게 (예: "옷" X, "여아 원피스" O)
-3. 한국어로만, 영문/특수문자 최소화
-4. JSON 배열로만 응답 (다른 설명 없이): ["키워드1", "키워드2", ...]`
+2. **금지 키워드: "성인", "여성", "남성", "여자", "남자", "어른" 같은 단어 또는 그 변형 절대 사용 금지**
+3. 모든 키워드는 반드시 아동/유아/베이비 대상이라는 것이 명확해야 함
+4. 너무 일반적이지 않게 (예: "옷" X, "여아 원피스" O)
+5. 한국어로만, 영문/특수문자 최소화
+6. JSON 배열로만 응답 (다른 설명 없이): ["키워드1", "키워드2", ...]`
 
   const user = `시드: ${seeds.map(s => `"${s}"`).join(', ')}`
 
@@ -120,11 +125,15 @@ export async function POST(req: NextRequest) {
       excludeKeywords?: string[]
       useClaude?: boolean
       maxResults?: number
+      kidsOnly?: boolean  // 키즈/유아/베이비 전용 필터 (성인 키워드 제외)
     }
     const seeds = (body.seeds || []).map(s => String(s || '').trim()).filter(Boolean)
     const exclude = new Set((body.excludeKeywords || []).map(s => String(s).toLowerCase().trim()))
     const useClaude = body.useClaude !== false  // 기본 true
     const maxResults = body.maxResults || 100
+    const kidsOnly = body.kidsOnly !== false    // 기본 true
+    // 성인 키워드 정규식: 어른/성인/여성/남성/여자/남자
+    const adultPattern = /(성인|어른|여성|남성|여자|남자|female|male|adult|men|women)/i
 
     if (seeds.length === 0) {
       return NextResponse.json({ error: '시드 키워드가 필요합니다' }, { status: 400 })
@@ -150,11 +159,17 @@ export async function POST(req: NextRequest) {
       r.forEach(item => allResults.push({ ...item, sourceSeed: seedLabel }))
     }))
 
-    // 3) 중복 제거 (같은 키워드 있으면 검색량 큰 것 우선) + 제외 키워드 필터
+    // 3) 중복 제거 (같은 키워드 있으면 검색량 큰 것 우선) + 제외 키워드 필터 + 성인 필터
     const byKw = new Map<string, typeof allResults[0]>()
+    let adultFiltered = 0
     for (const it of allResults) {
       const key = it.keyword.toLowerCase().trim()
       if (!key || exclude.has(key)) continue
+      // 키즈 전용 모드: 성인 패턴 매칭 시 제외
+      if (kidsOnly && adultPattern.test(it.keyword)) {
+        adultFiltered++
+        continue
+      }
       const prev = byKw.get(key)
       if (!prev || it.total > prev.total) byKw.set(key, it)
     }
@@ -169,6 +184,7 @@ export async function POST(req: NextRequest) {
       seedCount: finalSeeds.length,
       claudeUsed: useClaude && !!process.env.ANTHROPIC_API_KEY,
       naverConfigured: !!getNaverCreds().secretKey,
+      adultFiltered,
     })
   } catch (err) {
     return NextResponse.json(

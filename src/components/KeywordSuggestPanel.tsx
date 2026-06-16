@@ -11,30 +11,43 @@ type Suggestion = {
   sourceSeed: string
 }
 
+type AvailableProduct = {
+  barcode: string
+  name: string
+  coupang_product_id: string
+}
+
 type Props = {
   /** 시드 후보 — 기존 등록 키워드 / 카테고리 / 상품명 */
   existingKeywords: string[]
   categories: string[]
   productNames: string[]
+  /** 등록 시 연결 가능한 상품 목록 (기존 키워드의 상품 매핑에서 추출) */
+  availableProducts: AvailableProduct[]
   /** 등록 후 부모 새로고침 트리거 */
   onRegistered?: () => void
 }
 
 export default function KeywordSuggestPanel({
-  existingKeywords, categories, productNames, onRegistered,
+  existingKeywords, categories, productNames, availableProducts, onRegistered,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<'auto' | 'category' | 'manual'>('auto')
   const [selectedCat, setSelectedCat] = useState<string>('')
   const [manualSeeds, setManualSeeds] = useState('')
   const [useClaude, setUseClaude] = useState(true)
+  const [kidsOnly, setKidsOnly] = useState(true)  // 키즈/유아/베이비 전용
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Suggestion[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean } | null>(null)
+  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number } | null>(null)
   const [registering, setRegistering] = useState<Set<string>>(new Set())
   const [registered, setRegistered] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
+  // 키워드별 선택된 상품 barcode (드롭다운 상태)
+  const [rowProduct, setRowProduct] = useState<Record<string, string>>({})
+  // 일괄 적용용 기본 상품
+  const [defaultProduct, setDefaultProduct] = useState<string>('')
 
   const seedPool = useMemo(() => {
     if (mode === 'manual') {
@@ -68,13 +81,18 @@ export default function KeywordSuggestPanel({
           seeds: seedPool,
           excludeKeywords: existingKeywords,
           useClaude,
+          kidsOnly,
           maxResults: 80,
         }),
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j.error || '실패')
       setResults(j.suggestions || [])
-      setInfo({ seedCount: j.seedCount || 0, claudeUsed: !!j.claudeUsed })
+      setInfo({
+        seedCount: j.seedCount || 0,
+        claudeUsed: !!j.claudeUsed,
+        adultFiltered: j.adultFiltered || 0,
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : '실패')
     } finally {
@@ -84,12 +102,21 @@ export default function KeywordSuggestPanel({
 
   async function registerKeyword(s: Suggestion) {
     if (registered.has(s.keyword)) return
+    // 행별 선택값 → 없으면 기본 상품 → 그것도 없으면 null
+    const barcode = rowProduct[s.keyword] || defaultProduct || ''
+    const linked  = barcode ? availableProducts.find(p => p.barcode === barcode) : null
+    if (!linked) {
+      alert('연결할 상품을 선택해주세요 (행 옆 드롭다운 또는 상단 기본 상품)')
+      return
+    }
     setRegistering(prev => new Set(prev).add(s.keyword))
     try {
       const { error } = await supabase.from('keywords').insert([{
         keyword: s.keyword,
         type: '추천',
         category: mode === 'category' ? selectedCat : null,
+        coupang_product_id: linked.coupang_product_id,
+        barcode: linked.barcode,
       }])
       if (error) throw error
       setRegistered(prev => new Set(prev).add(s.keyword))
@@ -186,6 +213,10 @@ export default function KeywordSuggestPanel({
               <input type="checkbox" checked={useClaude} onChange={e => setUseClaude(e.target.checked)} />
               <span>Claude로 시드 확장 (시즌·트렌드 변형 추가)</span>
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={kidsOnly} onChange={e => setKidsOnly(e.target.checked)} />
+              <span>👶 키즈/유아/베이비 전용 (성인 키워드 제외)</span>
+            </label>
             <button
               onClick={runSuggest}
               disabled={loading || seedPool.length === 0}
@@ -215,12 +246,31 @@ export default function KeywordSuggestPanel({
             <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
               ✓ 시드 {info.seedCount}개에서 {results.length}개 발굴
               {info.claudeUsed ? ' · Claude 시드 확장 사용' : ''}
+              {info.adultFiltered > 0 ? ` · 성인 키워드 ${info.adultFiltered}개 제외됨` : ''}
             </div>
           )}
 
           {/* 결과 */}
           {results.length > 0 && (
             <div>
+              {/* 기본 상품 일괄 선택 */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, padding: '8px 12px', background: '#F9FAFB', borderRadius: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>🎯 기본 연결 상품</span>
+                <select
+                  value={defaultProduct}
+                  onChange={e => setDefaultProduct(e.target.value)}
+                  style={{ padding: '4px 8px', fontSize: 12, minWidth: 240, border: '1px solid #E4E7EC', borderRadius: 4 }}
+                >
+                  <option value="">— 선택 안 함 (행별로 지정) —</option>
+                  {availableProducts.map(p => (
+                    <option key={p.barcode} value={p.barcode}>{p.name} ({p.barcode})</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: 10, color: 'var(--t3)' }}>
+                  행 드롭다운 비어있으면 기본 상품 사용
+                </span>
+              </div>
+
               <input
                 placeholder="🔍 결과 내 검색..."
                 value={search}
@@ -229,7 +279,7 @@ export default function KeywordSuggestPanel({
                 style={{ padding: '6px 10px', fontSize: 12, marginBottom: 8, width: '100%' }}
               />
               <div style={{
-                maxHeight: 400, overflowY: 'auto',
+                maxHeight: 500, overflowY: 'auto',
                 border: '1px solid #E4E7EC', borderRadius: 6,
               }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -238,7 +288,7 @@ export default function KeywordSuggestPanel({
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>키워드</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>월 검색량</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC' }}>경쟁</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>출처 시드</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>연결 상품</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 90 }}>등록</th>
                     </tr>
                   </thead>
@@ -252,9 +302,12 @@ export default function KeywordSuggestPanel({
                       const compLabel =
                         s.competition === 'high' ? '높음' :
                         s.competition === 'mid'  ? '중간' : '낮음'
+                      const selectedBc = rowProduct[s.keyword] || ''
                       return (
                         <tr key={s.keyword} style={{ borderTop: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '6px 10px', fontWeight: 600 }}>{s.keyword}</td>
+                          <td style={{ padding: '6px 10px', fontWeight: 600 }} title={`출처: ${s.sourceSeed}`}>
+                            {s.keyword}
+                          </td>
                           <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600 }}>
                             {s.total.toLocaleString('ko-KR')}
                           </td>
@@ -264,8 +317,22 @@ export default function KeywordSuggestPanel({
                               padding: '2px 6px', borderRadius: 4, background: compColor + '15',
                             }}>{compLabel}</span>
                           </td>
-                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.sourceSeed}>
-                            {s.sourceSeed}
+                          <td style={{ padding: '4px 10px' }}>
+                            <select
+                              value={selectedBc}
+                              onChange={e => setRowProduct(prev => ({ ...prev, [s.keyword]: e.target.value }))}
+                              disabled={isReg}
+                              style={{
+                                padding: '3px 6px', fontSize: 11, maxWidth: 220, width: '100%',
+                                border: '1px solid #E4E7EC', borderRadius: 4,
+                                background: selectedBc ? '#fff' : '#FEF3C7',
+                              }}
+                            >
+                              <option value="">{defaultProduct ? '— 기본 사용 —' : '⚠️ 상품 선택...'}</option>
+                              {availableProducts.map(p => (
+                                <option key={p.barcode} value={p.barcode}>{p.name}</option>
+                              ))}
+                            </select>
                           </td>
                           <td style={{ padding: '6px 10px', textAlign: 'center' }}>
                             {isReg ? (
