@@ -596,17 +596,6 @@ export default function RankingPage() {
         existingKeywords={keywords.map(k => k.keyword)}
         categories={Array.from(new Set(keywords.map(k => k.category || '').filter(Boolean)))}
         productNames={Array.from(new Set(keywords.map(k => k.products?.name || '').filter(Boolean)))}
-        availableProducts={Array.from(
-          new Map(
-            keywords
-              .filter(k => k.barcode && k.coupang_product_id && k.products?.name)
-              .map(k => [k.barcode!, {
-                barcode: k.barcode!,
-                name: k.products!.name,
-                coupang_product_id: k.coupang_product_id,
-              }])
-          ).values()
-        )}
         onRegistered={loadAll}
       />
 

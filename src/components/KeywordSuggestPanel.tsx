@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 
 type Suggestion = {
@@ -11,10 +11,10 @@ type Suggestion = {
   sourceSeed: string
 }
 
-type AvailableProduct = {
+type ProductLite = {
   barcode: string
   name: string
-  coupang_product_id: string
+  image_url: string | null
 }
 
 type Props = {
@@ -22,32 +22,87 @@ type Props = {
   existingKeywords: string[]
   categories: string[]
   productNames: string[]
-  /** 등록 시 연결 가능한 상품 목록 (기존 키워드의 상품 매핑에서 추출) */
-  availableProducts: AvailableProduct[]
   /** 등록 후 부모 새로고침 트리거 */
   onRegistered?: () => void
 }
 
 export default function KeywordSuggestPanel({
-  existingKeywords, categories, productNames, availableProducts, onRegistered,
+  existingKeywords, categories, productNames, onRegistered,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<'auto' | 'category' | 'manual'>('auto')
   const [selectedCat, setSelectedCat] = useState<string>('')
   const [manualSeeds, setManualSeeds] = useState('')
   const [useClaude, setUseClaude] = useState(true)
-  const [kidsOnly, setKidsOnly] = useState(true)  // 키즈/유아/베이비 전용
+  const [kidsOnly, setKidsOnly] = useState(true)
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Suggestion[]>([])
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number } | null>(null)
-  const [registering, setRegistering] = useState<Set<string>>(new Set())
   const [registered, setRegistered] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
-  // 키워드별 선택된 상품 barcode (드롭다운 상태)
-  const [rowProduct, setRowProduct] = useState<Record<string, string>>({})
-  // 일괄 적용용 기본 상품
-  const [defaultProduct, setDefaultProduct] = useState<string>('')
+
+  // ─── 등록 모달 ───
+  const [modal, setModal] = useState<Suggestion | null>(null)
+  const [modalCategory, setModalCategory]   = useState('')
+  const [modalCoupangId, setModalCoupangId] = useState('')
+  const [modalBarcode, setModalBarcode]     = useState('')
+  const [modalProductSearch, setModalProductSearch] = useState('')
+  const [modalProductList, setModalProductList] = useState<ProductLite[]>([])
+  const [modalSubmitting, setModalSubmitting] = useState(false)
+  const [showProductDropdown, setShowProductDropdown] = useState(false)
+  const productBoxRef = useRef<HTMLDivElement>(null)
+
+  // 상품 검색 디바운스
+  useEffect(() => {
+    if (!modal) return
+    const t = setTimeout(async () => {
+      const q = modalProductSearch.trim()
+      if (!q || !showProductDropdown) { setModalProductList([]); return }
+      try {
+        const { data } = await supabase
+          .from('products')
+          .select('barcode, name, image_url')
+          .ilike('name', `%${q}%`)
+          .limit(50)
+        const unique = Array.from(
+          new Map((data || [])
+            .filter((p: any) => p.name)
+            .map((p: any) => [p.name, p as ProductLite])
+          ).values()
+        )
+        setModalProductList(unique)
+      } catch { /* ignore */ }
+    }, 250)
+    return () => clearTimeout(t)
+  }, [modalProductSearch, showProductDropdown, modal])
+
+  // 드롭다운 외부 클릭 닫기
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (productBoxRef.current && !productBoxRef.current.contains(e.target as Node)) {
+        setShowProductDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [])
+
+  function openRegisterModal(s: Suggestion) {
+    setModal(s)
+    // 카테고리 기본값: 카테고리 모드면 선택된 값, 아니면 빈칸
+    setModalCategory(mode === 'category' ? selectedCat : '')
+    setModalCoupangId('')
+    setModalBarcode('')
+    setModalProductSearch('')
+    setModalProductList([])
+    setShowProductDropdown(false)
+  }
+
+  function closeModal() {
+    setModal(null)
+    setModalSubmitting(false)
+  }
 
   const seedPool = useMemo(() => {
     if (mode === 'manual') {
@@ -100,35 +155,28 @@ export default function KeywordSuggestPanel({
     }
   }
 
-  async function registerKeyword(s: Suggestion) {
-    if (registered.has(s.keyword)) return
-    // 행별 선택값 → 없으면 기본 상품 → 그것도 없으면 null
-    const barcode = rowProduct[s.keyword] || defaultProduct || ''
-    const linked  = barcode ? availableProducts.find(p => p.barcode === barcode) : null
-    if (!linked) {
-      alert('연결할 상품을 선택해주세요 (행 옆 드롭다운 또는 상단 기본 상품)')
+  async function submitRegister() {
+    if (!modal) return
+    if (!modalCoupangId.trim()) {
+      alert('쿠팡 상품 ID는 필수입니다.')
       return
     }
-    setRegistering(prev => new Set(prev).add(s.keyword))
+    setModalSubmitting(true)
     try {
       const { error } = await supabase.from('keywords').insert([{
-        keyword: s.keyword,
-        type: '추천',
-        category: mode === 'category' ? selectedCat : null,
-        coupang_product_id: linked.coupang_product_id,
-        barcode: linked.barcode,
+        keyword: modal.keyword,
+        type: 'core',
+        category: modalCategory.trim() || null,
+        coupang_product_id: modalCoupangId.trim(),
+        barcode: modalBarcode || null,
       }])
       if (error) throw error
-      setRegistered(prev => new Set(prev).add(s.keyword))
+      setRegistered(prev => new Set(prev).add(modal.keyword))
       onRegistered?.()
+      closeModal()
     } catch (e) {
       alert(`등록 실패: ${e instanceof Error ? e.message : ''}`)
-    } finally {
-      setRegistering(prev => {
-        const next = new Set(prev)
-        next.delete(s.keyword)
-        return next
-      })
+      setModalSubmitting(false)
     }
   }
 
@@ -253,24 +301,6 @@ export default function KeywordSuggestPanel({
           {/* 결과 */}
           {results.length > 0 && (
             <div>
-              {/* 기본 상품 일괄 선택 */}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, padding: '8px 12px', background: '#F9FAFB', borderRadius: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>🎯 기본 연결 상품</span>
-                <select
-                  value={defaultProduct}
-                  onChange={e => setDefaultProduct(e.target.value)}
-                  style={{ padding: '4px 8px', fontSize: 12, minWidth: 240, border: '1px solid #E4E7EC', borderRadius: 4 }}
-                >
-                  <option value="">— 선택 안 함 (행별로 지정) —</option>
-                  {availableProducts.map(p => (
-                    <option key={p.barcode} value={p.barcode}>{p.name} ({p.barcode})</option>
-                  ))}
-                </select>
-                <span style={{ fontSize: 10, color: 'var(--t3)' }}>
-                  행 드롭다운 비어있으면 기본 상품 사용
-                </span>
-              </div>
-
               <input
                 placeholder="🔍 결과 내 검색..."
                 value={search}
@@ -288,26 +318,22 @@ export default function KeywordSuggestPanel({
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>키워드</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>월 검색량</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC' }}>경쟁</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>연결 상품</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>출처</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 90 }}>등록</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filtered.map(s => {
                       const isReg  = registered.has(s.keyword)
-                      const isLoad = registering.has(s.keyword)
                       const compColor =
                         s.competition === 'high' ? '#DC2626' :
                         s.competition === 'mid'  ? '#D97706' : '#059669'
                       const compLabel =
                         s.competition === 'high' ? '높음' :
                         s.competition === 'mid'  ? '중간' : '낮음'
-                      const selectedBc = rowProduct[s.keyword] || ''
                       return (
                         <tr key={s.keyword} style={{ borderTop: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '6px 10px', fontWeight: 600 }} title={`출처: ${s.sourceSeed}`}>
-                            {s.keyword}
-                          </td>
+                          <td style={{ padding: '6px 10px', fontWeight: 600 }}>{s.keyword}</td>
                           <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600 }}>
                             {s.total.toLocaleString('ko-KR')}
                           </td>
@@ -317,37 +343,22 @@ export default function KeywordSuggestPanel({
                               padding: '2px 6px', borderRadius: 4, background: compColor + '15',
                             }}>{compLabel}</span>
                           </td>
-                          <td style={{ padding: '4px 10px' }}>
-                            <select
-                              value={selectedBc}
-                              onChange={e => setRowProduct(prev => ({ ...prev, [s.keyword]: e.target.value }))}
-                              disabled={isReg}
-                              style={{
-                                padding: '3px 6px', fontSize: 11, maxWidth: 220, width: '100%',
-                                border: '1px solid #E4E7EC', borderRadius: 4,
-                                background: selectedBc ? '#fff' : '#FEF3C7',
-                              }}
-                            >
-                              <option value="">{defaultProduct ? '— 기본 사용 —' : '⚠️ 상품 선택...'}</option>
-                              {availableProducts.map(p => (
-                                <option key={p.barcode} value={p.barcode}>{p.name}</option>
-                              ))}
-                            </select>
+                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.sourceSeed}>
+                            {s.sourceSeed}
                           </td>
                           <td style={{ padding: '6px 10px', textAlign: 'center' }}>
                             {isReg ? (
                               <span style={{ fontSize: 11, color: '#059669', fontWeight: 700 }}>✓ 등록됨</span>
                             ) : (
                               <button
-                                onClick={() => registerKeyword(s)}
-                                disabled={isLoad}
+                                onClick={() => openRegisterModal(s)}
                                 style={{
                                   padding: '4px 10px', fontSize: 11, borderRadius: 4,
-                                  background: isLoad ? '#94A3B8' : '#1570EF',
+                                  background: '#1570EF',
                                   color: '#fff', border: 'none', fontWeight: 700,
-                                  cursor: isLoad ? 'not-allowed' : 'pointer',
+                                  cursor: 'pointer',
                                 }}
-                              >{isLoad ? '...' : '+ 등록'}</button>
+                              >+ 등록</button>
                             )}
                           </td>
                         </tr>
@@ -358,6 +369,141 @@ export default function KeywordSuggestPanel({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ─── 등록 모달 ─── */}
+      {modal && (
+        <div
+          onClick={closeModal}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 10, padding: 24,
+              width: '92%', maxWidth: 520, maxHeight: '90vh', overflowY: 'auto',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
+                  ➕ 키워드 등록
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--t3)' }}>
+                  월 {modal.total.toLocaleString('ko-KR')}회 · 출처: {modal.sourceSeed}
+                </div>
+              </div>
+              <button
+                onClick={closeModal}
+                style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--t3)' }}
+              >×</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>🗂 분류</label>
+                <input
+                  className="fi"
+                  value={modalCategory}
+                  onChange={e => setModalCategory(e.target.value)}
+                  placeholder="예: 원피스"
+                  list="cat-suggestions"
+                />
+                <datalist id="cat-suggestions">
+                  {categories.map(c => <option key={c} value={c} />)}
+                </datalist>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>🔑 키워드</label>
+                <input className="fi" value={modal.keyword} readOnly style={{ background: '#F9FAFB' }} />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>
+                🆔 쿠팡 상품 ID *
+              </label>
+              <input
+                className="fi"
+                value={modalCoupangId}
+                onChange={e => setModalCoupangId(e.target.value)}
+                placeholder="필수 (쿠팡 상품 페이지 URL의 productId)"
+                autoFocus
+              />
+            </div>
+
+            <div style={{ marginBottom: 16, position: 'relative' }} ref={productBoxRef}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>
+                📦 연결 상품 (상품명 검색)
+              </label>
+              <input
+                className="fi"
+                value={modalProductSearch}
+                onChange={e => {
+                  setModalProductSearch(e.target.value)
+                  setShowProductDropdown(true)
+                  if (!e.target.value) setModalBarcode('')
+                }}
+                onFocus={() => setShowProductDropdown(true)}
+                placeholder="상품명 일부 입력 (예: 신비)"
+              />
+              {modalBarcode && (
+                <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
+                  선택된 바코드: <b>{modalBarcode}</b>
+                </div>
+              )}
+              {showProductDropdown && modalProductList.length > 0 && (
+                <div className="prod-drop" style={{ zIndex: 1001 }}>
+                  {modalProductList.map(p => (
+                    <div
+                      key={p.barcode}
+                      className="prod-drop-item"
+                      onClick={() => {
+                        setModalProductSearch(p.name)
+                        setModalBarcode(p.barcode)
+                        setShowProductDropdown(false)
+                      }}
+                    >
+                      {p.image_url && (
+                        <img src={p.image_url} alt="" className="prod-drop-img" />
+                      )}
+                      <div className="prod-drop-info">
+                        <div className="prod-drop-name">{p.name}</div>
+                        <div className="prod-drop-bar">{p.barcode}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={closeModal}
+                disabled={modalSubmitting}
+                style={{
+                  padding: '8px 16px', borderRadius: 6,
+                  background: '#fff', color: 'var(--t2)',
+                  border: '1px solid #E4E7EC', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                }}
+              >취소</button>
+              <button
+                onClick={submitRegister}
+                disabled={modalSubmitting || !modalCoupangId.trim()}
+                style={{
+                  padding: '8px 16px', borderRadius: 6,
+                  background: (modalSubmitting || !modalCoupangId.trim()) ? '#94A3B8' : '#1570EF',
+                  color: '#fff', border: 'none', fontWeight: 700, fontSize: 13,
+                  cursor: (modalSubmitting || !modalCoupangId.trim()) ? 'not-allowed' : 'pointer',
+                }}
+              >{modalSubmitting ? '등록 중...' : '➕ 등록'}</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
