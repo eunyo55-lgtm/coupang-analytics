@@ -6,6 +6,7 @@ import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, Tooltip, L
 import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
 import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
+import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 
 const SUPABASE_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eWZ5Z216cXFpd2dyY3V5ZHRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwODg1MTMsImV4cCI6MjA4NTY2NDUxM30.aA7ctMt_GH8rbzWR9vN2tcAdjqHjYqTI5sTuglBcrkI'
@@ -238,35 +239,54 @@ export default function DashboardPage() {
   const [autoRefreshed, setAutoRefreshed] = useState(false)
   const [kpiRefetchTick, setKpiRefetchTick] = useState(0)
 
-  // 공급 KPI용 supply_status raw 데이터
+  // 공급 KPI용 supply_status raw 데이터 (SWR 캐시 + 병렬 fetch)
   type SupplyRaw = { 입고예정일: string; 확정수량: number; 입고수량: number; 매입가: number }
-  const [supplyRaw, setSupplyRaw] = useState<SupplyRaw[]>([])
+  const SUPPLY_CACHE_KEY = 'swr_dash_supply_v1'
+  const SUPPLY_TTL = 10 * 60 * 1000
 
-  // 대시보드 진입 시 1회 supply_status 로드 (YTD + 미래)
+  const _initialSupply = typeof window !== 'undefined' ? readSwrCache<SupplyRaw[]>(SUPPLY_CACHE_KEY, SUPPLY_TTL) : null
+  const [supplyRaw, setSupplyRaw] = useState<SupplyRaw[]>(_initialSupply?.data ?? [])
+  const [supplyLoading, setSupplyLoading] = useState(!_initialSupply || _initialSupply.stale)
+
+  // 대시보드 진입 시 supply_status 병렬 로드 (YTD + 미래)
   useEffect(() => {
     let cancelled = false
     async function load() {
       const yearStart = `${new Date().getFullYear()}-01-01`
-      let all: SupplyRaw[] = []
-      let offset = 0
-      while (true) {
-        const url = `${SUPABASE_URL}/rest/v1/supply_status?select=입고예정일,확정수량,입고수량,매입가&입고예정일=gte.${yearStart}&order=입고예정일.asc&limit=1000&offset=${offset}`
-        const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
-        if (!res.ok) break
-        const page: SupplyRaw[] = await res.json()
-        if (!Array.isArray(page) || page.length === 0) break
-        // VAT 별도: 매입가 변환
-        all = all.concat(page.map(r => ({
-          ...r,
-          확정수량: Number(r.확정수량 || 0),
-          입고수량: Number(r.입고수량 || 0),
-          매입가: vatExcluded(Number(r.매입가 || 0)),
-        })))
-        if (page.length < 1000) break
-        offset += 1000
-        if (all.length > 50000) break
+      const PAGE = 1000
+      const CONCURRENCY = 16
+      const all: SupplyRaw[] = []
+      let nextOffset = 0
+      let done = false
+      while (!done) {
+        const offsets = Array.from({ length: CONCURRENCY }, (_, i) => nextOffset + i * PAGE)
+        const results = await Promise.all(offsets.map(async off => {
+          try {
+            const url = `${SUPABASE_URL}/rest/v1/supply_status?select=입고예정일,확정수량,입고수량,매입가&입고예정일=gte.${yearStart}&order=입고예정일.asc&limit=${PAGE}&offset=${off}`
+            const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
+            if (!res.ok) return [] as SupplyRaw[]
+            return (await res.json()) as SupplyRaw[]
+          } catch { return [] as SupplyRaw[] }
+        }))
+        for (const arr of results) {
+          if (Array.isArray(arr) && arr.length > 0) {
+            all.push(...arr.map(r => ({
+              ...r,
+              확정수량: Number(r.확정수량 || 0),
+              입고수량: Number(r.입고수량 || 0),
+              매입가: vatExcluded(Number(r.매입가 || 0)),
+            })))
+          }
+          if (!arr || arr.length < PAGE) done = true
+        }
+        nextOffset += CONCURRENCY * PAGE
+        if (all.length > 200000) break  // safety cap
       }
-      if (!cancelled) setSupplyRaw(all)
+      if (!cancelled) {
+        setSupplyRaw(all)
+        setSupplyLoading(false)
+        writeSwrCache(SUPPLY_CACHE_KEY, all)
+      }
     }
     load()
     return () => { cancelled = true }
@@ -649,11 +669,24 @@ export default function DashboardPage() {
       <div className="ds-row" style={{marginBottom:16}}>
         {supplyKpiCards.map((c,i)=>(
           <div key={i} className={`ds-card ds-c${i+1}`}>
-            <div className="ds-lbl" style={{fontSize:11}}>{c.label}</div>
+            <div className="ds-lbl" style={{fontSize:11}}>
+              {c.label}
+              {supplyLoading && supplyRaw.length === 0 && (
+                <span style={{ fontSize:9, color:'#94a3b8', fontWeight:500, marginLeft:6 }}>· 로딩 중</span>
+              )}
+            </div>
             <div style={{fontSize:9,color:'var(--t3)',marginBottom:4}}>{c.sub}</div>
-            <div className="ds-val" style={{color:c.color,fontSize:22}}>{fmt(c.qty)}</div>
+            <div className="ds-val" style={{color:c.color,fontSize:22}}>
+              {supplyLoading && supplyRaw.length === 0
+                ? <span style={{fontSize:13,color:'var(--t3)'}}>...</span>
+                : fmt(c.qty)}
+            </div>
             <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}} title={VAT_LABEL}>
-              공급금액 {c.rev > 0 ? (c.rev >= 100_000_000 ? Math.round(c.rev/10_000_000)/10+'억' : fmt(c.rev)+'원') : '—'}
+              {supplyLoading && supplyRaw.length === 0
+                ? <span style={{color:'var(--t3)'}}>공급금액 집계중...</span>
+                : (
+                  <>공급금액 {c.rev > 0 ? (c.rev >= 100_000_000 ? Math.round(c.rev/10_000_000)/10+'억' : fmt(c.rev)+'원') : '—'}</>
+                )}
             </div>
           </div>
         ))}
