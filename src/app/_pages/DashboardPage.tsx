@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
+import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
 import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
@@ -237,6 +237,40 @@ export default function DashboardPage() {
   const [autoRefreshing, setAutoRefreshing] = useState(false)
   const [autoRefreshed, setAutoRefreshed] = useState(false)
   const [kpiRefetchTick, setKpiRefetchTick] = useState(0)
+
+  // 공급 KPI용 supply_status raw 데이터
+  type SupplyRaw = { 입고예정일: string; 확정수량: number; 입고수량: number; 매입가: number }
+  const [supplyRaw, setSupplyRaw] = useState<SupplyRaw[]>([])
+
+  // 대시보드 진입 시 1회 supply_status 로드 (YTD + 미래)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      const yearStart = `${new Date().getFullYear()}-01-01`
+      let all: SupplyRaw[] = []
+      let offset = 0
+      while (true) {
+        const url = `${SUPABASE_URL}/rest/v1/supply_status?select=입고예정일,확정수량,입고수량,매입가&입고예정일=gte.${yearStart}&order=입고예정일.asc&limit=1000&offset=${offset}`
+        const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
+        if (!res.ok) break
+        const page: SupplyRaw[] = await res.json()
+        if (!Array.isArray(page) || page.length === 0) break
+        // VAT 별도: 매입가 변환
+        all = all.concat(page.map(r => ({
+          ...r,
+          확정수량: Number(r.확정수량 || 0),
+          입고수량: Number(r.입고수량 || 0),
+          매입가: vatExcluded(Number(r.매입가 || 0)),
+        })))
+        if (page.length < 1000) break
+        offset += 1000
+        if (all.length > 50000) break
+      }
+      if (!cancelled) setSupplyRaw(all)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
   // 프리셋에서 (from, to) 계산 — latestDate 기준
   function rangeFromPreset(p: TopPreset, anchor: string): { from: string; to: string } {
@@ -504,6 +538,47 @@ export default function DashboardPage() {
     {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:displayedStockValue||null,yoy:null,color:'var(--amber)',isStock:true},
   ]
 
+  // ── 공급 KPI 4개 계산 (입고예정일 기준, 확정수량 + 확정금액) ──
+  const supplyKpis = useMemo(() => {
+    const todayStr = toYMD(new Date())
+    const acc = (filter: (r: SupplyRaw) => boolean) => {
+      let qty = 0, amt = 0
+      for (const r of supplyRaw) {
+        if (filter(r)) {
+          const q = Number(r.확정수량 || 0)
+          qty += q
+          amt += q * Number(r.매입가 || 0)
+        }
+      }
+      return { qty, amt }
+    }
+    return {
+      yest: acc(r => (r.입고예정일 || '').slice(0,10) === latestDate),
+      week: acc(r => { const d = (r.입고예정일 || '').slice(0,10); return d >= weekRange.from && d <= weekRange.to }),
+      cum:  acc(r => { const d = (r.입고예정일 || '').slice(0,10); return d >= cumRange.from && d <= cumRange.to }),
+      // 이동중: 미래 예정 + 미입고
+      moving: (() => {
+        let qty = 0, amt = 0
+        for (const r of supplyRaw) {
+          const d = (r.입고예정일 || '').slice(0,10)
+          if (d >= todayStr && Number(r.입고수량 || 0) === 0) {
+            const q = Number(r.확정수량 || 0)
+            qty += q
+            amt += q * Number(r.매입가 || 0)
+          }
+        }
+        return { qty, amt }
+      })(),
+    }
+  }, [supplyRaw, latestDate, weekRange.from, weekRange.to, cumRange.from, cumRange.to])
+
+  const supplyKpiCards: {label:string;sub:string;qty:number;rev:number;color:string}[] = [
+    {label:'전일 공급량', sub:`확정 (${latestDate})`, qty:supplyKpis.yest.qty, rev:supplyKpis.yest.amt, color:'var(--blue)'},
+    {label:'주간 공급량', sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`, qty:supplyKpis.week.qty, rev:supplyKpis.week.amt, color:'var(--purple)'},
+    {label:'누적 공급량', sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`, qty:supplyKpis.cum.qty, rev:supplyKpis.cum.amt, color:'var(--green)'},
+    {label:'이동중 공급', sub:`미입고 · 예정일 ${toYMD(new Date()).slice(5)} 이후`, qty:supplyKpis.moving.qty, rev:supplyKpis.moving.amt, color:'var(--amber)'},
+  ]
+
   return (
     <div>
       <div style={{
@@ -570,6 +645,20 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {/* 공급 KPI Row — 전일/주간/누적 공급량 + 이동중 공급 */}
+      <div className="ds-row" style={{marginBottom:16}}>
+        {supplyKpiCards.map((c,i)=>(
+          <div key={i} className={`ds-card ds-c${i+1}`}>
+            <div className="ds-lbl" style={{fontSize:11}}>{c.label}</div>
+            <div style={{fontSize:9,color:'var(--t3)',marginBottom:4}}>{c.sub}</div>
+            <div className="ds-val" style={{color:c.color,fontSize:22}}>{fmt(c.qty)}</div>
+            <div style={{fontSize:11,fontWeight:700,color:'var(--t2)',margin:'3px 0'}} title={VAT_LABEL}>
+              공급금액 {c.rev > 0 ? (c.rev >= 100_000_000 ? Math.round(c.rev/10_000_000)/10+'억' : fmt(c.rev)+'원') : '—'}
+            </div>
+          </div>
+        ))}
+      </div>
+
       <div className="card" style={{marginBottom:12}}>
         <div className="ch">
           <div className="ch-l"><div className="ch-ico">📈</div><div><div className="ch-title">3개년 판매 비교</div><div className="ch-sub">2024 · 2025 · 2026 일별 출고수량</div></div></div>
@@ -602,6 +691,56 @@ export default function DashboardPage() {
           ):<div className="empty-st" style={{height:300}}><div className="es-ico">📈</div><div className="es-t">데이터 로딩 중...</div></div>}
         </div>
       </div>
+
+      {/* 일별 공급량 + 공급매출 차트 — 3개년 판매 비교 아래 */}
+      {(() => {
+        // chartFrom~chartTo 범위 안의 supply 데이터를 일별 집계
+        const dailySupply: Record<string, { qty: number; amt: number }> = {}
+        for (const r of supplyRaw) {
+          const d = (r.입고예정일 || '').slice(0,10)
+          if (d < chartFrom || d > chartTo) continue
+          const q = Number(r.확정수량 || 0)
+          const mp = Number(r.매입가 || 0)
+          if (!dailySupply[d]) dailySupply[d] = { qty: 0, amt: 0 }
+          dailySupply[d].qty += q
+          dailySupply[d].amt += q * mp
+        }
+        const supplyChart = Object.entries(dailySupply).sort(([a],[b])=>a.localeCompare(b))
+          .map(([d, v]) => ({ date: d.slice(5), 공급량: v.qty, 공급매출: Math.round(v.amt) }))
+        if (supplyChart.length === 0) return null
+        const todayMD = (() => { const t=new Date(); return `${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}` })()
+        return (
+          <div className="card" style={{marginBottom:12}}>
+            <div className="ch">
+              <div className="ch-l"><div className="ch-ico">🚚</div><div>
+                <div className="ch-title">일별 공급량 · 공급매출</div>
+                <div className="ch-sub">{chartFrom} ~ {chartTo} · 입고예정일 기준 확정 (VAT 별도)</div>
+              </div></div>
+            </div>
+            <div className="cb">
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={supplyChart} margin={{top:8,right:20,left:0,bottom:5}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                  <XAxis dataKey="date" tick={{fontSize:10}} interval="preserveStartEnd"/>
+                  <YAxis yAxisId="left" tick={{fontSize:10}} width={45}/>
+                  <YAxis yAxisId="right" orientation="right" tick={{fontSize:10}} width={56}
+                    tickFormatter={(v:number)=> v>=100_000_000?`${(v/100_000_000).toFixed(1)}억`:v>=10_000?`${Math.round(v/10_000)}만`:String(v)}/>
+                  <Tooltip
+                    formatter={(val:number, name:string) => name==='공급매출' ? [fmt(val)+'원', name] : [fmt(val)+'개', name]}
+                    labelFormatter={l=>`날짜: ${l}`}
+                  />
+                  <Legend iconType="circle" iconSize={8} wrapperStyle={{fontSize:11}}/>
+                  <Bar yAxisId="left" dataKey="공급량" fill="#A855F7" radius={[3,3,0,0]}/>
+                  <Line yAxisId="right" type="monotone" dataKey="공급매출" stroke="#10B981" strokeWidth={2} dot={{r:2}}/>
+                  {supplyChart.some(d => d.date === todayMD) && (
+                    <ReferenceLine yAxisId="left" x={todayMD} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{value:'오늘',position:'top',fontSize:10,fill:'#dc2626',fontWeight:700}}/>
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* 🌅 오늘의 브리핑 + 🚨 우선순위 액션 큐 (3개년 차트 아래) */}
       <DashboardBriefing
