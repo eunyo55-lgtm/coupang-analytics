@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD, fromYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, LabelList, Legend } from 'recharts'
 
 Chart.register(...registerables)
 
@@ -336,6 +336,69 @@ export default function SalesPage() {
     return { ytdQty, ytdRev, weekQty, weekRev, rangeDaily }
   }, [visible, tableDates])
 
+  // ─── 전년 동기 판매 데이터 (시즌/카테고리 비교용) ───
+  type PrevRow = { date: string; barcode: string; qty: number; rev: number; season: string; category: string }
+  const [prevYearSales, setPrevYearSales] = useState<PrevRow[]>([])
+
+  useEffect(() => {
+    if (!chartFrom || !chartTo) return
+    const prevFrom = chartFrom.replace(/^\d{4}/, y => String(+y - 1))
+    const prevTo   = chartTo.replace(/^\d{4}/, y => String(+y - 1))
+    let cancelled = false
+    async function load() {
+      // 현재 salesData에서 barcode→info 맵 구축 (season/category/cost 재사용)
+      const bcInfo: Record<string, { season: string; category: string; cost: number }> = {}
+      for (const r of salesData) {
+        if (r.barcode && !bcInfo[r.barcode]) {
+          bcInfo[r.barcode] = { season: r.season || '미지정', category: r.category || '기타', cost: r.cost || 0 }
+        }
+      }
+      // 전년 daily_sales 조회 (병렬 페이지네이션)
+      const SUPA_URL = 'https://vzyfygmzqqiwgrcuydti.supabase.co'
+      const SUPA_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+      const H = { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` }
+      const PAGE = 1000
+      const CONCURRENCY = 8
+      const all: any[] = []
+      let nextOffset = 0
+      let done = false
+      while (!done) {
+        const offs = Array.from({length: CONCURRENCY}, (_, i) => nextOffset + i * PAGE)
+        const results = await Promise.all(offs.map(async off => {
+          try {
+            const url = `${SUPA_URL}/rest/v1/daily_sales?select=date,barcode,quantity&date=gte.${prevFrom}&date=lte.${prevTo}&quantity=gt.0&order=date.asc&limit=${PAGE}&offset=${off}`
+            const r = await fetch(url, { headers: H })
+            return r.ok ? await r.json() : []
+          } catch { return [] }
+        }))
+        for (const arr of results) {
+          if (Array.isArray(arr) && arr.length > 0) all.push(...arr)
+          if (!arr || arr.length < PAGE) done = true
+        }
+        nextOffset += CONCURRENCY * PAGE
+        if (all.length > 100000) break
+      }
+      if (cancelled) return
+      // 정규화 + season/category 매핑
+      const rows: PrevRow[] = all.map(r => {
+        const bc = String(r.barcode || '')
+        const info = bcInfo[bc] || { season: '미지정', category: '기타', cost: 0 }
+        const qty = Number(r.quantity || 0)
+        return {
+          date: String(r.date).slice(0, 10),
+          barcode: bc,
+          qty,
+          rev: info.cost * qty,  // cost는 이미 VAT 별도
+          season: info.season,
+          category: info.category,
+        }
+      })
+      setPrevYearSales(rows)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [chartFrom, chartTo, salesData])
+
   // ─── 일별 판매 추이 (시계열) ───
   const dailyTrend = useMemo(() => {
     const byDate: Record<string, { qty: number; rev: number }> = {}
@@ -350,112 +413,58 @@ export default function SalesPage() {
       .map(([date, v]) => ({ date: date.slice(5), fullDate: date, qty: v.qty, rev: Math.round(v.rev) }))
   }, [salesData, chartFrom, chartTo])
 
-  // ─── 차트용 시즌별 / 카테고리별 ───
+  // ─── 차트용 시즌별 / 카테고리별 (전년 비교 포함) ───
   const bySeason = useMemo(() => {
-    const m = new Map<string, { qty: number; rev: number }>()
+    const m = new Map<string, { qty: number; rev: number; prevQty: number; prevRev: number }>()
     products.forEach(p => {
       const key = p.season || '미지정'
-      const cur = m.get(key) || { qty: 0, rev: 0 }
+      const cur = m.get(key) || { qty: 0, rev: 0, prevQty: 0, prevRev: 0 }
       p.chartDaily.forEach(d => { cur.qty += d.qty; cur.rev += d.rev })
+      m.set(key, cur)
+    })
+    // 전년 누적
+    prevYearSales.forEach(r => {
+      const key = r.season || '미지정'
+      const cur = m.get(key) || { qty: 0, rev: 0, prevQty: 0, prevRev: 0 }
+      cur.prevQty += r.qty
+      cur.prevRev += r.rev
       m.set(key, cur)
     })
     return Array.from(m.entries())
-      .map(([k, v]) => ({ label: k, ...v }))
-      .filter(s => (mode === 'qty' ? s.qty : s.rev) > 0)
+      .map(([k, v]) => ({ label: k, ...v, revR: Math.round(v.rev), prevRevR: Math.round(v.prevRev) }))
+      .filter(s => (mode === 'qty' ? (s.qty + s.prevQty) : (s.rev + s.prevRev)) > 0)
       .sort((a, b) => (mode === 'qty' ? b.qty - a.qty : b.rev - a.rev))
-  }, [products, mode])
+  }, [products, prevYearSales, mode])
 
   const byCategory = useMemo(() => {
-    const m = new Map<string, { qty: number; rev: number }>()
+    const m = new Map<string, { qty: number; rev: number; prevQty: number; prevRev: number }>()
     products.forEach(p => {
       const key = p.category || '기타'
-      const cur = m.get(key) || { qty: 0, rev: 0 }
+      const cur = m.get(key) || { qty: 0, rev: 0, prevQty: 0, prevRev: 0 }
       p.chartDaily.forEach(d => { cur.qty += d.qty; cur.rev += d.rev })
       m.set(key, cur)
     })
-    // 정렬 후, '기타'는 항상 맨 뒤로 보냄
+    prevYearSales.forEach(r => {
+      const key = r.category || '기타'
+      const cur = m.get(key) || { qty: 0, rev: 0, prevQty: 0, prevRev: 0 }
+      cur.prevQty += r.qty
+      cur.prevRev += r.rev
+      m.set(key, cur)
+    })
     const arr = Array.from(m.entries())
-      .map(([k, v]) => ({ label: k, ...v }))
-      .filter(c => (mode === 'qty' ? c.qty : c.rev) > 0)
+      .map(([k, v]) => ({ label: k, ...v, revR: Math.round(v.rev), prevRevR: Math.round(v.prevRev) }))
+      .filter(c => (mode === 'qty' ? (c.qty + c.prevQty) : (c.rev + c.prevRev)) > 0)
       .sort((a, b) => (mode === 'qty' ? b.qty - a.qty : b.rev - a.rev))
     const others = arr.filter(x => x.label === '기타')
     const rest   = arr.filter(x => x.label !== '기타')
     return [...rest, ...others]
-  }, [products, mode])
+  }, [products, prevYearSales, mode])
 
-  // ─── 차트 렌더링 ───
-  const seasonRef = useRef<HTMLCanvasElement>(null)
-  const seasonChart = useRef<Chart | null>(null)
-  const catRef = useRef<HTMLCanvasElement>(null)
-  const catChart = useRef<Chart | null>(null)
+  const hasPrev = prevYearSales.length > 0
+  const yearNow = new Date().getFullYear()
+  const yearPrev = yearNow - 1
 
-  useEffect(() => {
-    if (!seasonRef.current) return
-    seasonChart.current?.destroy()
-    if (!bySeason.length) return
-    seasonChart.current = new Chart(seasonRef.current, {
-      type: 'bar',
-      data: {
-        labels: bySeason.map(s => s.label),
-        datasets: [{
-          label: mode === 'qty' ? '판매량' : '금액',
-          data: bySeason.map(s => (mode === 'qty' ? s.qty : Math.round(s.rev))),
-          backgroundColor: '#1570EF',
-          borderRadius: 6,
-          barThickness: 32,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: ctx => ' ' + Number(ctx.parsed.y).toLocaleString('ko-KR') } },
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 11, weight: 'bold' as const }, color: '#56606E' } },
-          y: { grid: { color: '#F3F4F6' }, ticks: { font: { size: 10 }, color: '#56606E', callback: (v) => Number(v).toLocaleString('ko-KR') } },
-        },
-      },
-    })
-    return () => { seasonChart.current?.destroy() }
-  }, [bySeason, mode])
-
-  useEffect(() => {
-    if (!catRef.current) return
-    catChart.current?.destroy()
-    if (!byCategory.length) return
-    catChart.current = new Chart(catRef.current, {
-      type: 'bar',
-      data: {
-        labels: byCategory.map(s => s.label),
-        datasets: [{
-          label: mode === 'qty' ? '판매량' : '금액',
-          data: byCategory.map(s => (mode === 'qty' ? s.qty : Math.round(s.rev))),
-          backgroundColor: byCategory.map(s => s.label === '기타' ? '#98A2B3' : '#1570EF'),
-          borderRadius: 6,
-          // barThickness 제거 → 자동 폭 사용으로 공간 더 잘 활용
-          maxBarThickness: 48,
-          categoryPercentage: 0.85,
-          barPercentage: 0.9,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: { padding: { top: 12, bottom: 0, left: 4, right: 4 } },
-        plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: ctx => ' ' + Number(ctx.parsed.y).toLocaleString('ko-KR') } },
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 11, weight: 'bold' as const }, color: '#56606E', autoSkip: false, maxRotation: 45, minRotation: 45 } },
-          y: { grid: { color: '#F3F4F6' }, ticks: { font: { size: 10 }, color: '#56606E', callback: (v) => Number(v).toLocaleString('ko-KR') } },
-        },
-      },
-    })
-    return () => { catChart.current?.destroy() }
-  }, [byCategory, mode])
+  // (시즌/카테고리는 recharts BarChart로 변경 — Chart.js useEffect 제거됨)
 
   // ─── 렌더 유틸 ───
   const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
@@ -579,34 +588,68 @@ export default function SalesPage() {
         </div>
       </div>
 
-      {/* ─── 시즌별 / 카테고리별 차트 ─── */}
+      {/* ─── 시즌별 / 카테고리별 차트 (전년 비교 + 막대 위 숫자) ─── */}
       <div className="g2">
         <div className="card">
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">🗓️</div><div>
               <div className="ch-title">시즌별 판매 ({mode === 'qty' ? '수량' : '금액'})</div>
-              <div className="ch-sub">{chartFrom} ~ {chartTo}</div>
+              <div className="ch-sub">
+                {chartFrom} ~ {chartTo}{hasPrev ? ` · ${yearNow}년 vs ${yearPrev}년` : ''}
+              </div>
             </div></div>
           </div>
           <div className="cb">
-            {bySeason.length > 0
-              ? <div style={{ position: 'relative', height: 260 }}><canvas ref={seasonRef} /></div>
-              : <div className="empty-st"><div className="es-ico">🗓️</div><div className="es-t">기간 내 시즌 데이터가 없어요</div></div>
-            }
+            {bySeason.length > 0 ? (
+              <ResponsiveContainer width="100%" height={340}>
+                <BarChart data={bySeason} margin={{ top: 24, right: 10, left: 0, bottom: 60 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false}/>
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#56606E', fontWeight: 'bold' }} interval={0} angle={-25} textAnchor="end" height={60}/>
+                  <YAxis tick={{ fontSize: 10, fill: '#56606E' }} tickFormatter={(v)=>Number(v).toLocaleString('ko-KR')}/>
+                  <Tooltip formatter={(v:number, n:string)=>[Number(v).toLocaleString('ko-KR') + (mode==='qty'?'개':'원'), n]}/>
+                  {hasPrev && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }}/>}
+                  <Bar dataKey={mode==='qty'?'qty':'revR'} name={`${yearNow}년`} fill="#1570EF" radius={[6,6,0,0]}>
+                    <LabelList dataKey={mode==='qty'?'qty':'revR'} position="top" fontSize={10} formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
+                  </Bar>
+                  {hasPrev && (
+                    <Bar dataKey={mode==='qty'?'prevQty':'prevRevR'} name={`${yearPrev}년`} fill="#cbd5e1" radius={[6,6,0,0]}>
+                      <LabelList dataKey={mode==='qty'?'prevQty':'prevRevR'} position="top" fontSize={9} fill="#64748b" formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
+                    </Bar>
+                  )}
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="empty-st" style={{height:340}}><div className="es-ico">🗓️</div><div className="es-t">기간 내 시즌 데이터가 없어요</div></div>}
           </div>
         </div>
         <div className="card">
           <div className="ch">
             <div className="ch-l"><div className="ch-ico">📦</div><div>
               <div className="ch-title">카테고리별 판매 ({mode === 'qty' ? '수량' : '금액'})</div>
-              <div className="ch-sub">상품명 앞부분 기준 · 매칭 안되면 &apos;기타&apos; · {chartFrom} ~ {chartTo}</div>
+              <div className="ch-sub">
+                상품명 앞부분 기준 · 매칭 안되면 &apos;기타&apos; · {chartFrom} ~ {chartTo}{hasPrev ? ` · ${yearNow}년 vs ${yearPrev}년` : ''}
+              </div>
             </div></div>
           </div>
           <div className="cb">
-            {byCategory.length > 0
-              ? <div style={{ position: 'relative', height: 320 }}><canvas ref={catRef} /></div>
-              : <div className="empty-st"><div className="es-ico">📦</div><div className="es-t">기간 내 카테고리 데이터가 없어요</div></div>
-            }
+            {byCategory.length > 0 ? (
+              <ResponsiveContainer width="100%" height={340}>
+                <BarChart data={byCategory} margin={{ top: 24, right: 10, left: 0, bottom: 60 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false}/>
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#56606E', fontWeight: 'bold' }} interval={0} angle={-25} textAnchor="end" height={60}/>
+                  <YAxis tick={{ fontSize: 10, fill: '#56606E' }} tickFormatter={(v)=>Number(v).toLocaleString('ko-KR')}/>
+                  <Tooltip formatter={(v:number, n:string)=>[Number(v).toLocaleString('ko-KR') + (mode==='qty'?'개':'원'), n]}/>
+                  {hasPrev && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }}/>}
+                  <Bar dataKey={mode==='qty'?'qty':'revR'} name={`${yearNow}년`} fill="#1570EF" radius={[6,6,0,0]}>
+                    <LabelList dataKey={mode==='qty'?'qty':'revR'} position="top" fontSize={10} formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
+                  </Bar>
+                  {hasPrev && (
+                    <Bar dataKey={mode==='qty'?'prevQty':'prevRevR'} name={`${yearPrev}년`} fill="#cbd5e1" radius={[6,6,0,0]}>
+                      <LabelList dataKey={mode==='qty'?'prevQty':'prevRevR'} position="top" fontSize={9} fill="#64748b" formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
+                    </Bar>
+                  )}
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="empty-st" style={{height:340}}><div className="es-ico">📦</div><div className="es-t">기간 내 카테고리 데이터가 없어요</div></div>}
           </div>
         </div>
       </div>

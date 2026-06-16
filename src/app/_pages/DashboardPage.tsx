@@ -685,7 +685,7 @@ export default function DashboardPage() {
               {supplyLoading && supplyRaw.length === 0
                 ? <span style={{color:'var(--t3)'}}>공급금액 집계중...</span>
                 : (
-                  <>공급금액 {c.rev > 0 ? (c.rev >= 100_000_000 ? Math.round(c.rev/10_000_000)/10+'억' : fmt(c.rev)+'원') : '—'}</>
+                  <>공급금액 {c.rev > 0 ? fmt(c.rev) + '원' : '—'}</>
                 )}
             </div>
           </div>
