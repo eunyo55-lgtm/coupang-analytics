@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store'
 import { toYMD, fromYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, LabelList, Legend } from 'recharts'
+import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 
 Chart.register(...registerables)
 
@@ -344,7 +345,15 @@ export default function SalesPage() {
     if (!chartFrom || !chartTo) return
     const prevFrom = chartFrom.replace(/^\d{4}/, y => String(+y - 1))
     const prevTo   = chartTo.replace(/^\d{4}/, y => String(+y - 1))
+    // SWR 캐시 — 같은 prev 범위면 즉시 표시 + 백그라운드 갱신
+    const cacheKey = `swr_sales_prevyear_v1_${prevFrom}_${prevTo}`
+    const TTL = 30 * 60 * 1000  // 30분
     let cancelled = false
+    const cached = readSwrCache<PrevRow[]>(cacheKey, TTL)
+    if (cached) {
+      setPrevYearSales(cached.data)
+      if (!cached.stale) return  // 캐시 신선 → fresh fetch 생략
+    }
     async function load() {
       // 현재 salesData에서 barcode→info 맵 구축.
       // 카테고리는 r.category(products 테이블의 대분류) 대신 productName에서
@@ -397,9 +406,11 @@ export default function SalesPage() {
         }
       })
       setPrevYearSales(rows)
+      writeSwrCache(cacheKey, rows)
     }
     load()
     return () => { cancelled = true }
+    // salesData 변경 시 재계산 (barcode→name 매핑 갱신) — 다만 캐시는 동일 키 유지
   }, [chartFrom, chartTo, salesData])
 
   // ─── 일별 판매 추이 (시계열) ───
