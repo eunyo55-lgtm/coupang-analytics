@@ -40,10 +40,11 @@ export default function KeywordSuggestPanel({
   const [manualSeeds, setManualSeeds] = useState('')
   const [useClaude, setUseClaude] = useState(true)
   const [kidsOnly, setKidsOnly] = useState(true)
+  const [fashionOnly, setFashionOnly] = useState(true)  // 3~10세 패션 전용
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Suggestion[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number; surgingCount: number } | null>(null)
+  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number; nonFashionFiltered: number; surgingCount: number } | null>(null)
   const [registered, setRegistered] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
 
@@ -142,6 +143,7 @@ export default function KeywordSuggestPanel({
           excludeKeywords: existingKeywords,
           useClaude,
           kidsOnly,
+          fashionOnly,
           maxResults: 80,
         }),
       })
@@ -152,6 +154,7 @@ export default function KeywordSuggestPanel({
         seedCount: j.seedCount || 0,
         claudeUsed: !!j.claudeUsed,
         adultFiltered: j.adultFiltered || 0,
+        nonFashionFiltered: j.nonFashionFiltered || 0,
         surgingCount: j.surgingCount || 0,
       })
     } catch (e) {
@@ -281,7 +284,11 @@ export default function KeywordSuggestPanel({
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
               <input type="checkbox" checked={kidsOnly} onChange={e => setKidsOnly(e.target.checked)} />
-              <span>👶 키즈/유아/베이비 전용 (성인 키워드 제외)</span>
+              <span>👶 키즈 전용 (성인 키워드 제외)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={fashionOnly} onChange={e => setFashionOnly(e.target.checked)} />
+              <span>👗 3~10세 패션 전용 (음식·장난감·책·다이어트 등 제외)</span>
             </label>
             <button
               onClick={runSuggest}
@@ -312,7 +319,8 @@ export default function KeywordSuggestPanel({
             <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
               ✓ 시드 {info.seedCount}개에서 {results.length}개 발굴
               {info.claudeUsed ? ' · Claude 시드 확장 사용' : ''}
-              {info.adultFiltered > 0 ? ` · 성인 키워드 ${info.adultFiltered}개 제외됨` : ''}
+              {info.adultFiltered > 0 ? ` · 성인 ${info.adultFiltered}개 제외` : ''}
+              {info.nonFashionFiltered > 0 ? ` · 비패션 ${info.nonFashionFiltered}개 제외` : ''}
               {info.surgingCount > 0 ? ` · 🔥 급등 ${info.surgingCount}개` : ''}
             </div>
           )}
