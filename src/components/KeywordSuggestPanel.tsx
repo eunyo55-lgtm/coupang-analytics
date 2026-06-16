@@ -181,9 +181,11 @@ export default function KeywordSuggestPanel({
   }
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return results
-    const q = search.toLowerCase()
-    return results.filter(r => r.keyword.toLowerCase().includes(q))
+    const base = !search.trim()
+      ? results
+      : results.filter(r => r.keyword.toLowerCase().includes(search.toLowerCase()))
+    // 월 검색량 내림차순 (서버에서도 정렬되지만 안전하게 한 번 더)
+    return [...base].sort((a, b) => b.total - a.total)
   }, [results, search])
 
   return (
@@ -316,7 +318,7 @@ export default function KeywordSuggestPanel({
                   <thead style={{ position: 'sticky', top: 0, background: '#F9FAFB', zIndex: 1 }}>
                     <tr>
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>키워드</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>월 검색량</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>월 검색량 ▼</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC' }}>경쟁</th>
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>출처</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 90 }}>등록</th>
