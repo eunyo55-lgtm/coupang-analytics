@@ -346,11 +346,13 @@ export default function SalesPage() {
     const prevTo   = chartTo.replace(/^\d{4}/, y => String(+y - 1))
     let cancelled = false
     async function load() {
-      // 현재 salesData에서 barcode→info 맵 구축 (season/category/cost 재사용)
-      const bcInfo: Record<string, { season: string; category: string; cost: number }> = {}
+      // 현재 salesData에서 barcode→info 맵 구축.
+      // 카테고리는 r.category(products 테이블의 대분류) 대신 productName에서
+      // extractCategory()로 추출 — 현재 차트의 카테고리(상품명 '-' 앞부분)와 매칭.
+      const bcInfo: Record<string, { season: string; name: string; cost: number }> = {}
       for (const r of salesData) {
         if (r.barcode && !bcInfo[r.barcode]) {
-          bcInfo[r.barcode] = { season: r.season || '미지정', category: r.category || '기타', cost: r.cost || 0 }
+          bcInfo[r.barcode] = { season: r.season || '미지정', name: r.productName || '', cost: r.cost || 0 }
         }
       }
       // 전년 daily_sales 조회 (병렬 페이지네이션)
@@ -380,9 +382,10 @@ export default function SalesPage() {
       }
       if (cancelled) return
       // 정규화 + season/category 매핑
+      // 카테고리는 현재 차트와 동일하게 extractCategory(상품명) 으로 계산
       const rows: PrevRow[] = all.map(r => {
         const bc = String(r.barcode || '')
-        const info = bcInfo[bc] || { season: '미지정', category: '기타', cost: 0 }
+        const info = bcInfo[bc] || { season: '미지정', name: '', cost: 0 }
         const qty = Number(r.quantity || 0)
         return {
           date: String(r.date).slice(0, 10),
@@ -390,7 +393,7 @@ export default function SalesPage() {
           qty,
           rev: info.cost * qty,  // cost는 이미 VAT 별도
           season: info.season,
-          category: info.category,
+          category: info.name ? extractCategory(info.name) : '기타',
         }
       })
       setPrevYearSales(rows)
@@ -583,7 +586,10 @@ export default function SalesPage() {
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="empty-st" style={{ height: 280 }}><div className="es-ico">📈</div><div className="es-t">기간 내 판매 데이터가 없어요</div></div>
+            <div className="empty-st" style={{ height: 280 }}>
+              <div className="es-ico">{salesData.length === 0 ? '⏳' : '📈'}</div>
+              <div className="es-t">{salesData.length === 0 ? '판매 데이터 불러오는 중...' : '기간 내 판매 데이터가 없어요'}</div>
+            </div>
           )}
         </div>
       </div>
@@ -618,7 +624,12 @@ export default function SalesPage() {
                   )}
                 </BarChart>
               </ResponsiveContainer>
-            ) : <div className="empty-st" style={{height:340}}><div className="es-ico">🗓️</div><div className="es-t">기간 내 시즌 데이터가 없어요</div></div>}
+            ) : (
+              <div className="empty-st" style={{height:340}}>
+                <div className="es-ico">{salesData.length === 0 ? '⏳' : '🗓️'}</div>
+                <div className="es-t">{salesData.length === 0 ? '판매 데이터 불러오는 중...' : '기간 내 시즌 데이터가 없어요'}</div>
+              </div>
+            )}
           </div>
         </div>
         <div className="card">
@@ -649,7 +660,12 @@ export default function SalesPage() {
                   )}
                 </BarChart>
               </ResponsiveContainer>
-            ) : <div className="empty-st" style={{height:340}}><div className="es-ico">📦</div><div className="es-t">기간 내 카테고리 데이터가 없어요</div></div>}
+            ) : (
+              <div className="empty-st" style={{height:340}}>
+                <div className="es-ico">{salesData.length === 0 ? '⏳' : '📦'}</div>
+                <div className="es-t">{salesData.length === 0 ? '판매 데이터 불러오는 중...' : '기간 내 카테고리 데이터가 없어요'}</div>
+              </div>
+            )}
           </div>
         </div>
       </div>
