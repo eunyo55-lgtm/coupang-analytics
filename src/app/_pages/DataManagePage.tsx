@@ -97,10 +97,13 @@ async function upsertProducts(
   if (!rows.length) return 0
 
   const s0 = rows[0] as Record<string, unknown>
-  const bcCol    = detectColumn(s0, ['바코드', 'barcode', 'SKU Barcode', '상품바코드'])
-  const nameCol  = detectColumn(s0, ['상품명', 'productname', '상품이름', 'item', '노출상품명', 'SKU 명', 'SKU명'])
-  const optCol   = detectColumn(s0, ['옵션', 'option', '옵션명', '옵션값', '속성'])
-  const costCol  = detectColumn(s0, ['원가', '매입원가', 'cost'])  // 재고액 계산용 — 공급가/매입가는 제외
+  const bcCol     = detectColumn(s0, ['바코드', 'barcode', 'SKU Barcode', '상품바코드'])
+  // 바코드(EAN) 비어있을 때 사용할 fallback 식별자
+  const oCodeCol  = detectColumn(s0, ['대표 O코드', 'O코드', 'SKU코드', '대표코드'])
+  const sCodeCol  = detectColumn(s0, ['어드민 S코드', 'S코드', '어드민코드', '상품코드'])
+  const nameCol   = detectColumn(s0, ['상품명', 'productname', '상품이름', 'item', '노출상품명', 'SKU 명', 'SKU명'])
+  const optCol    = detectColumn(s0, ['옵션', 'option', '옵션명', '옵션값', '속성'])
+  const costCol   = detectColumn(s0, ['원가', '매입원가', 'cost'])  // 재고액 계산용
   // 시중가 우선 — 이지어드민 등에서는 시중가가 실제 판매가, '판매가' 컬럼은 다른 의미(할인가 등)일 수 있음
   const salePriceCol = detectColumn(s0, ['시중가', '소비자가', '판매가', 'sale_price', '판매단가', '시판가', '정가'])
   const seasonCol   = detectColumn(s0, ['시즌', 'season', '시즌구분'])
@@ -115,21 +118,54 @@ async function upsertProducts(
 
   dispatchFn({
     type: 'APPEND_LOG',
-    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 판매가=${salePriceCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol} | 가용재고=${hqStockCol}`
+    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | O코드(폴백)=${oCodeCol} | S코드(폴백)=${sCodeCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 판매가=${salePriceCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol} | 가용재고=${hqStockCol}`
   })
 
   const toStr = (v: unknown) => v != null ? String(v).trim() : ''
-  const mapped = rows.map(r => ({
-    barcode:      bcCol    ? toStr(r[bcCol])    : '',
-    name:         nameCol  ? toStr(r[nameCol])  : '',
-    option_value: optCol   ? toStr(r[optCol])   : '',
-    cost:         costCol  ? toNumber(r[costCol]) : 0,
-    sale_price:   salePriceCol ? toNumber(r[salePriceCol]) : 0,
-    season:       seasonCol   ? toStr(r[seasonCol])   : '',
-    image_url:    imageCol    ? toStr(r[imageCol])    : '',
-    category:     categoryCol ? toStr(r[categoryCol]) : '',
-    hq_stock:     hqStockCol  ? toNumber(r[hqStockCol]) : 0,
-  })).filter(r => r.barcode)
+  // 식별자 fallback: 바코드 > 대표 O코드 > 어드민 S코드
+  const pickIdentifier = (r: Record<string, unknown>): string => {
+    if (bcCol) {
+      const v = toStr(r[bcCol])
+      if (v) return v
+    }
+    if (oCodeCol) {
+      const v = toStr(r[oCodeCol])
+      if (v) return v
+    }
+    if (sCodeCol) {
+      const v = toStr(r[sCodeCol])
+      if (v) return v
+    }
+    return ''
+  }
+  let bcUsed = 0, oUsed = 0, sUsed = 0, noneUsed = 0
+  const mapped = rows.map(r => {
+    const identifier = pickIdentifier(r)
+    if (identifier) {
+      // 어느 컬럼에서 가져왔는지 카운트
+      if (bcCol && toStr(r[bcCol])) bcUsed++
+      else if (oCodeCol && toStr(r[oCodeCol])) oUsed++
+      else if (sCodeCol && toStr(r[sCodeCol])) sUsed++
+    } else {
+      noneUsed++
+    }
+    return {
+      barcode:      identifier,
+      name:         nameCol  ? toStr(r[nameCol])  : '',
+      option_value: optCol   ? toStr(r[optCol])   : '',
+      cost:         costCol  ? toNumber(r[costCol]) : 0,
+      sale_price:   salePriceCol ? toNumber(r[salePriceCol]) : 0,
+      season:       seasonCol   ? toStr(r[seasonCol])   : '',
+      image_url:    imageCol    ? toStr(r[imageCol])    : '',
+      category:     categoryCol ? toStr(r[categoryCol]) : '',
+      hq_stock:     hqStockCol  ? toNumber(r[hqStockCol]) : 0,
+    }
+  }).filter(r => r.barcode)
+
+  dispatchFn({
+    type: 'APPEND_LOG',
+    payload: `🆔 식별자 출처: 바코드=${bcUsed}행 | O코드=${oUsed}행 | S코드=${sUsed}행 | 누락=${noneUsed}행`
+  })
 
   if (!mapped.length) {
     dispatchFn({ type: 'APPEND_LOG', payload: `⚠️ 바코드 있는 행이 없어 products 저장 스킵` })
