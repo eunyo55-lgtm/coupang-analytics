@@ -100,7 +100,8 @@ async function upsertProducts(
   const bcCol    = detectColumn(s0, ['바코드', 'barcode', 'SKU Barcode', '상품바코드'])
   const nameCol  = detectColumn(s0, ['상품명', 'productname', '상품이름', 'item', '노출상품명', 'SKU 명', 'SKU명'])
   const optCol   = detectColumn(s0, ['옵션', 'option', '옵션명', '옵션값', '속성'])
-  const costCol  = detectColumn(s0, ['원가', '매입원가', 'cost', '매입가', '공급가'])
+  const costCol  = detectColumn(s0, ['원가', '매입원가', 'cost'])  // 재고액 계산용 — 공급가/매입가는 제외
+  const salePriceCol = detectColumn(s0, ['판매가', '시중가', 'sale_price', '소비자가', '판매단가', '시판가', '정가'])
   const seasonCol   = detectColumn(s0, ['시즌', 'season', '시즌구분'])
   const imageCol    = detectColumn(s0, ['이미지', 'image', '이미지URL', '이미지주소', 'image_url', '대표이미지'])
   const categoryCol = detectColumn(s0, ['카테고리', 'category', '분류', '상품분류', '대분류', '품목'])
@@ -113,7 +114,7 @@ async function upsertProducts(
 
   dispatchFn({
     type: 'APPEND_LOG',
-    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol} | 가용재고=${hqStockCol}`
+    payload: `🔍 master 컬럼 매핑: 바코드=${bcCol} | 상품명=${nameCol} | 옵션=${optCol} | 원가=${costCol} | 판매가=${salePriceCol} | 시즌=${seasonCol} | 이미지=${imageCol} | 카테고리=${categoryCol} | 가용재고=${hqStockCol}`
   })
 
   const toStr = (v: unknown) => v != null ? String(v).trim() : ''
@@ -122,6 +123,7 @@ async function upsertProducts(
     name:         nameCol  ? toStr(r[nameCol])  : '',
     option_value: optCol   ? toStr(r[optCol])   : '',
     cost:         costCol  ? toNumber(r[costCol]) : 0,
+    sale_price:   salePriceCol ? toNumber(r[salePriceCol]) : 0,
     season:       seasonCol   ? toStr(r[seasonCol])   : '',
     image_url:    imageCol    ? toStr(r[imageCol])    : '',
     category:     categoryCol ? toStr(r[categoryCol]) : '',

@@ -12,7 +12,9 @@ export interface PersistedData {
   salesData:    {
     date:string; productName:string; option:string; barcode?:string;
     qty:number; revenue:number; isReturn:boolean;
-    season?:string; category?:string; imageUrl?:string; cost?:number
+    season?:string; category?:string; imageUrl?:string;
+    cost?:number;       // 원가 — 재고액
+    salePrice?:number;  // 판매가/시중가 — 판매액
   }[]
   salesData24:  never[]
   salesData25:  never[]
@@ -204,7 +206,7 @@ export interface HistoricalData {
 
 // ── Historical 캐시
 // v5: 증분 동기화 — 캐시에 lastSyncDate 저장, 이후엔 새 날짜만 fetch
-const HISTORICAL_CACHE_KEY = 'swr_historical_v5'
+const HISTORICAL_CACHE_KEY = 'swr_historical_v6'
 const HISTORICAL_TTL_MS = 30 * 60 * 1000  // 30분: stale 표시용 (store.tsx 백그라운드 fetch 트리거)
 const HISTORICAL_DAYS_BACK = 90           // 캐시에 유지할 최대 기간
 const FULL_REFRESH_AFTER_DAYS = 7         // 마지막 동기화가 7일 이상 지났으면 풀 리로드
@@ -259,7 +261,9 @@ function ymdDaysBetween(a: string, b: string): number {
 }
 
 interface ProductInfo {
-  name: string; option: string; cost: number;
+  name: string; option: string;
+  cost: number;        // 원가 — 재고액 계산용
+  salePrice: number;   // 판매가/시중가 — 판매액 계산용
   season: string; imageUrl: string; category: string; hqStock: number
 }
 
@@ -280,10 +284,14 @@ async function fetchProductsByBarcodes(barcodes: string[]): Promise<Record<strin
       if (!r.ok) throw new Error('HTTP ' + r.status)
       return await r.json()
     }
-    try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category,hq_stock') }
+    try { return await tryFetch('barcode,name,option_value,cost,sale_price,season,image_url,category,hq_stock') }
     catch {
-      try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category') }
-      catch { return await tryFetch('barcode,name,option_value,cost') }
+      // sale_price 컬럼이 없는 환경 폴백
+      try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category,hq_stock') }
+      catch {
+        try { return await tryFetch('barcode,name,option_value,cost,season,image_url,category') }
+        catch { return await tryFetch('barcode,name,option_value,cost') }
+      }
     }
   }
 
@@ -303,7 +311,8 @@ function buildBarcodeMapFromProducts(productsRaw: Record<string,unknown>[]): Map
     if (bc) m.set(bc, {
       name:     String(r['name'] || bc),
       option:   String(r['option_value'] || ''),
-      cost:     Number(r['cost'] || 0),
+      cost:      Number(r['cost'] || 0),
+      salePrice: Number(r['sale_price'] || 0),
       season:   String(r['season'] || ''),
       imageUrl: String(r['image_url'] || ''),
       category: String(r['category'] || ''),
@@ -321,7 +330,8 @@ function buildBarcodeMapFromSales(rows: PersistedData['salesData']): Map<string,
       m.set(r.barcode, {
         name:     r.productName,
         option:   r.option || '',
-        cost:     Number(r.cost || 0),
+        cost:      Number((r as any).cost || 0),
+        salePrice: Number((r as any).salePrice || 0),
         season:   r.season || '',
         imageUrl: r.imageUrl || '',
         category: r.category || '',
@@ -338,23 +348,27 @@ function processSalesRows(
 ): PersistedData['salesData'] {
   return rawRows.map(r => {
     const bc = String(r['barcode'] || '')
-    const info = bcMap.get(bc) || { name: bc, option: '', cost: 0, season: '', imageUrl: '', category: '' }
+    const info = bcMap.get(bc) || { name: bc, option: '', cost: 0, salePrice: 0, season: '', imageUrl: '', category: '' }
     const qty = Number(r['quantity'] || 0)
-    // VAT 별도: cost를 변환하면 revenue(=cost*qty)도 자동 처리
-    const costExcl = vatExcluded(info.cost)
+    // VAT 별도
+    const costExcl      = vatExcluded(info.cost)        // 원가 (재고액 계산용)
+    const salePriceExcl = vatExcluded(info.salePrice)   // 판매가 (판매액 계산용)
+    // 판매액 = 판매가 × 수량. 판매가 미입력(0) 시 원가로 폴백 (호환성)
+    const unitPrice = salePriceExcl > 0 ? salePriceExcl : costExcl
     return {
       date:        String(r['date']),
       productName: info.name,
       option:      info.option,
       barcode:     bc,
       qty,
-      revenue:     costExcl * qty,
+      revenue:     unitPrice * qty,
       isReturn:    false,
       season:      info.season,
       imageUrl:    info.imageUrl,
       category:    info.category,
-      cost:        costExcl,
-    }
+      cost:        costExcl,        // 원가 보존 (재고 계산용)
+      salePrice:   salePriceExcl,   // 판매가 보존
+    } as any
   })
 }
 

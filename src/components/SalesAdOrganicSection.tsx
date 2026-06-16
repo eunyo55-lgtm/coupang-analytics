@@ -163,10 +163,10 @@ export default function SalesAdOrganicSection({
         <div className="ch-l">
           <div className="ch-ico">📈</div>
           <div>
-            <div className="ch-title">일별 판매 추이 (공급가 매출 · 광고 vs 오가닉)</div>
+            <div className="ch-title">일별 판매 추이 (판매가 매출 · 광고 vs 오가닉)</div>
             <div className="ch-sub">
               {chartFrom} ~ {chartTo} · {merged.length}일 ·
-              {` ${attrWindow === '14d' ? '14일' : '1일'} 어트리뷰션 · 수량 비율 기반 · ${VAT_LABEL}`}
+              {` ${attrWindow === '14d' ? '14일' : '1일'} 어트리뷰션 · 판매가 기준 · ${VAT_LABEL}`}
               {lastUploadDate && ` · 광고 CSV 최신: ${lastUploadDate}`}
               {loading && ' · 불러오는 중...'}
             </div>
@@ -193,22 +193,22 @@ export default function SalesAdOrganicSection({
         )}
       </div>
       <div className="cb">
-        {/* KPI 카드 — 1행: 매출 분포 (공급가 기준) */}
+        {/* KPI 카드 — 1행: 매출 분포 (판매가 기준) */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 10 }}>
           <KpiCard
-            label="총 매출 (공급가)"
+            label="총 매출 (판매가)"
             value={fmt(totals.total) + '원'}
             sub={`총 ${totals.qty.toLocaleString()}개 판매`}
             color="#0F172A"
           />
           <KpiCard
-            label="광고 매출 (공급가 추정)"
+            label="광고 매출 (판매가 추정)"
             value={fmt(totals.adRev) + '원'}
             sub={hasAdData ? `광고로 ${totals.adUnits.toLocaleString()}개 판매` : '광고 데이터 없음'}
             color={COLOR_AD}
           />
           <KpiCard
-            label="오가닉 매출 (공급가)"
+            label="오가닉 매출 (판매가)"
             value={fmt(totals.organic) + '원'}
             sub={`오가닉 ${(totals.qty - totals.adUnits).toLocaleString()}개 판매`}
             color={COLOR_ORGANIC}
@@ -319,19 +319,20 @@ export default function SalesAdOrganicSection({
             ℹ️ 카드별 계산 기준 + 쿠팡 광고센터 숫자와의 차이
           </summary>
           <div style={{ marginTop: 8, padding: 12, background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7 }}>
-            <div><b>1행 — 매출 분포 (공급가 기준, 우리 실수령액)</b></div>
-            <div>• 총 매출 = 일별 판매수량 × 공급가 (서플라이 허브 실수령)</div>
-            <div>• 광고 매출 (공급가 추정) = 총 매출 × 광고 의존도(수량 기준)</div>
+            <div><b>1행 — 매출 분포 (판매가 기준 · 시중가)</b></div>
+            <div>• 총 매출 = 일별 판매수량 × 판매가(시중가, 어드민 데이터)</div>
+            <div>• 광고 매출 (판매가 추정) = 총 매출 × 광고 의존도(수량 기준)</div>
             <div>• 오가닉 매출 = 총 매출 - 광고 매출</div>
             <div>• 광고 의존도 = 광고 판매수량 / 총 판매수량 (수량 기준이라 정확)</div>
+            <div style={{ marginTop: 4, color: '#A16207' }}>※ 판매가 미입력 상품은 원가로 폴백 (마이그레이션 진행 중)</div>
             <div style={{ marginTop: 8 }}><b>2행 — 광고 효과 (판매가 기준, 쿠팡 광고센터와 동일)</b></div>
             <div>• 광고 매출 (판매가) = 광고 CSV revenue_14d (소비자가)</div>
             <div>• 광고비 = 광고 CSV ad_cost</div>
             <div>• <b>ROAS = 판매가 광고매출 / 광고비</b> — 업계 표준 · 쿠팡 광고센터 ROAS와 동일</div>
-            <div style={{ marginTop: 8 }}><b>왜 매출 절대값이 작은가? (1행 공급가 vs 광고센터 소비자가)</b></div>
-            <div>• 우리 1행 매출은 서플라이 허브 실수령 (공급가, {VAT_LABEL})</div>
-            <div>• 광고센터 전체 매출은 소비자가 (VAT 포함, 마진 포함) → 절대값 ~3배 큼</div>
-            <div>• <b>비율(광고 의존도)은 두 기준 모두 비슷해야 정상</b></div>
+            <div style={{ marginTop: 8 }}><b>쿠팡 광고센터와 비교 시</b></div>
+            <div>• 우리 1행 = 판매가 기준 ({VAT_LABEL})</div>
+            <div>• 광고센터 전체 매출 = 판매가 (VAT 포함) → 우리는 ÷1.1 정도 작음</div>
+            <div>• <b>비율(광고 의존도)은 양쪽이 같아야 정상</b></div>
             <div style={{ marginTop: 8 }}><b>왜 옵션ID로 직접 매칭을 못 하나?</b></div>
             <div>• 광고 CSV 옵션ID(긴 숫자) ↔ products.barcode(SKU) 매핑 데이터 없음 — 정확 매칭 0건 확인</div>
             <div>• 그래서 수량 비율 기반으로 추정 (의존도 % 는 정확)</div>
