@@ -6,6 +6,7 @@ import { toYMD, fromYMD } from '@/lib/dateUtils'
 import { Chart, registerables } from 'chart.js'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, LabelList, Legend } from 'recharts'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
+import { vatExcluded } from '@/lib/vatUtils'
 
 Chart.register(...registerables)
 
@@ -346,7 +347,8 @@ export default function SalesPage() {
     const prevFrom = chartFrom.replace(/^\d{4}/, y => String(+y - 1))
     const prevTo   = chartTo.replace(/^\d{4}/, y => String(+y - 1))
     // SWR 캐시 — 같은 prev 범위면 즉시 표시 + 백그라운드 갱신
-    const cacheKey = `swr_sales_prevyear_v1_${prevFrom}_${prevTo}`
+    // v2: products 보강 매핑 추가로 캐시 무효화
+    const cacheKey = `swr_sales_prevyear_v2_${prevFrom}_${prevTo}`
     const TTL = 30 * 60 * 1000  // 30분
     let cancelled = false
     const cached = readSwrCache<PrevRow[]>(cacheKey, TTL)
@@ -390,6 +392,39 @@ export default function SalesPage() {
         if (all.length > 100000) break
       }
       if (cancelled) return
+
+      // 전년 데이터의 unique 바코드 중 bcInfo에 없는 것 → products 테이블 보강 조회
+      // (25년 판매 상품이 26년 최근 60일에는 안 팔려서 현재 salesData에 없는 경우 대응)
+      const prevBarcodes = Array.from(new Set(all.map(r => String(r.barcode || '')).filter(Boolean)))
+      const missing = prevBarcodes.filter(bc => !bcInfo[bc])
+      if (missing.length > 0) {
+        const CHUNK = 200
+        for (let i = 0; i < missing.length; i += CHUNK) {
+          if (cancelled) return
+          const chunk = missing.slice(i, i + CHUNK)
+          const inList = chunk.map(b => `"${b}"`).join(',')
+          try {
+            const r = await fetch(
+              `${SUPA_URL}/rest/v1/products?select=barcode,name,season,cost&barcode=in.(${encodeURIComponent(inList)})`,
+              { headers: H }
+            )
+            if (r.ok) {
+              const pdata: any[] = await r.json()
+              for (const p of pdata) {
+                const bc = String(p.barcode || '')
+                if (bc && !bcInfo[bc]) {
+                  bcInfo[bc] = {
+                    season: String(p.season || '미지정'),
+                    name:   String(p.name || ''),
+                    cost:   vatExcluded(Number(p.cost || 0)),
+                  }
+                }
+              }
+            }
+          } catch { /* skip chunk on error */ }
+        }
+      }
+
       // 정규화 + season/category 매핑
       // 카테고리는 현재 차트와 동일하게 extractCategory(상품명) 으로 계산
       const rows: PrevRow[] = all.map(r => {
@@ -469,8 +504,10 @@ export default function SalesPage() {
       .map(([k, v]) => ({ label: k, ...v, revR: Math.round(v.rev), prevRevR: Math.round(v.prevRev) }))
       .filter(c => (mode === 'qty' ? (c.qty + c.prevQty) : (c.rev + c.prevRev)) > 0)
       .sort((a, b) => (mode === 'qty' ? b.qty - a.qty : b.rev - a.rev))
-    const others = arr.filter(x => x.label === '기타')
-    const rest   = arr.filter(x => x.label !== '기타')
+    // 상위 20개 카테고리만 (의미 있는 분포만 표시)
+    const top20 = arr.slice(0, 20)
+    const others = top20.filter(x => x.label === '기타')
+    const rest   = top20.filter(x => x.label !== '기타')
     return [...rest, ...others]
   }, [products, prevYearSales, mode])
 
@@ -648,7 +685,7 @@ export default function SalesPage() {
             <div className="ch-l"><div className="ch-ico">📦</div><div>
               <div className="ch-title">카테고리별 판매 ({mode === 'qty' ? '수량' : '금액'})</div>
               <div className="ch-sub">
-                상품명 앞부분 기준 · 매칭 안되면 &apos;기타&apos; · {chartFrom} ~ {chartTo}{hasPrev ? ` · ${yearNow}년 vs ${yearPrev}년` : ''}
+                상위 20개 · 상품명 앞부분 기준 · {chartFrom} ~ {chartTo}{hasPrev ? ` · ${yearNow}년 vs ${yearPrev}년` : ''}
               </div>
             </div></div>
           </div>
