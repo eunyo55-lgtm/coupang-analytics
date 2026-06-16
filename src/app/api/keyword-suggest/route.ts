@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
+import { getServerSupabase } from '@/lib/agent/supabase-server'
 
 /* ─────────────────────────────────────────────────────────
    /api/keyword-suggest
@@ -175,9 +176,69 @@ export async function POST(req: NextRequest) {
     }
 
     // 4) 검색량 내림차순 + 상한
-    const suggestions = Array.from(byKw.values())
+    const baseSuggestions = Array.from(byKw.values())
       .sort((a, b) => b.total - a.total)
       .slice(0, maxResults)
+
+    // 5) 과거 검색량 조회 (7~14일 전) → WoW delta 계산
+    //    keyword_search_volumes 테이블에서 prev week 값을 가져와 surge 판단
+    const today = new Date()
+    const todayStr = today.toISOString().slice(0, 10)
+    const weekAgo = new Date(today.getTime() - 7 * 86400000)
+    const twoWeeksAgo = new Date(today.getTime() - 14 * 86400000)
+    const weekAgoStr = weekAgo.toISOString().slice(0, 10)
+    const twoWeeksAgoStr = twoWeeksAgo.toISOString().slice(0, 10)
+
+    let prevByKw = new Map<string, number>()
+    try {
+      const sb = getServerSupabase()
+      const kwList = baseSuggestions.map(s => s.keyword)
+      if (kwList.length > 0) {
+        // 7~14일 전 가장 최근 값 조회 (각 키워드별)
+        const { data } = await sb
+          .from('keyword_search_volumes')
+          .select('keyword, total_volume, target_date')
+          .in('keyword', kwList)
+          .gte('target_date', twoWeeksAgoStr)
+          .lte('target_date', weekAgoStr)
+          .order('target_date', { ascending: false })
+        // 각 키워드별 가장 최근 prev 값
+        for (const row of (data || []) as any[]) {
+          const k = String(row.keyword)
+          if (!prevByKw.has(k)) prevByKw.set(k, Number(row.total_volume) || 0)
+        }
+      }
+    } catch { /* prev volume 조회 실패 시 surge 비활성 */ }
+
+    // 6) suggestion에 wowDelta + isSurging 부착
+    const suggestions = baseSuggestions.map(s => {
+      const prev = prevByKw.get(s.keyword)
+      let wowDelta: number | null = null
+      if (prev && prev > 0) {
+        wowDelta = Math.round(((s.total - prev) / prev) * 100)
+      }
+      const isSurging = wowDelta !== null && wowDelta >= 30
+      return { ...s, wowDelta, isSurging, prevVolume: prev || null }
+    })
+
+    // 7) 오늘 발굴된 모든 키워드의 현재 검색량을 keyword_search_volumes 에 upsert
+    //    → 다음 발굴 때 prev 값으로 활용
+    try {
+      const sb = getServerSupabase()
+      const rows = suggestions.map(s => ({
+        keyword: s.keyword,
+        mobile_volume: s.mobile,
+        pc_volume: s.pc,
+        total_volume: s.total,
+        target_date: todayStr,
+      }))
+      if (rows.length > 0) {
+        await sb.from('keyword_search_volumes').upsert(rows, {
+          onConflict: 'keyword,target_date',
+          ignoreDuplicates: false,
+        })
+      }
+    } catch { /* upsert 실패해도 응답은 정상 진행 */ }
 
     return NextResponse.json({
       suggestions,
@@ -185,6 +246,7 @@ export async function POST(req: NextRequest) {
       claudeUsed: useClaude && !!process.env.ANTHROPIC_API_KEY,
       naverConfigured: !!getNaverCreds().secretKey,
       adultFiltered,
+      surgingCount: suggestions.filter(s => s.isSurging).length,
     })
   } catch (err) {
     return NextResponse.json(

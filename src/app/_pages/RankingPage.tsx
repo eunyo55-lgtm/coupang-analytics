@@ -640,7 +640,23 @@ export default function RankingPage() {
                         </td>
                         {/* 키워드 */}
                         <td className="rk-sticky" style={{ left: 90, width: 140 }}>
-                          <span className="kw-tag">{kw.keyword}</span>
+                          {(() => {
+                            // 7일 이내 등록된 키워드 → 🆕 배지
+                            const isNew = kw.created_at &&
+                              (Date.now() - new Date(kw.created_at).getTime()) < 7 * 86400000
+                            return (
+                              <>
+                                {isNew && (
+                                  <span style={{
+                                    fontSize: 9, fontWeight: 700, color: '#C2410C',
+                                    background: '#FFEDD5', padding: '2px 4px', borderRadius: 3,
+                                    marginRight: 4,
+                                  }} title="최근 7일 이내 신규 등록">🆕</span>
+                                )}
+                                <span className="kw-tag">{kw.keyword}</span>
+                              </>
+                            )
+                          })()}
                         </td>
                         {/* 연결상품 — 클릭 시 차트 열림 */}
                         <td

@@ -9,7 +9,12 @@ type Suggestion = {
   total: number
   competition: 'high' | 'mid' | 'low' | string
   sourceSeed: string
+  wowDelta?: number | null    // 전주 대비 검색량 변화율(%)
+  isSurging?: boolean         // +30% 이상 급등
+  prevVolume?: number | null
 }
+
+const SURGE_THRESHOLD_VOLUME = 10000  // 미등록 + 이 이상이면 노란 강조
 
 type ProductLite = {
   barcode: string
@@ -38,7 +43,7 @@ export default function KeywordSuggestPanel({
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Suggestion[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number } | null>(null)
+  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number; surgingCount: number } | null>(null)
   const [registered, setRegistered] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
 
@@ -147,6 +152,7 @@ export default function KeywordSuggestPanel({
         seedCount: j.seedCount || 0,
         claudeUsed: !!j.claudeUsed,
         adultFiltered: j.adultFiltered || 0,
+        surgingCount: j.surgingCount || 0,
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : '실패')
@@ -180,6 +186,11 @@ export default function KeywordSuggestPanel({
     }
   }
 
+  const existingSet = useMemo(
+    () => new Set(existingKeywords.map(k => k.toLowerCase().trim())),
+    [existingKeywords],
+  )
+
   const filtered = useMemo(() => {
     const base = !search.trim()
       ? results
@@ -187,6 +198,11 @@ export default function KeywordSuggestPanel({
     // 월 검색량 내림차순 (서버에서도 정렬되지만 안전하게 한 번 더)
     return [...base].sort((a, b) => b.total - a.total)
   }, [results, search])
+
+  const surging = useMemo(
+    () => results.filter(r => r.isSurging),
+    [results],
+  )
 
   return (
     <div className="card" style={{ marginBottom: 12 }}>
@@ -297,6 +313,36 @@ export default function KeywordSuggestPanel({
               ✓ 시드 {info.seedCount}개에서 {results.length}개 발굴
               {info.claudeUsed ? ' · Claude 시드 확장 사용' : ''}
               {info.adultFiltered > 0 ? ` · 성인 키워드 ${info.adultFiltered}개 제외됨` : ''}
+              {info.surgingCount > 0 ? ` · 🔥 급등 ${info.surgingCount}개` : ''}
+            </div>
+          )}
+
+          {/* 급등 키워드 섹션 (전주 대비 +30% 이상) */}
+          {surging.length > 0 && (
+            <div style={{
+              border: '2px solid #FB923C', background: '#FFF7ED',
+              borderRadius: 8, padding: 12, marginBottom: 12,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: '#C2410C' }}>
+                  🔥 급등 키워드 {surging.length}개
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+                  전주 대비 검색량 +30% 이상
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {surging.map(s => (
+                  <span key={s.keyword} style={{
+                    fontSize: 12, fontWeight: 700,
+                    padding: '4px 10px', borderRadius: 12,
+                    background: '#fff', color: '#C2410C',
+                    border: '1px solid #FB923C',
+                  }}>
+                    {s.keyword} <span style={{ color: '#EA580C' }}>+{s.wowDelta}%</span>
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 
@@ -319,6 +365,7 @@ export default function KeywordSuggestPanel({
                     <tr>
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>키워드</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>월 검색량 ▼</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>전주 대비</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC' }}>경쟁</th>
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>출처</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 90 }}>등록</th>
@@ -327,17 +374,46 @@ export default function KeywordSuggestPanel({
                   <tbody>
                     {filtered.map(s => {
                       const isReg  = registered.has(s.keyword)
+                      const isExisting = existingSet.has(s.keyword.toLowerCase().trim())
+                      // 미등록 + 검색량 1만 이상 → 우선 검토 대상 강조
+                      const isHighlight = !isExisting && !isReg && s.total >= SURGE_THRESHOLD_VOLUME
                       const compColor =
                         s.competition === 'high' ? '#DC2626' :
                         s.competition === 'mid'  ? '#D97706' : '#059669'
                       const compLabel =
                         s.competition === 'high' ? '높음' :
                         s.competition === 'mid'  ? '중간' : '낮음'
+                      const wow = s.wowDelta
+                      const wowColor =
+                        wow === null || wow === undefined ? 'var(--t3)' :
+                        wow >= 30 ? '#C2410C' :
+                        wow >= 0  ? '#059669' : '#DC2626'
                       return (
-                        <tr key={s.keyword} style={{ borderTop: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '6px 10px', fontWeight: 600 }}>{s.keyword}</td>
+                        <tr
+                          key={s.keyword}
+                          style={{
+                            borderTop: '1px solid #F3F4F6',
+                            background: isHighlight ? '#FEFCE8' : undefined,
+                          }}
+                        >
+                          <td style={{ padding: '6px 10px', fontWeight: 600 }}>
+                            {s.isSurging && (
+                              <span style={{ marginRight: 4, fontSize: 13 }} title={`전주 대비 +${s.wowDelta}%`}>🔥</span>
+                            )}
+                            {s.keyword}
+                            {isHighlight && (
+                              <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: '#A16207', background: '#FEF3C7', padding: '2px 5px', borderRadius: 3 }}>
+                                ⭐ 우선
+                              </span>
+                            )}
+                          </td>
                           <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600 }}>
                             {s.total.toLocaleString('ko-KR')}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: wowColor }}>
+                            {wow === null || wow === undefined
+                              ? <span style={{ color: 'var(--t3)' }}>—</span>
+                              : `${wow >= 0 ? '+' : ''}${wow}%`}
                           </td>
                           <td style={{ padding: '6px 10px', textAlign: 'center' }}>
                             <span style={{
