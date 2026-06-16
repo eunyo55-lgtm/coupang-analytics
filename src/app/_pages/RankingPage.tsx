@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import type { NaverKeywordResult } from '@/types'
 import RankingBotTrigger from '@/components/RankingBotTrigger'
 import KeywordVolumeChart from '@/components/KeywordVolumeChart'
+import KeywordSuggestPanel from '@/components/KeywordSuggestPanel'
 
 /* ────────────────────────────────────────────────────────────
    Types (기존 앱 스키마 기반 - keywords + keyword_rankings)
@@ -589,6 +590,14 @@ export default function RankingPage() {
     <div>
       {/* 봇 트리거 패널 (회사 PC의 runner.js와 연동) */}
       <RankingBotTrigger />
+
+      {/* 키워드 발굴 제안 (Claude + Naver) */}
+      <KeywordSuggestPanel
+        existingKeywords={keywords.map(k => k.keyword)}
+        categories={Array.from(new Set(keywords.map(k => k.category || '').filter(Boolean)))}
+        productNames={Array.from(new Set(keywords.map(k => k.products?.name || '').filter(Boolean)))}
+        onRegistered={loadAll}
+      />
 
       {/* 키워드 추가 + 네이버 조회 — 기본 접힘 (제목 클릭으로 펼침) */}
       <div className="g2">

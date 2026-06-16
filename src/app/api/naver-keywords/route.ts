@@ -17,9 +17,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '키워드를 입력하세요' }, { status: 400 })
   }
 
-  const customerId = process.env.NAVER_CUSTOMER_ID
-  const accessLicense = process.env.NAVER_ACCESS_LICENSE
-  const secretKey = process.env.NAVER_SECRET_KEY
+  const customerId    = process.env.NAVER_CUSTOMER_ID    || process.env.NAVER_AD_CUSTOMER_ID
+  const accessLicense = process.env.NAVER_ACCESS_LICENSE || process.env.NAVER_AD_API_KEY
+  const secretKey     = process.env.NAVER_SECRET_KEY     || process.env.NAVER_AD_SECRET_KEY
 
   // If no API keys configured, return realistic demo data
   if (!customerId || !accessLicense || !secretKey) {
