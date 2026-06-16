@@ -7,6 +7,7 @@ import { Chart, registerables } from 'chart.js'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, LabelList, Legend } from 'recharts'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 import { vatExcluded } from '@/lib/vatUtils'
+import SalesAdOrganicSection from '@/components/SalesAdOrganicSection'
 
 Chart.register(...registerables)
 
@@ -641,6 +642,13 @@ export default function SalesPage() {
           )}
         </div>
       </div>
+
+      {/* ─── 광고 매출 vs 오가닉 매출 ─── */}
+      <SalesAdOrganicSection
+        dailyTrend={dailyTrend}
+        chartFrom={chartFrom}
+        chartTo={chartTo}
+      />
 
       {/* ─── 시즌별 / 카테고리별 차트 (전년 비교 + 막대 위 숫자) ─── */}
       <div className="g2">
