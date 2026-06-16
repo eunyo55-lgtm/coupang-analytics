@@ -10,7 +10,7 @@ import {
 type DailyTrend = {
   date: string       // 'MM-DD'
   fullDate: string   // 'YYYY-MM-DD'
-  qty: number
+  qty: number        // 총 판매수량
   rev: number        // 공급가 매출 (cost × qty, VAT 별도)
 }
 
@@ -22,18 +22,13 @@ type Props = {
   salesDataLoading: boolean
 }
 
-// 광고 CSV raw 행 (필요한 컬럼만)
-type AdRawRow = {
+type AdAggRow = {
   date: string
-  conv_option_id: string | null
-  units_1d: number
-  units_14d: number
-  revenue_1d: number    // 소비자가 매출 (참고용)
-  revenue_14d: number   // 소비자가 매출 (참고용)
-  ad_cost: number
+  units: number       // 광고 판매수량 (units_1d 또는 units_14d 합)
+  adCost: number      // 광고비 (VAT 별도)
+  adRevConsumer: number  // 광고 CSV의 소비자가 매출 (VAT 별도) — 참고용
 }
 
-// 톤 다운된 팔레트
 const COLOR_ORGANIC = '#7C9CBF'
 const COLOR_AD      = '#C49B6C'
 
@@ -42,15 +37,13 @@ const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 export default function SalesAdOrganicSection({
   dailyTrend, chartFrom, chartTo,
 }: Props) {
-  const [adRows, setAdRows] = useState<AdRawRow[]>([])
-  const [costByBarcode, setCostByBarcode] = useState<Map<string, number>>(new Map())
+  const [adAgg, setAdAgg] = useState<Map<string, AdAggRow>>(new Map())
   const [loading, setLoading] = useState(false)
   const [hasAdData, setHasAdData] = useState<boolean | null>(null)
   const [attrWindow, setAttrWindow] = useState<'1d' | '14d'>('14d')
   const [lastUploadDate, setLastUploadDate] = useState<string | null>(null)
-  const [diagOpen, setDiagOpen] = useState(false)
 
-  // 광고 raw 데이터 + 옵션ID별 공급가 로드
+  // 광고 CSV raw — 일자별로 units 합계
   useEffect(() => {
     let cancelled = false
     if (!chartFrom || !chartTo) return
@@ -58,14 +51,14 @@ export default function SalesAdOrganicSection({
       if (!supabase) return
       setLoading(true)
       try {
-        // 1) 광고 CSV raw 행 (option-level units 포함)
         const PAGE = 1000
-        const all: AdRawRow[] = []
+        const agg = new Map<string, AdAggRow>()
         let from = 0
+        let totalFetched = 0
         while (true) {
           const { data, error } = await supabase
             .from('coupang_ad_daily')
-            .select('date, conv_option_id, units_1d, units_14d, revenue_1d, revenue_14d, ad_cost')
+            .select('date, units_1d, units_14d, revenue_1d, revenue_14d, ad_cost')
             .gte('date', chartFrom)
             .lte('date', chartTo)
             .order('date', { ascending: true })
@@ -75,122 +68,86 @@ export default function SalesAdOrganicSection({
             console.warn('[SalesAdOrganicSection] ad load:', error.message)
             break
           }
-          const rows = (data || []) as AdRawRow[]
-          all.push(...rows)
+          const rows = (data || []) as any[]
+          for (const r of rows) {
+            const date = String(r.date)
+            const cur = agg.get(date) || { date, units: 0, adCost: 0, adRevConsumer: 0 }
+            const units = attrWindow === '14d' ? Number(r.units_14d || 0) : Number(r.units_1d || 0)
+            const consumer = attrWindow === '14d' ? Number(r.revenue_14d || 0) : Number(r.revenue_1d || 0)
+            cur.units += units
+            cur.adCost += vatExcluded(Number(r.ad_cost || 0))
+            cur.adRevConsumer += vatExcluded(consumer)
+            agg.set(date, cur)
+          }
+          totalFetched += rows.length
           if (rows.length < PAGE) break
           from += PAGE
-          if (all.length > 50000) break
+          if (totalFetched > 100000) break
         }
         if (cancelled) return
-        setAdRows(all)
-        setHasAdData(all.length > 0)
-
-        // 마지막 업로드 일자 (가장 최근 date)
-        if (all.length > 0) {
-          const maxDate = all.reduce((m, r) => r.date > m ? r.date : m, all[0].date)
-          setLastUploadDate(maxDate)
-        } else {
-          setLastUploadDate(null)
+        setAdAgg(agg)
+        setHasAdData(agg.size > 0)
+        if (agg.size > 0) {
+          const dates = Array.from(agg.keys()).sort()
+          setLastUploadDate(dates[dates.length - 1])
         }
-
-        // 2) 광고 행에 등장한 unique 옵션ID → products.cost 조회
-        const optionIds = Array.from(new Set(
-          all.map(r => String(r.conv_option_id || '')).filter(Boolean)
-        ))
-        const costMap = new Map<string, number>()
-        if (optionIds.length > 0) {
-          const CHUNK = 200
-          for (let i = 0; i < optionIds.length; i += CHUNK) {
-            if (cancelled) return
-            const chunk = optionIds.slice(i, i + CHUNK)
-            const { data } = await supabase
-              .from('products')
-              .select('barcode, cost')
-              .in('barcode', chunk)
-            ;(data || []).forEach((p: any) => {
-              const bc = String(p.barcode || '')
-              if (bc) costMap.set(bc, vatExcluded(Number(p.cost || 0)))
-            })
-          }
-        }
-        if (!cancelled) setCostByBarcode(costMap)
       } catch (e) {
         console.warn('[SalesAdOrganicSection] load error:', e)
-        if (!cancelled) { setAdRows([]); setHasAdData(false); setCostByBarcode(new Map()) }
+        if (!cancelled) { setAdAgg(new Map()); setHasAdData(false) }
       } finally {
         if (!cancelled) setLoading(false)
       }
     }
     load()
     return () => { cancelled = true }
-  }, [chartFrom, chartTo])
+  }, [chartFrom, chartTo, attrWindow])
 
-  // 날짜별 광고 매출(공급가) + 광고비 집계
-  const adByDate = useMemo(() => {
-    const m = new Map<string, { adRevSupplier: number; adCost: number; adRevConsumer: number; units: number }>()
-    for (const r of adRows) {
-      const date = r.date
-      const units = attrWindow === '14d' ? Number(r.units_14d || 0) : Number(r.units_1d || 0)
-      const consumerRev = attrWindow === '14d' ? Number(r.revenue_14d || 0) : Number(r.revenue_1d || 0)
-      const cost = costByBarcode.get(String(r.conv_option_id || '')) || 0
-      const supplierRev = units * cost
-      const cur = m.get(date) || { adRevSupplier: 0, adCost: 0, adRevConsumer: 0, units: 0 }
-      cur.adRevSupplier += supplierRev
-      cur.adCost += vatExcluded(Number(r.ad_cost || 0))
-      cur.adRevConsumer += vatExcluded(consumerRev)
-      cur.units += units
-      m.set(date, cur)
-    }
-    return m
-  }, [adRows, costByBarcode, attrWindow])
-
-  // dailyTrend + 광고 데이터 병합
+  // 병합 — 수량 비율 기반 광고 매출 추정
   const merged = useMemo(() => {
     return dailyTrend.map(d => {
-      const ad = adByDate.get(d.fullDate)
-      const adRev   = ad ? ad.adRevSupplier : 0
-      const adCost  = ad ? ad.adCost : 0
+      const ad = adAgg.get(d.fullDate)
       const adUnits = ad ? ad.units : 0
-      const total = d.rev  // 공급가 기준 총 매출
-      const organic = Math.max(0, total - adRev)
-      const adShown = total >= adRev ? adRev : total
-      const ratio = total > 0 ? (adRev / total) * 100 : 0
+      const adCost  = ad ? ad.adCost : 0
+      const adRevConsumer = ad ? ad.adRevConsumer : 0
+      const totalQty = d.qty
+      const totalRev = d.rev   // 공급가
+      // 광고 매출 (공급가) = 총 매출 × (광고 판매수량 / 총 판매수량)
+      const ratio = totalQty > 0 ? (adUnits / totalQty) : 0
+      const adRev = totalRev * ratio
+      // adShown은 총 매출을 절대 초과하지 않음
+      const adShown = Math.min(totalRev, adRev)
+      const organic = Math.max(0, totalRev - adShown)
       return {
         date: d.date,
         fullDate: d.fullDate,
-        qty: d.qty,
+        qty: totalQty,
         adUnits,
-        total,
+        organicUnits: Math.max(0, totalQty - adUnits),
+        total: totalRev,
         adRev: adShown,
+        adRevConsumer,
         adCost,
         organic,
-        ratio: Math.round(ratio * 10) / 10,
+        ratio: Math.round(ratio * 1000) / 10,  // %, 소수1자리
       }
     })
-  }, [dailyTrend, adByDate])
+  }, [dailyTrend, adAgg])
 
-  // 기간 합계
   const totals = useMemo(() => {
-    const t = { total: 0, adRev: 0, adCost: 0, organic: 0, adUnits: 0, qty: 0 }
+    const t = { total: 0, adRev: 0, adRevConsumer: 0, adCost: 0, organic: 0, adUnits: 0, qty: 0 }
     merged.forEach(r => {
       t.total += r.total
       t.adRev += r.adRev
+      t.adRevConsumer += r.adRevConsumer
       t.adCost += r.adCost
       t.organic += r.organic
       t.adUnits += r.adUnits
       t.qty += r.qty
     })
-    const ratio = t.total > 0 ? (t.adRev / t.total) * 100 : 0
+    const ratio = t.qty > 0 ? (t.adUnits / t.qty) * 100 : 0  // 광고 의존도(%)는 수량 기준
     const roas = t.adCost > 0 ? (t.adRev / t.adCost) * 100 : 0
     return { ...t, ratio, roas }
   }, [merged])
-
-  // 소비자가 기준 광고 매출 합계 (참고 표시용)
-  const adRevConsumerTotal = useMemo(() => {
-    let sum = 0
-    for (const [, v] of adByDate) sum += v.adRevConsumer
-    return sum
-  }, [adByDate])
 
   const todayMD = (() => {
     const t = new Date()
@@ -208,7 +165,7 @@ export default function SalesAdOrganicSection({
             <div className="ch-title">일별 판매 추이 (공급가 매출 · 광고 vs 오가닉)</div>
             <div className="ch-sub">
               {chartFrom} ~ {chartTo} · {merged.length}일 ·
-              {` ${attrWindow === '14d' ? '14일' : '1일'} 어트리뷰션 · 공급가 기준 · ${VAT_LABEL}`}
+              {` ${attrWindow === '14d' ? '14일' : '1일'} 어트리뷰션 · 수량 비율 기반 · ${VAT_LABEL}`}
               {lastUploadDate && ` · 광고 CSV 최신: ${lastUploadDate}`}
               {loading && ' · 불러오는 중...'}
             </div>
@@ -235,7 +192,7 @@ export default function SalesAdOrganicSection({
         )}
       </div>
       <div className="cb">
-        {/* KPI 카드 — 항상 표시 */}
+        {/* KPI 카드 4개 */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
           <KpiCard
             label="총 매출 (공급가)"
@@ -244,17 +201,17 @@ export default function SalesAdOrganicSection({
             color="#0F172A"
           />
           <KpiCard
-            label="광고 매출 (공급가)"
+            label="광고 매출 (공급가 추정)"
             value={fmt(totals.adRev) + '원'}
             sub={hasAdData
-              ? `광고비 ${fmt(totals.adCost)}원 · ROAS ${totals.roas.toFixed(0)}%`
+              ? `광고 ${totals.adUnits.toLocaleString()}개 · 광고비 ${fmt(totals.adCost)}원`
               : '광고 데이터 없음'}
             color={COLOR_AD}
           />
           <KpiCard
-            label="오가닉 매출 (공급가)"
+            label="오가닉 매출"
             value={fmt(totals.organic) + '원'}
-            sub={`전체의 ${(100 - totals.ratio).toFixed(1)}%`}
+            sub={`오가닉 ${(totals.qty - totals.adUnits).toLocaleString()}개 · 전체의 ${(100 - totals.ratio).toFixed(1)}%`}
             color={COLOR_ORGANIC}
           />
           <KpiCard
@@ -304,13 +261,13 @@ export default function SalesAdOrganicSection({
                 labelFormatter={(label, payload) => {
                   const p: any = payload?.[0]?.payload
                   if (!p) return label
-                  return `${p.fullDate} · 광고 의존도 ${p.ratio}% · 광고 ${p.adUnits}개`
+                  return `${p.fullDate} · 광고 ${p.adUnits}개 / 총 ${p.qty}개 · 의존도 ${p.ratio}%`
                 }}
               />
               <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
               <ReferenceLine x={todayMD} stroke="#94A3B8" strokeDasharray="3 3" label={{ value: '오늘', fill: '#64748B', fontSize: 10, position: 'top' }} />
               <Bar dataKey="organic" stackId="rev" name="오가닉 매출 (공급가)" fill={COLOR_ORGANIC} />
-              <Bar dataKey="adRev" stackId="rev" name="광고 매출 (공급가)" fill={COLOR_AD}>
+              <Bar dataKey="adRev" stackId="rev" name="광고 매출 (공급가 추정)" fill={COLOR_AD}>
                 <LabelList
                   dataKey="ratio"
                   position="top"
@@ -329,33 +286,32 @@ export default function SalesAdOrganicSection({
           </div>
         )}
 
-        {/* 정의 + 진단 */}
-        <details
-          open={diagOpen}
-          onToggle={(e) => setDiagOpen((e.target as HTMLDetailsElement).open)}
-          style={{ marginTop: 12, fontSize: 11, color: '#64748B' }}
-        >
+        <details style={{ marginTop: 12, fontSize: 11, color: '#64748B' }}>
           <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#475569' }}>
-            ℹ️ 계산 방식과 쿠팡 광고센터 숫자와의 차이 (클릭)
+            ℹ️ 계산 방식 + 쿠팡 광고센터 숫자와의 차이
           </summary>
           <div style={{ marginTop: 8, padding: 12, background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7 }}>
-            <div><b>로켓배송 공급자 기준으로 통일된 계산:</b></div>
-            <div>• <b>총 매출 (공급가)</b> = 일별 판매수량 × 공급가 (서플라이 허브 실수령액 기준)</div>
-            <div>• <b>광고 매출 (공급가)</b> = 광고 CSV 옵션별 판매수량 × 같은 옵션의 공급가</div>
-            <div>• <b>오가닉 매출</b> = 총 매출 − 광고 매출</div>
-            <div>• 셋 다 동일한 공급가 베이스로 비교 (사과 vs 사과)</div>
-            <div style={{ marginTop: 8 }}><b>쿠팡 광고센터 숫자와 다른 이유:</b></div>
-            <div>• 쿠팡 광고센터의 "전체 매출", "광고 전환 매출"은 <b>소비자가 (VAT 포함, 마진 포함)</b> 기준</div>
-            <div>• 우리는 <b>공급가 (서플라이 허브 기준, {VAT_LABEL})</b>이라 절대 금액이 작음</div>
-            <div>• <b>비율</b>은 두 기준 모두 비슷해야 함 (광고 의존도 % 정도가 진짜 비교 지표)</div>
+            <div><b>왜 옵션ID로 직접 매칭을 못 하나?</b></div>
+            <div>• 광고 CSV의 옵션ID는 쿠팡 내부 ID (긴 숫자)</div>
+            <div>• 우리 products.barcode는 SKU 코드 (영문+숫자)</div>
+            <div>• 두 식별자 간 매핑 데이터가 없음 (정확 매칭 0건 확인됨)</div>
+            <div style={{ marginTop: 8 }}><b>그래서 어떻게 계산하나? (수량 비율 기반):</b></div>
+            <div>• 일별 광고 의존도 = 광고 판매수량 / 총 판매수량</div>
+            <div>• 광고 매출 (공급가 추정) = 총 매출 × 광고 의존도</div>
+            <div>• 광고 의존도 % 는 정확. 매출 절대값은 광고가 비싼/싼 상품에 편향됐을 때 ±편차 가능</div>
+            <div style={{ marginTop: 8 }}><b>쿠팡 광고센터 비교:</b></div>
+            <div>• 광고센터: 소비자가 기준 (절대값 큼) · <b>의존도 % 비교</b>가 정확</div>
+            <div>• 우리: 공급가 기준 (절대값 작음, 마진율만큼) · 의존도 % 는 같아야 함</div>
             {hasAdData && (
               <div style={{ marginTop: 8, padding: 8, background: '#fff', borderRadius: 4 }}>
-                참고 — 광고 CSV의 소비자가 기준 광고 매출 합계: <b>{fmt(adRevConsumerTotal)}원 ({VAT_LABEL})</b>
-                <br />→ 공급가 환산: <b>{fmt(totals.adRev)}원</b> · 비율 {totals.adRev > 0 && adRevConsumerTotal > 0
-                  ? `${(totals.adRev / adRevConsumerTotal * 100).toFixed(1)}% (공급가/소비자가)`
-                  : 'N/A'}
+                <div>참고 — 광고 CSV의 소비자가 광고 매출 합계: <b>{fmt(totals.adRevConsumer)}원</b> ({VAT_LABEL})</div>
+                <div>광고 판매수량: <b>{totals.adUnits.toLocaleString()}개</b> / 총 <b>{totals.qty.toLocaleString()}개</b></div>
+                <div>광고 의존도 (수량 기준): <b>{totals.ratio.toFixed(1)}%</b></div>
               </div>
             )}
+            <div style={{ marginTop: 8, color: '#475569' }}>
+              <b>📌 향후 정확도 향상:</b> 옵션ID ↔ 바코드 매핑 테이블을 한 번 채우면 수량/매출 모두 정확하게 옵션별 분리 가능.
+            </div>
           </div>
         </details>
       </div>
