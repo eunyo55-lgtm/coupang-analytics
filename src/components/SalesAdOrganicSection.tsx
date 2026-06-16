@@ -26,6 +26,7 @@ type AdDailyRow = {
   date: string
   ad_cost: number
   revenue_1d: number
+  revenue_14d: number
 }
 
 // 톤 다운된 팔레트 (slate + warm khaki)
@@ -41,6 +42,9 @@ export default function SalesAdOrganicSection({
   const [adRows, setAdRows] = useState<AdDailyRow[]>([])
   const [loading, setLoading] = useState(false)
   const [hasAdData, setHasAdData] = useState<boolean | null>(null)
+  // 어트리뷰션 윈도우 — 기본 14일 (쿠팡 광고센터 화면과 일치)
+  const [attrWindow, setAttrWindow] = useState<'1d' | '14d'>('14d')
+  const [lastUploadDate, setLastUploadDate] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -51,7 +55,7 @@ export default function SalesAdOrganicSection({
       try {
         const { data, error } = await supabase
           .from('coupang_ad_daily_summary')
-          .select('date, ad_cost, revenue_1d')
+          .select('date, ad_cost, revenue_1d, revenue_14d')
           .gte('date', chartFrom)
           .lte('date', chartTo)
           .order('date', { ascending: true })
@@ -66,9 +70,11 @@ export default function SalesAdOrganicSection({
           date: r.date,
           ad_cost: vatExcluded(Number(r.ad_cost || 0)),
           revenue_1d: vatExcluded(Number(r.revenue_1d || 0)),
+          revenue_14d: vatExcluded(Number(r.revenue_14d || 0)),
         }))
         setAdRows(rows)
         setHasAdData(rows.length > 0)
+        setLastUploadDate(rows.length > 0 ? rows[rows.length - 1].date : null)
       } catch (e) {
         console.warn('[SalesAdOrganicSection] load error:', e)
         if (!cancelled) { setAdRows([]); setHasAdData(false) }
@@ -80,13 +86,13 @@ export default function SalesAdOrganicSection({
     return () => { cancelled = true }
   }, [chartFrom, chartTo])
 
-  // 날짜별 병합
+  // 날짜별 병합 (attrWindow에 따라 revenue 선택)
   const merged = useMemo(() => {
     const adByDate: Record<string, AdDailyRow> = {}
     adRows.forEach(r => { adByDate[r.date] = r })
     return dailyTrend.map(d => {
       const ad = adByDate[d.fullDate]
-      const adRev = ad ? ad.revenue_1d : 0
+      const adRev = ad ? (attrWindow === '14d' ? ad.revenue_14d : ad.revenue_1d) : 0
       const adCost = ad ? ad.ad_cost : 0
       const total = d.rev
       const organic = Math.max(0, total - adRev)
@@ -103,7 +109,7 @@ export default function SalesAdOrganicSection({
         ratio: Math.round(ratio * 10) / 10,
       }
     })
-  }, [dailyTrend, adRows])
+  }, [dailyTrend, adRows, attrWindow])
 
   // 기간 합계
   const totals = useMemo(() => {
@@ -141,11 +147,31 @@ export default function SalesAdOrganicSection({
             </div>
             <div className="ch-sub">
               {chartFrom} ~ {chartTo} · {merged.length}일
-              {isRev && ' · 1일 어트리뷰션 · ' + VAT_LABEL}
+              {isRev && ` · ${attrWindow === '14d' ? '14일' : '1일'} 어트리뷰션 · ${VAT_LABEL}`}
+              {isRev && lastUploadDate && ` · CSV 최신: ${lastUploadDate}`}
               {loading && ' · 불러오는 중...'}
             </div>
           </div>
         </div>
+        {isRev && hasAdData && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--t3)', marginRight: 4 }}>어트리뷰션:</span>
+            {(['14d', '1d'] as const).map(w => (
+              <button
+                key={w}
+                onClick={() => setAttrWindow(w)}
+                style={{
+                  padding: '4px 10px', fontSize: 11, fontWeight: 700,
+                  border: '1px solid ' + (attrWindow === w ? '#475569' : '#E4E7EC'),
+                  background: attrWindow === w ? '#475569' : '#fff',
+                  color: attrWindow === w ? '#fff' : 'var(--t2)',
+                  borderRadius: 4, cursor: 'pointer',
+                }}
+                title={w === '14d' ? '쿠팡 광고센터와 동일 (14일 어트리뷰션)' : '동일 일자 광고 전환 (1일)'}
+              >{w === '14d' ? '14일' : '1일'}</button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="cb">
         {/* KPI 카드 — rev 모드만 (광고 vs 오가닉 의미 있음) */}
@@ -258,6 +284,24 @@ export default function SalesAdOrganicSection({
           <div style={{ marginTop: 10, padding: '8px 12px', background: '#F1F5F9', borderRadius: 6, fontSize: 11, color: '#64748B' }}>
             💡 광고 데이터가 없어 모든 매출이 오가닉으로 표시됩니다. 광고 현황 탭에서 CSV 업로드 시 광고/오가닉 분리가 활성화됩니다.
           </div>
+        )}
+
+        {/* 쿠팡 광고센터 대조 가이드 */}
+        {isRev && hasAdData && (
+          <details style={{ marginTop: 12, fontSize: 11, color: '#64748B' }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#475569' }}>
+              🔍 쿠팡 광고센터 숫자와 다른가요? 대조 체크리스트
+            </summary>
+            <div style={{ marginTop: 8, padding: 12, background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7 }}>
+              <div><b>1. 어트리뷰션 윈도우</b> — 쿠팡 광고센터는 기본 <b>14일</b>. 우측 상단 토글 확인.</div>
+              <div><b>2. VAT</b> — 우리는 <b>VAT 별도</b>로 표시 (÷1.1). 쿠팡 화면은 VAT 포함이라 +10% 차이.</div>
+              <div><b>3. 기간</b> — 차트 기간(상단)과 쿠팡 광고센터에서 보는 기간을 정확히 맞춰서 비교.</div>
+              <div><b>4. CSV 최신성</b> — 광고 현황 탭에서 가장 최근 CSV가 업로드됐는지 확인.</div>
+              <div style={{ marginTop: 6, color: '#94A3B8' }}>
+                예: 쿠팡 광고센터 "광고 전환 매출 98,939,170원" (VAT 포함, 14d) → 우리 화면 (VAT 별도, 14d) = 89,944,700원 근처면 정상
+              </div>
+            </div>
+          </details>
         )}
       </div>
     </div>
