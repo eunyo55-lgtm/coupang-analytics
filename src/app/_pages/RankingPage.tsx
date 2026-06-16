@@ -503,6 +503,16 @@ export default function RankingPage() {
         if (sortKey === 'salesThis') { av = aS.thisWeek; bv = bS.thisWeek }
         if (sortKey === 'salesLast') { av = aS.lastWeek; bv = bS.lastWeek }
         if (sortKey === 'salesWow') { av = aS.thisWeek - aS.lastWeek; bv = bS.thisWeek - bS.lastWeek }
+      } else if (sortKey.startsWith('date:')) {
+        // 특정 측정일의 rank_position 으로 정렬 (작을수록 좋음 → asc = 1위부터)
+        const targetDate = sortKey.slice(5)
+        const aRanks = rankingsByKw.get(a.id) || []
+        const bRanks = rankingsByKw.get(b.id) || []
+        const aRank = aRanks.find(r => r.date === targetDate)?.rank_position
+        const bRank = bRanks.find(r => r.date === targetDate)?.rank_position
+        // 없는 값은 끝으로 (asc 시 큰 값, desc 시 작은 값 취급)
+        av = aRank ?? 999999
+        bv = bRank ?? 999999
       }
       if (av < bv) return sortDir === 'asc' ? -1 : 1
       if (av > bv) return sortDir === 'asc' ? 1 : -1
@@ -935,8 +945,10 @@ export default function RankingPage() {
                   {displayDates.map(d => {
                     const [, m, day] = d.split('-')
                     return (
-                      <th key={d} style={{ width: 70 }} title="순위 / ★별점 / 💬리뷰">
-                        <div style={{ fontSize: 11 }}>{`${parseInt(m)}/${parseInt(day)}`}</div>
+                      <th key={d} style={{ width: 70 }} title="클릭 → 해당 날짜 순위로 정렬">
+                        <button className="th-sort" onClick={() => toggleSort(`date:${d}`)} style={{ fontSize: 11 }}>
+                          {`${parseInt(m)}/${parseInt(day)}`} <SortArrow k={`date:${d}`} />
+                        </button>
                       </th>
                     )
                   })}
