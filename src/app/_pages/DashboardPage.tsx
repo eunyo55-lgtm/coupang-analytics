@@ -210,7 +210,9 @@ export default function DashboardPage() {
   const latestDate = state.latestSaleDate || toYMD(new Date(Date.now()-86400000))
   const weekRange = useMemo(()=>{
     const d=new Date(latestDate), dow=d.getDay()
-    const lastThu=new Date(d); lastThu.setDate(d.getDate()-((dow+3)%7+1))
+    // 가장 최근 완료된 목요일 (금~목 사이클 종료). 오늘이 목요일이면 그 전 주 목요일.
+    const back = (dow + 3) % 7 || 7
+    const lastThu=new Date(d); lastThu.setDate(d.getDate() - back)
     const lastFri=new Date(lastThu); lastFri.setDate(lastThu.getDate()-6)
     return {from:toYMD(lastFri),to:toYMD(lastThu)}
   },[latestDate])
@@ -587,23 +589,21 @@ export default function DashboardPage() {
 
   // ── 공급 KPI 4개 계산 (입고예정일 기준, 확정수량 + 확정금액) ──
   // 공급 KPI는 supplyRaw 만 의존 — sales 의 latestDate 와 분리 (캐시 즉시 표시)
+  // 전일/주간/누적 기준 날짜: 판매 KPI 와 동일하게 달력 어제 (TODAY-1) 사용 → 라벨 일관성
   const supplyKpis = useMemo(() => {
-    const todayStr = toYMD(new Date())
-    // supplyRaw 안의 '오늘까지 가장 최근 입고예정일' 을 supply 의 latestDate 로 사용
-    let supplyLatest = ''
-    for (const r of supplyRaw) {
-      const d = (r.입고예정일 || '').slice(0,10)
-      if (d && d <= todayStr && d > supplyLatest) supplyLatest = d
-    }
-    if (!supplyLatest) supplyLatest = toYMD(new Date(Date.now() - 86400000))
-    // 주간 범위: supplyLatest 기준 금~목 7일
-    const a = new Date(supplyLatest + 'T00:00:00')
-    const dow = a.getDay()
-    const lastThu = new Date(a); lastThu.setDate(a.getDate() - ((dow + 3) % 7 + 1))
+    const todayObj = new Date()
+    const todayStr = toYMD(todayObj)
+    // 어제 (calendar) — 판매 latestDate 가 보통 어제이므로 일관됨
+    const yObj = new Date(todayObj.getTime() - 86400000)
+    const supplyLatest = toYMD(yObj)
+    // 주간: 어제 기준 가장 최근 완료된 목요일 (금~목 사이클 종료)
+    const dow = yObj.getDay()
+    const back = (dow + 3) % 7 || 7
+    const lastThu = new Date(yObj); lastThu.setDate(yObj.getDate() - back)
     const lastFri = new Date(lastThu); lastFri.setDate(lastThu.getDate() - 6)
     const weekFrom = toYMD(lastFri), weekTo = toYMD(lastThu)
-    // 누적: 올해 1/1 ~ supplyLatest
-    const cumFrom = `${a.getFullYear()}-01-01`, cumTo = supplyLatest
+    // 누적: 올해 1/1 ~ 어제
+    const cumFrom = `${yObj.getFullYear()}-01-01`, cumTo = supplyLatest
 
     const acc = (filter: (r: SupplyRaw) => boolean) => {
       let qty = 0, amt = 0
