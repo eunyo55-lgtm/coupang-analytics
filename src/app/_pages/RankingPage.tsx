@@ -665,6 +665,8 @@ export default function RankingPage() {
                               '행사제안':   { bg: '#FFEDD5', fg: '#9A3412' },
                               '리뷰점검':   { bg: '#FEF9C3', fg: '#854D0E' },
                               '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
+                              '재고부족':   { bg: '#FEE2E2', fg: '#B91C1C' },
+                              '발주불가':   { bg: '#FECACA', fg: '#7F1D1D' },
                             }
                             const c = kw.strategy_tag ? tagColors[kw.strategy_tag] : null
                             const openEdit = () => setEditingStrategy({
@@ -1040,6 +1042,8 @@ export default function RankingPage() {
               <option value="행사제안">🎁 행사제안</option>
               <option value="리뷰점검">⭐ 리뷰점검</option>
               <option value="테스트중">🧪 테스트중</option>
+              <option value="재고부족">📦 재고부족</option>
+              <option value="발주불가">🚫 발주불가</option>
             </select>
             <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4, fontWeight: 600 }}>메모 (자유 텍스트)</div>
             <textarea
