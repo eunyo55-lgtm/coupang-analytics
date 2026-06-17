@@ -755,11 +755,17 @@ export default function DashboardPage() {
 
       {/* 일별 공급량 + 공급매출 차트 — 3개년 판매 비교 아래 */}
       {(() => {
-        // chartFrom~chartTo 범위 안의 supply 데이터를 일별 집계
+        // 공급 차트는 supplyRaw 자체에서 기간 계산 (sales chartFrom/chartTo 의존성 제거)
+        // 최근 30일: supplyKpis.latest (=오늘 이하 가장 최근 입고예정일) - 29일
+        if (supplyRaw.length === 0) return null
+        const supplyTo = supplyKpis.latest
+        const supplyToDate = new Date(supplyTo + 'T00:00:00')
+        const supplyFromDate = new Date(supplyToDate); supplyFromDate.setDate(supplyToDate.getDate() - 29)
+        const supplyFrom = toYMD(supplyFromDate)
         const dailySupply: Record<string, { qty: number; amt: number }> = {}
         for (const r of supplyRaw) {
           const d = (r.입고예정일 || '').slice(0,10)
-          if (d < chartFrom || d > chartTo) continue
+          if (d < supplyFrom || d > supplyTo) continue
           const q = Number(r.확정수량 || 0)
           const mp = Number(r.매입가 || 0)
           if (!dailySupply[d]) dailySupply[d] = { qty: 0, amt: 0 }
@@ -775,7 +781,7 @@ export default function DashboardPage() {
             <div className="ch">
               <div className="ch-l"><div className="ch-ico">🚚</div><div>
                 <div className="ch-title">일별 공급량 · 공급매출</div>
-                <div className="ch-sub">{chartFrom} ~ {chartTo} · 입고예정일 기준 확정 (VAT 별도)</div>
+                <div className="ch-sub">{supplyFrom} ~ {supplyTo} · 입고예정일 기준 확정 (VAT 별도)</div>
               </div></div>
             </div>
             <div className="cb">
