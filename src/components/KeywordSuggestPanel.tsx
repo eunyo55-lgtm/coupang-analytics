@@ -12,7 +12,19 @@ type Suggestion = {
   wowDelta?: number | null
   isSurging?: boolean
   prevVolume?: number | null
-  hasAgeToken?: boolean       // 연령 토큰 포함 (3~10세 아동 타겟 적합)
+  hasAgeToken?: boolean
+}
+
+type DailySuggestion = {
+  keyword: string
+  total_volume: number
+  pc_volume: number
+  mobile_volume: number
+  competition: string
+  source_seed: string
+  has_age_token: boolean
+  is_surging: boolean
+  wow_delta: number | null
 }
 
 const SURGE_THRESHOLD_VOLUME = 10000  // 미등록 + 이 이상이면 노란 강조

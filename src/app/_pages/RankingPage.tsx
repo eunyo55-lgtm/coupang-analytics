@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import RankingBotTrigger from '@/components/RankingBotTrigger'
 import KeywordVolumeChart from '@/components/KeywordVolumeChart'
 import KeywordSuggestPanel from '@/components/KeywordSuggestPanel'
+import DailyKeywordSuggestions from '@/components/DailyKeywordSuggestions'
 
 /* ────────────────────────────────────────────────────────────
    Types (기존 앱 스키마 기반 - keywords + keyword_rankings)
@@ -24,6 +25,8 @@ type Keyword = {
   barcode: string | null
   created_at: string
   products: ProductLite | null
+  strategy_tag?: string | null
+  memo?: string | null
 }
 
 type Ranking = {
@@ -106,6 +109,7 @@ export default function RankingPage() {
   const [sortKey, setSortKey] = useState<string>('volLatest')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [editingCat, setEditingCat] = useState<{ id: string; value: string } | null>(null)
+  const [editingStrategy, setEditingStrategy] = useState<{ id: string; tag: string; memo: string } | null>(null)
 
   /* 차트 모달 */
   const [chartKw, setChartKw] = useState<Keyword | null>(null)
@@ -465,6 +469,13 @@ export default function RankingPage() {
       {/* 봇 트리거 패널 (회사 PC의 runner.js와 연동) */}
       <RankingBotTrigger />
 
+      {/* 매일 아침 자동 추천 (Vercel Cron 결과) */}
+      <DailyKeywordSuggestions
+        existingKeywords={keywords.map(k => k.keyword)}
+        onRegisterClick={() => { /* 향후 모달 열기 연결 */ }}
+        onRegistered={loadAll}
+      />
+
       {/* 키워드 발굴 제안 (Claude + Naver) */}
       <KeywordSuggestPanel
         existingKeywords={keywords.map(k => k.keyword)}
@@ -638,10 +649,14 @@ export default function RankingPage() {
                             <span className="cat-tag">{kw.category || '-'}</span>
                           )}
                         </td>
-                        {/* 키워드 */}
-                        <td className="rk-sticky" style={{ left: 90, width: 140 }}>
+                        {/* 키워드 + 전략 태그 + 메모 */}
+                        <td
+                          className="rk-sticky"
+                          style={{ left: 90, width: 140, cursor: 'pointer' }}
+                          onDoubleClick={() => setEditingStrategy({ id: kw.id, tag: kw.strategy_tag || '', memo: kw.memo || '' })}
+                          title={`더블클릭 → 전략 태그/메모 편집${kw.memo ? '\n메모: ' + kw.memo : ''}`}
+                        >
                           {(() => {
-                            // 7일 이내 등록된 키워드 → 🆕 배지
                             const isNew = kw.created_at &&
                               (Date.now() - new Date(kw.created_at).getTime()) < 7 * 86400000
                             return (
@@ -654,6 +669,33 @@ export default function RankingPage() {
                                   }} title="최근 7일 이내 신규 등록">🆕</span>
                                 )}
                                 <span className="kw-tag">{kw.keyword}</span>
+                                {kw.strategy_tag && (() => {
+                                  const tagColors: Record<string, { bg: string; fg: string }> = {
+                                    '신상':       { bg: '#DBEAFE', fg: '#1E40AF' },
+                                    '베스트':     { bg: '#FEF3C7', fg: '#92400E' },
+                                    '광고집중':   { bg: '#FCE7F3', fg: '#9F1239' },
+                                    '방어':       { bg: '#E0E7FF', fg: '#3730A3' },
+                                    '정리예정':   { bg: '#F1F5F9', fg: '#475569' },
+                                    '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
+                                  }
+                                  const c = tagColors[kw.strategy_tag] || { bg: '#E5E7EB', fg: '#374151' }
+                                  return (
+                                    <span style={{
+                                      display: 'block', marginTop: 2,
+                                      fontSize: 9, fontWeight: 700, color: c.fg, background: c.bg,
+                                      padding: '1px 6px', borderRadius: 3,
+                                    }}>{kw.strategy_tag}</span>
+                                  )
+                                })()}
+                                {kw.memo && (
+                                  <span style={{
+                                    display: 'block', marginTop: 2,
+                                    fontSize: 9, color: '#64748B', fontStyle: 'italic',
+                                    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  }} title={kw.memo}>
+                                    📝 {kw.memo.length > 18 ? kw.memo.slice(0, 16) + '…' : kw.memo}
+                                  </span>
+                                )}
                               </>
                             )
                           })()}
@@ -917,6 +959,73 @@ export default function RankingPage() {
         }
         .btn-del:hover { opacity: 1; }
       `}</style>
+
+      {/* 전략 태그 + 메모 편집 모달 */}
+      {editingStrategy && (
+        <div
+          onClick={() => setEditingStrategy(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 10, padding: 24,
+              width: '92%', maxWidth: 480, boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>📝 키워드 전략 편집</div>
+            <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4, fontWeight: 600 }}>전략 태그</div>
+            <select
+              value={editingStrategy.tag}
+              onChange={e => setEditingStrategy({ ...editingStrategy, tag: e.target.value })}
+              style={{ width: '100%', padding: '8px 10px', fontSize: 13, marginBottom: 12,
+                       border: '1px solid #E4E7EC', borderRadius: 6 }}
+            >
+              <option value="">— 태그 없음 —</option>
+              <option value="신상">🆕 신상</option>
+              <option value="베스트">🏆 베스트</option>
+              <option value="광고집중">📢 광고집중</option>
+              <option value="방어">🛡️ 방어</option>
+              <option value="정리예정">🗑️ 정리예정</option>
+              <option value="테스트중">🧪 테스트중</option>
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4, fontWeight: 600 }}>메모 (자유 텍스트)</div>
+            <textarea
+              value={editingStrategy.memo}
+              onChange={e => setEditingStrategy({ ...editingStrategy, memo: e.target.value })}
+              placeholder="운영 노트 — 광고 예산, 목표 순위, 경쟁사 동향 등"
+              rows={4}
+              style={{ width: '100%', padding: 8, fontSize: 13, fontFamily: 'inherit',
+                       border: '1px solid #E4E7EC', borderRadius: 6, marginBottom: 16, resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setEditingStrategy(null)}
+                style={{ padding: '8px 16px', borderRadius: 6, background: '#fff',
+                         color: 'var(--t2)', border: '1px solid #E4E7EC', fontWeight: 600,
+                         fontSize: 13, cursor: 'pointer' }}
+              >취소</button>
+              <button
+                onClick={async () => {
+                  if (!supabase || !editingStrategy) return
+                  const { error } = await supabase.from('keywords').update({
+                    strategy_tag: editingStrategy.tag || null,
+                    memo: editingStrategy.memo.trim() || null,
+                  }).eq('id', editingStrategy.id)
+                  if (error) { alert('저장 실패: ' + error.message); return }
+                  setEditingStrategy(null)
+                  loadAll()
+                }}
+                style={{ padding: '8px 16px', borderRadius: 6, background: '#1570EF',
+                         color: '#fff', border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+              >저장</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
