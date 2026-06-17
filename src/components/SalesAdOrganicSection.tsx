@@ -207,10 +207,11 @@ export default function SalesAdOrganicSection({
         )}
       </div>
       <div className="cb">
-        {/* 6 카드 1행 — 통합 로딩 (스켈레톤) */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 14 }}>
+        {/* 3 카드 × 2줄 — 통합 로딩 (스켈레톤) */}
+        {/* Row 1: 매출 분포 (광고 vs 오가닉) */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
           {allLoading ? (
-            Array.from({ length: 6 }).map((_, i) => <KpiSkeleton key={i} />)
+            Array.from({ length: 3 }).map((_, i) => <KpiSkeleton key={`r1-${i}`} />)
           ) : (
             <>
               <KpiCard
@@ -220,21 +221,34 @@ export default function SalesAdOrganicSection({
                 color="#0F172A"
               />
               <KpiCard
-                label="광고 매출"
+                label="광고 전환 매출"
                 value={fmt(totals.adRev) + '원'}
-                sub={hasAdData ? `광고로 ${totals.adUnits.toLocaleString()}개 판매` : '광고 데이터 없음'}
+                sub={hasAdData
+                  ? `전체의 ${totals.ratio.toFixed(1)}% · ${totals.adUnits.toLocaleString()}개 판매`
+                  : '광고 데이터 없음'}
                 color={COLOR_AD}
               />
               <KpiCard
                 label="오가닉 매출"
                 value={fmt(totals.organic) + '원'}
-                sub={`전체의 ${(100 - totals.ratio).toFixed(1)}%`}
+                sub={hasAdData
+                  ? `전체의 ${(100 - totals.ratio).toFixed(1)}%`
+                  : '전체 매출 (광고 데이터 없음)'}
                 color={COLOR_ORGANIC}
               />
+            </>
+          )}
+        </div>
+        {/* Row 2: 광고 효율 (광고비 · 비중 · ROAS) */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+          {allLoading ? (
+            Array.from({ length: 3 }).map((_, i) => <KpiSkeleton key={`r2-${i}`} />)
+          ) : (
+            <>
               <KpiCard
                 label="광고비"
                 value={hasAdData ? fmt(totals.adCost) + '원' : '—'}
-                sub={`광고 의존도 ${totals.ratio.toFixed(1)}%`}
+                sub={hasAdData ? VAT_LABEL : ''}
                 color="#DC2626"
               />
               <KpiCard
