@@ -3,8 +3,6 @@ import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
 import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine, LabelList } from 'recharts'
-import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
-import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
 import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 
@@ -838,15 +836,6 @@ export default function DashboardPage() {
           </div>
         )
       })()}
-
-      {/* 🌅 오늘의 브리핑 + 🚨 우선순위 액션 큐 (3개년 차트 아래) */}
-      <DashboardBriefing
-        latestDate={latestDate}
-        yestQty={kpiYest?.qty}
-        yestRev={kpiYest?.rev}
-        yoyPct={kpiYest && kpiYest25 ? pct(kpiYest.qty, kpiYest25.qty) : null}
-      />
-      <DashboardActionQueue />
 
       <div className="g2" style={{marginBottom:12}}>
         <div className="card">
