@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useApp } from '@/lib/store'
 import { toYMD } from '@/lib/dateUtils'
-import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
+import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, ReferenceLine, LabelList } from 'recharts'
 import DashboardBriefing from '@/components/dashboard/DashboardBriefing'
 import DashboardActionQueue from '@/components/dashboard/DashboardActionQueue'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
@@ -815,8 +815,20 @@ export default function DashboardPage() {
                     labelFormatter={l=>`날짜: ${l}`}
                   />
                   <Legend iconType="circle" iconSize={8} wrapperStyle={{fontSize:11}}/>
-                  <Bar yAxisId="left" dataKey="공급량" fill="#A855F7" radius={[3,3,0,0]}/>
-                  <Line yAxisId="right" type="monotone" dataKey="공급매출" stroke="#10B981" strokeWidth={2} dot={{r:2}}/>
+                  <Bar yAxisId="left" dataKey="공급량" fill="#A855F7" radius={[3,3,0,0]}>
+                    <LabelList dataKey="공급량" position="top" fontSize={9} fill="#7C3AED"
+                      formatter={(v:number)=> v>0 ? fmt(v) : ''}/>
+                  </Bar>
+                  <Line yAxisId="right" type="monotone" dataKey="공급매출" stroke="#10B981" strokeWidth={2} dot={{r:2}}>
+                    <LabelList dataKey="공급매출" position="top" fontSize={9} fill="#059669"
+                      formatter={(v:number)=> {
+                        if (!v || v<=0) return ''
+                        if (v>=100_000_000) return `${(v/100_000_000).toFixed(1)}억`
+                        if (v>=10_000_000) return `${Math.round(v/1_000_000)}백만`
+                        if (v>=10_000) return `${Math.round(v/10_000)}만`
+                        return String(v)
+                      }}/>
+                  </Line>
                   {supplyChart.some(d => d.date === todayMD) && (
                     <ReferenceLine yAxisId="left" x={todayMD} stroke="#dc2626" strokeDasharray="4 3" strokeWidth={1.5} label={{value:'오늘',position:'top',fontSize:10,fill:'#dc2626',fontWeight:700}}/>
                   )}
