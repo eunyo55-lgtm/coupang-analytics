@@ -44,8 +44,8 @@ export default function SalesAdOrganicSection({
   const [attrWindow, setAttrWindow] = useState<'1d' | '14d'>('14d')
 
   // SWR 캐시 — 같은 기간+윈도우면 즉시 표시 + 백그라운드 갱신
-  // v2: 옛 stale 캐시 무효화 (정확한 raw 합계 보장)
-  const cacheKey = `swr_sales_ad_v2_${attrWindow}_${chartFrom}_${chartTo}`
+  // v3: 부분 fetch 캐시 무효화 + 완전 fetch만 캐시 저장
+  const cacheKey = `swr_sales_ad_v3_${attrWindow}_${chartFrom}_${chartTo}`
   type CachedAd = { rows: Array<[string, AdAggRow]>; lastUploadDate: string | null }
   const _cached = (typeof window !== 'undefined' && chartFrom && chartTo)
     ? readSwrCache<CachedAd>(cacheKey, AD_CACHE_TTL)
@@ -78,6 +78,8 @@ export default function SalesAdOrganicSection({
         const agg = new Map<string, AdAggRow>()
         let from = 0
         let totalFetched = 0
+        let fetchSucceeded = true   // 모든 batch가 성공해야 캐시 저장
+        let totalRevSum = 0  // 디버그용
         while (true) {
           const { data, error } = await supabase
             .from('coupang_ad_daily')
@@ -87,7 +89,11 @@ export default function SalesAdOrganicSection({
             .order('date', { ascending: true })
             .range(from, from + PAGE - 1)
           if (cancelled) return
-          if (error) break
+          if (error) {
+            console.warn('[SalesAdOrganic] fetch error at offset', from, error.message)
+            fetchSucceeded = false
+            break
+          }
           const rows = (data || []) as any[]
           for (const r of rows) {
             const date = String(r.date)
@@ -98,13 +104,19 @@ export default function SalesAdOrganicSection({
             cur.adRev += vatExcluded(rev)
             cur.adCost += vatExcluded(Number(r.ad_cost || 0))
             agg.set(date, cur)
+            totalRevSum += vatExcluded(rev)
           }
           totalFetched += rows.length
           if (rows.length < PAGE) break
           from += PAGE
-          if (totalFetched > 100000) break
+          if (totalFetched > 100000) {
+            console.warn('[SalesAdOrganic] 100k safety break — incomplete fetch')
+            fetchSucceeded = false
+            break
+          }
         }
         if (cancelled) return
+        console.log(`[SalesAdOrganic] fetched ${totalFetched} rows · 광고 매출 합 ${totalRevSum.toLocaleString()}원 · success=${fetchSucceeded}`)
         setAdAgg(agg)
         setHasAdData(agg.size > 0)
         let lastDate: string | null = null
@@ -113,9 +125,14 @@ export default function SalesAdOrganicSection({
           lastDate = dates[dates.length - 1]
           setLastUploadDate(lastDate)
         }
-        // 캐시 저장
-        writeSwrCache(cacheKey, { rows: Array.from(agg.entries()), lastUploadDate: lastDate })
-      } catch { if (!cancelled) { setAdAgg(new Map()); setHasAdData(false) } }
+        // 캐시 저장 — 완전히 성공한 경우만 (부분 데이터 캐시 방지)
+        if (fetchSucceeded) {
+          writeSwrCache(cacheKey, { rows: Array.from(agg.entries()), lastUploadDate: lastDate })
+        }
+      } catch (e) {
+        console.warn('[SalesAdOrganic] load exception:', e)
+        if (!cancelled) { setAdAgg(new Map()); setHasAdData(false) }
+      }
       finally { if (!cancelled) setAdLoading(false) }
     }
     load()
