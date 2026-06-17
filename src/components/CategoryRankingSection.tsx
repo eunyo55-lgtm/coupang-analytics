@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
 type Catalog = {
@@ -98,6 +98,50 @@ export default function CategoryRankingSection() {
   }
 
   const [triggering, setTriggering] = useState(false)
+  // 카테고리 추적 job 상태 자동 폴링
+  const [jobStatus, setJobStatus] = useState<'pending'|'running'|'completed'|'failed'|null>(null)
+  const [jobStartedAt, setJobStartedAt] = useState<string | null>(null)
+  const [jobFinishedAt, setJobFinishedAt] = useState<string | null>(null)
+  const [justCompleted, setJustCompleted] = useState(false)
+  const lastStatusRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    async function poll() {
+      if (!supabase || cancelled) return
+      try {
+        const { data } = await supabase
+          .from('ranking_jobs')
+          .select('status, started_at, finished_at')
+          .eq('job_type', 'coupang_category')
+          .order('created_at', { ascending: false })
+          .limit(1)
+        if (cancelled) return
+        const j = (data?.[0] as any)
+        const s = j?.status ?? null
+        setJobStatus(s)
+        setJobStartedAt(j?.started_at ?? null)
+        setJobFinishedAt(j?.finished_at ?? null)
+        // 진행 중 → 완료 전이 감지: 데이터 자동 reload + 완료 플래시
+        if ((lastStatusRef.current === 'pending' || lastStatusRef.current === 'running')
+            && s === 'completed') {
+          setJustCompleted(true)
+          load()
+          setTimeout(() => setJustCompleted(false), 8000)
+        }
+        lastStatusRef.current = s
+      } catch { /* ignore */ }
+      // 진행 중이면 5초, 아니면 30초 폴링
+      const next = (s => s === 'pending' || s === 'running' ? 5000 : 30000)(lastStatusRef.current)
+      timer = setTimeout(poll, next)
+    }
+    poll()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
+  // load 함수는 컴포넌트 lifetime 동안 안정적이라 의존성 제외
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function triggerCategoryScan() {
     if (!supabase) return
     if (catalogs.length === 0) { alert('추적 카테고리가 없습니다. 먼저 등록해주세요.'); return }
@@ -163,10 +207,50 @@ export default function CategoryRankingSection() {
         <div className="ch-l">
           <div className="ch-ico">📂</div>
           <div>
-            <div className="ch-title">카테고리 1페이지 우리 상품 노출 추적 {open ? '▼' : '▶'}</div>
+            <div className="ch-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>카테고리 1페이지 우리 상품 노출 추적 {open ? '▼' : '▶'}</span>
+              {/* 실시간 진행 상태 배지 */}
+              {(jobStatus === 'pending' || jobStatus === 'running') && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+                  background: '#3B82F6', color: '#fff',
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  animation: 'pulse-blue 1.6s ease-in-out infinite',
+                }}>
+                  <style>{`@keyframes pulse-blue { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }`}</style>
+                  <span style={{
+                    display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                    background: '#fff',
+                    animation: 'spin-blue 1s linear infinite',
+                  }} />
+                  <style>{`@keyframes spin-blue { 0% { transform: scale(1); } 50% { transform: scale(1.5); } 100% { transform: scale(1); } }`}</style>
+                  🤖 추적 중...
+                </span>
+              )}
+              {justCompleted && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+                  background: '#10B981', color: '#fff',
+                  animation: 'pulse-green 0.8s ease-in-out',
+                }}>
+                  <style>{`@keyframes pulse-green { 0% { transform: scale(0.8); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }`}</style>
+                  ✅ 방금 완료
+                </span>
+              )}
+            </div>
             <div className="ch-sub">
               {catalogs.length}개 카테고리 · 판매량순 정렬 (PC/모바일 디바이스 차이 제거) ·
               {rankings.length > 0 ? ` 우리 상품 ${rankings.filter(r => r.is_our_product).length}개 노출 중` : ' 데이터 대기'}
+              {(jobStatus === 'running' && jobStartedAt) && (
+                <span style={{ marginLeft: 6, color: '#3B82F6', fontWeight: 600 }}>
+                  · 시작 {new Date(new Date(jobStartedAt).getTime() + 9*3600000).toISOString().slice(11, 16)}
+                </span>
+              )}
+              {(jobStatus === 'completed' && jobFinishedAt && !justCompleted) && (
+                <span style={{ marginLeft: 6, color: '#10B981', fontWeight: 600 }}>
+                  · 최근 추적 {new Date(new Date(jobFinishedAt).getTime() + 9*3600000).toISOString().slice(5, 16).replace('T', ' ')}
+                </span>
+              )}
             </div>
           </div>
         </div>

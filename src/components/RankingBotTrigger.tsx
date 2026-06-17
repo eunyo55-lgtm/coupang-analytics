@@ -47,6 +47,9 @@ export default function RankingBotTrigger() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // 완료 토스트 — job_type 별로 마지막 본 상태 추적
+  const lastStatusRef = useRef<Record<string, string | null>>({})
+  const [toast, setToast] = useState<{ jobType: JobType; status: 'completed' | 'failed' } | null>(null)
 
   async function loadJobs() {
     try {
@@ -131,6 +134,23 @@ export default function RankingBotTrigger() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs.length, jobs.map(j => j.status + j.job_type).join(',')])
 
+  // 상태 전이 감지 → 토스트 알림 (pending/running → completed/failed)
+  useEffect(() => {
+    const types: JobType[] = ['coupang_rank', 'naver_volume', 'coupang_category']
+    for (const t of types) {
+      const latest = jobs.find(j => j.job_type === t)
+      if (!latest) continue
+      const prev = lastStatusRef.current[t]
+      const curr = latest.status
+      if (prev && (prev === 'pending' || prev === 'running') &&
+          (curr === 'completed' || curr === 'failed')) {
+        setToast({ jobType: t, status: curr })
+        setTimeout(() => setToast(null), 6000)
+      }
+      lastStatusRef.current[t] = curr
+    }
+  }, [jobs])
+
   const latestByType = (t: JobType) => jobs.find(j => j.job_type === t) || null
   const activeByType = (t: JobType) => {
     const j = latestByType(t)
@@ -199,6 +219,36 @@ export default function RankingBotTrigger() {
   const latestCategory = latestByType('coupang_category')
 
   return (
+    <>
+      {/* 완료 토스트 (fixed top-right) */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 16, right: 16, zIndex: 2000,
+          background: toast.status === 'completed' ? '#10B981' : '#DC2626',
+          color: '#fff', padding: '12px 18px', borderRadius: 8,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+          fontSize: 13, fontWeight: 700,
+          display: 'flex', alignItems: 'center', gap: 10,
+          animation: 'toast-slide-in 0.4s ease-out',
+        }}>
+          <style>{`@keyframes toast-slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }`}</style>
+          <span style={{ fontSize: 18 }}>{toast.status === 'completed' ? '✅' : '❌'}</span>
+          <div>
+            <div style={{ fontSize: 14 }}>{BOT_META[toast.jobType].label} {toast.status === 'completed' ? '완료!' : '실패'}</div>
+            <div style={{ fontSize: 11, fontWeight: 500, opacity: 0.9, marginTop: 2 }}>
+              {toast.status === 'completed' ? '데이터가 갱신됐어요. 새로고침 하면 결과 표시됩니다.' : '로그 확인 필요'}
+            </div>
+          </div>
+          <button
+            onClick={() => setToast(null)}
+            style={{
+              background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff',
+              borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 12, marginLeft: 8,
+            }}
+          >×</button>
+        </div>
+      )}
+
     <div
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -314,6 +364,7 @@ export default function RankingBotTrigger() {
         </div>
       )}
     </div>
+    </>
   )
 }
 
