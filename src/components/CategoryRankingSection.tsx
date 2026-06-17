@@ -32,6 +32,10 @@ export default function CategoryRankingSection() {
   const [showAdd, setShowAdd] = useState(false)
   const [newPath, setNewPath] = useState('')
   const [newUrl, setNewUrl] = useState('')
+  // 편집 모달
+  const [editing, setEditing] = useState<Catalog | null>(null)
+  const [editPath, setEditPath] = useState('')
+  const [editUrl, setEditUrl] = useState('')
 
   async function load() {
     if (!supabase) return
@@ -90,6 +94,32 @@ export default function CategoryRankingSection() {
     if (!supabase) return
     if (!confirm('이 카테고리를 추적 목록에서 제거하시겠어요?')) return
     await supabase.from('coupang_category_catalog').update({ active: false }).eq('id', id)
+    load()
+  }
+
+  function openEdit(c: Catalog) {
+    setEditing(c)
+    setEditPath(c.category_path)
+    setEditUrl(c.category_url)
+  }
+
+  async function saveEdit() {
+    if (!supabase || !editing) return
+    const path = editPath.trim()
+    const url = editUrl.trim()
+    if (!path || !url) { alert('카테고리 경로와 URL을 모두 입력해주세요'); return }
+    const m = url.match(/\/categories\/(\d+)/)
+    const categoryId = m?.[1] || null
+    const { error } = await supabase
+      .from('coupang_category_catalog')
+      .update({
+        category_path: path,
+        category_url: url,
+        category_id: categoryId,
+      })
+      .eq('id', editing.id)
+    if (error) { alert('수정 실패: ' + error.message); return }
+    setEditing(null)
     load()
   }
 
@@ -185,7 +215,7 @@ export default function CategoryRankingSection() {
                     <div key={c.id} style={{
                       padding: 10, border: '1px solid #E4E7EC', borderRadius: 6, background: '#fff',
                     }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
                         <a
                           href={c.category_url}
                           target="_blank"
@@ -193,12 +223,24 @@ export default function CategoryRankingSection() {
                           style={{ fontSize: 11, fontWeight: 600, color: '#1570EF', textDecoration: 'none', flex: 1 }}
                         >{c.category_path}</a>
                         <button
+                          onClick={() => openEdit(c)}
+                          title="카테고리 정보 수정"
+                          style={{
+                            background: 'transparent', border: 'none', cursor: 'pointer',
+                            color: '#94A3B8', fontSize: 12, padding: 0, lineHeight: 1,
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.color = '#1570EF'}
+                          onMouseLeave={e => e.currentTarget.style.color = '#94A3B8'}
+                        >✏️</button>
+                        <button
                           onClick={() => removeCatalog(c.id)}
                           title="추적 중지"
                           style={{
                             background: 'transparent', border: 'none', cursor: 'pointer',
-                            color: '#94A3B8', fontSize: 14, padding: 0,
+                            color: '#94A3B8', fontSize: 14, padding: 0, lineHeight: 1,
                           }}
+                          onMouseEnter={e => e.currentTarget.style.color = '#DC2626'}
+                          onMouseLeave={e => e.currentTarget.style.color = '#94A3B8'}
                         >×</button>
                       </div>
                       {st ? (
@@ -270,6 +312,59 @@ export default function CategoryRankingSection() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* 편집 모달 */}
+      {editing && (
+        <div
+          onClick={() => setEditing(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 10, padding: 24,
+              width: '92%', maxWidth: 520, boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>✏️ 카테고리 정보 수정</div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>카테고리 경로 (표시용)</label>
+              <input
+                value={editPath}
+                onChange={e => setEditPath(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', fontSize: 13, border: '1px solid #E4E7EC', borderRadius: 6 }}
+              />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>쿠팡 카테고리 URL</label>
+              <input
+                value={editUrl}
+                onChange={e => setEditUrl(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', fontSize: 13, border: '1px solid #E4E7EC', borderRadius: 6 }}
+              />
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
+                URL 의 /categories/숫자 에서 카테고리 ID 자동 추출
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setEditing(null)}
+                style={{ padding: '8px 16px', borderRadius: 6, background: '#fff',
+                  color: 'var(--t2)', border: '1px solid #E4E7EC', fontWeight: 600,
+                  fontSize: 13, cursor: 'pointer' }}
+              >취소</button>
+              <button
+                onClick={saveEdit}
+                style={{ padding: '8px 16px', borderRadius: 6, background: '#1570EF',
+                  color: '#fff', border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+              >저장</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
