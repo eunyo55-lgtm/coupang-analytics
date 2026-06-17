@@ -243,20 +243,38 @@ export default function DashboardPage() {
   // 공급 데이터는 하루 1-2회만 업로드되므로 TTL을 길게 (6시간) 두고,
   // 캐시가 있으면 즉시 표시 + 백그라운드 갱신 (사용자 대기 없음)
   type SupplyRaw = { 입고예정일: string; 확정수량: number; 입고수량: number; 매입가: number }
-  const SUPPLY_CACHE_KEY = 'swr_dash_supply_v1'
+  const SUPPLY_CACHE_KEY = 'swr_dash_supply_v2'
   const SUPPLY_TTL = 6 * 60 * 60 * 1000  // 6시간 (공급 데이터 업로드 주기)
 
+  // 옛 v1 키 잔존 청소 (마이그레이션 - 일회성)
+  if (typeof window !== 'undefined') {
+    try { localStorage.removeItem('swr_dash_supply_v1') } catch { /* ignore */ }
+  }
   const _initialSupply = typeof window !== 'undefined' ? readSwrCache<SupplyRaw[]>(SUPPLY_CACHE_KEY, SUPPLY_TTL) : null
+  // 캐시 데이터가 너무 오래된 경우 자동 stale 처리 (매일 업로드 가정 → 3일 이상 차이면 옛 데이터)
+  const todayYmdStr = (() => { const t=new Date(); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}` })()
+  const cacheMaxDate = _initialSupply
+    ? _initialSupply.data.reduce((m, r) => {
+        const d = (r.입고예정일 || '').slice(0,10)
+        return d && d <= todayYmdStr && d > m ? d : m
+      }, '')
+    : ''
+  const cacheTooOld = cacheMaxDate && (() => {
+    const t = new Date(todayYmdStr).getTime()
+    const m = new Date(cacheMaxDate).getTime()
+    return (t - m) > 3 * 86400000
+  })()
+
   const [supplyRaw, setSupplyRaw] = useState<SupplyRaw[]>(_initialSupply?.data ?? [])
-  // 캐시 데이터가 있으면 loading=false (사용자에게 즉시 보여줌)
+  // 캐시 데이터가 있으면 loading=false (즉시 표시) — 다만 cacheTooOld 면 백그라운드 갱신 트리거
   const [supplyLoading, setSupplyLoading] = useState(!_initialSupply || _initialSupply.data.length === 0)
 
   // 대시보드 진입 시 supply_status 로드
-  //  - 캐시 신선 (<TTL): 백그라운드 fetch 생략 (네트워크 절약)
-  //  - 캐시 stale 또는 없음: 백그라운드 fetch + 완료되면 silent update
+  //  - 캐시 신선 + 데이터 최신 (3일 이내): 백그라운드 fetch 완전 생략
+  //  - 캐시 stale 또는 데이터 오래됨: 백그라운드 fetch
   useEffect(() => {
-    // 캐시 fresh → 백그라운드 fetch 생략 (가장 흔한 경우)
-    if (_initialSupply && !_initialSupply.stale && _initialSupply.data.length > 0) {
+    // 캐시 fresh + 데이터 최신 → 백그라운드 fetch 생략
+    if (_initialSupply && !_initialSupply.stale && _initialSupply.data.length > 0 && !cacheTooOld) {
       return
     }
     let cancelled = false

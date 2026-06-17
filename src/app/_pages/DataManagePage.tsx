@@ -356,7 +356,8 @@ export default function DataManagePage() {
           // SupplyPage 캐시 무효화 — 다음 진입 시 새 데이터 즉시 표시
           try {
             localStorage.removeItem('swr_supply_all_v2')
-            localStorage.removeItem('swr_dash_supply_v1')  // 대시보드 공급 KPI 캐시도 무효화
+            localStorage.removeItem('swr_dash_supply_v1')  // 옛 v1 키도 잔존 가능성 대비
+            localStorage.removeItem('swr_dash_supply_v2')  // 현재 대시보드 공급 KPI 캐시
             dispatch({ type: 'APPEND_LOG', payload: `🧹 공급 현황 + 대시보드 공급 캐시 비움 — 새로고침 시 최신 데이터 반영` })
           } catch { /* ignore */ }
         } else {
