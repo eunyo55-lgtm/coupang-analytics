@@ -35,7 +35,7 @@ const ymdKST = (offsetDays = 0) => {
 /**
  * 관리 중인 키워드의 네이버 검색량 추이 그래프.
  * 사용자가 직접 추적 중인 키워드(`keywords` 테이블에 등록된 것)만 표시한다.
- * 기본적으로 최근 검색량 상위 8개 자동 선택, 사용자가 체크박스로 더하거나 뺄 수 있음.
+ * 기본적으로 최근 검색량 상위 10개 자동 선택, 사용자가 체크박스로 더하거나 뺄 수 있음.
  */
 export default function KeywordVolumeChart() {
   const [rows, setRows] = useState<VolRow[]>([])
@@ -113,10 +113,10 @@ export default function KeywordVolumeChart() {
       .sort((a, b) => b.avg - a.avg)
   }, [rows])
 
-  // 데이터 로드 후 상위 8개 자동 선택 (사용자가 변경 가능)
+  // 데이터 로드 후 상위 10개 자동 선택 (사용자 요청 — 상위 10개 default)
   useEffect(() => {
     if (!autoSelected && keywordRanking.length > 0) {
-      setSelectedKws(new Set(keywordRanking.slice(0, 8).map(k => k.keyword)))
+      setSelectedKws(new Set(keywordRanking.slice(0, 10).map(k => k.keyword)))
       setAutoSelected(true)
     }
   }, [keywordRanking, autoSelected])
@@ -214,7 +214,7 @@ export default function KeywordVolumeChart() {
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 11, marginBottom: 10 }}>
           <span style={{ color: '#64748b', fontWeight: 600, marginRight: 4 }}>빠른 선택:</span>
           <button onClick={() => selectTopN(5)} style={chipStyle()}>상위 5</button>
-          <button onClick={() => selectTopN(8)} style={chipStyle()}>상위 8</button>
+          <button onClick={() => selectTopN(10)} style={chipStyle()}>상위 10</button>
           <button onClick={() => selectTopN(15)} style={chipStyle()}>상위 15</button>
           <button onClick={clearAll} style={chipStyle()}>전체 해제</button>
           <span style={{ color: '#94a3b8', marginLeft: 'auto' }}>표시 중 {visibleKws.length}/{trackedKeywords.length}</span>

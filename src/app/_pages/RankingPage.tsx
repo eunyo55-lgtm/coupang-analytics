@@ -660,9 +660,10 @@ export default function RankingPage() {
                             const tagColors: Record<string, { bg: string; fg: string }> = {
                               '신상':       { bg: '#DBEAFE', fg: '#1E40AF' },
                               '베스트':     { bg: '#FEF3C7', fg: '#92400E' },
-                              '광고집중':   { bg: '#FCE7F3', fg: '#9F1239' },
+                              '광고확장':   { bg: '#FCE7F3', fg: '#9F1239' },
                               '방어':       { bg: '#E0E7FF', fg: '#3730A3' },
-                              '정리예정':   { bg: '#F1F5F9', fg: '#475569' },
+                              '행사제안':   { bg: '#FFEDD5', fg: '#9A3412' },
+                              '리뷰점검':   { bg: '#FEF9C3', fg: '#854D0E' },
                               '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
                             }
                             const c = kw.strategy_tag ? tagColors[kw.strategy_tag] : null
@@ -1034,9 +1035,10 @@ export default function RankingPage() {
               <option value="">— 태그 없음 —</option>
               <option value="신상">🆕 신상</option>
               <option value="베스트">🏆 베스트</option>
-              <option value="광고집중">📢 광고집중</option>
+              <option value="광고확장">📢 광고확장</option>
               <option value="방어">🛡️ 방어</option>
-              <option value="정리예정">🗑️ 정리예정</option>
+              <option value="행사제안">🎁 행사제안</option>
+              <option value="리뷰점검">⭐ 리뷰점검</option>
               <option value="테스트중">🧪 테스트중</option>
             </select>
             <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4, fontWeight: 600 }}>메모 (자유 텍스트)</div>

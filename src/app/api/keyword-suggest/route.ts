@@ -175,15 +175,22 @@ export async function POST(req: NextRequest) {
     const sanitizedSeeds = seeds.filter(s => !workSeedPattern.test(s))
     const seedsSkippedCount = seeds.length - sanitizedSeeds.length
 
-    // ── 하드코딩 연령 prefix 확장 (Claude 보다 먼저 — 항상 보장) ──
+    // ── 하드코딩 prefix 확장 (Claude 보다 먼저 — 항상 보장) ──
     // 시드가 이미 연령 토큰을 포함하면 prefix 추가 생략 (중복 방지)
     const AGE_PREFIXES = ['아기', '베이비', '유아', '아동', '어린이', '키즈', '여아', '남아', '초등', '주니어']
+    // 소재·특성 prefix (사용자 요청: 린넨, 냉감 등)
+    const MATERIAL_PREFIXES = ['린넨', '냉감', '메쉬', '면', '망사', '방수', '신축', '데일리']
     const ageExpanded: string[] = []
     for (const s of sanitizedSeeds) {
       ageExpanded.push(s)  // 원본 유지
       if (!ageTokenPattern.test(s)) {
-        // 연령 토큰 없는 시드만 prefix 추가
         for (const pre of AGE_PREFIXES) ageExpanded.push(pre + s)
+        // 소재 prefix (전체 시드에 적용)
+        for (const mat of MATERIAL_PREFIXES) ageExpanded.push(mat + s)
+        // 연령+소재 콤보 (대표적 조합만 — 너무 많아지지 않도록 키즈/유아/아동 한정)
+        for (const age of ['키즈', '유아', '아동']) {
+          for (const mat of MATERIAL_PREFIXES) ageExpanded.push(age + mat + s)
+        }
       }
     }
 
@@ -191,8 +198,8 @@ export async function POST(req: NextRequest) {
     const claudeExpanded = useClaude ? await expandSeedsWithClaude(sanitizedSeeds) : []
     // 합치고 작업 패턴 한 번 더 제거
     const allExpanded = [...ageExpanded, ...claudeExpanded].filter(s => !workSeedPattern.test(s))
-    // 중복 제거 + 상한 (Naver 호출 비용 제어) — 50개로 확대
-    const finalSeeds = Array.from(new Set(allExpanded)).slice(0, 50)
+    // 중복 제거 + 상한 (Naver 호출 비용 제어) — 80개 (소재 prefix 추가로 확대)
+    const finalSeeds = Array.from(new Set(allExpanded)).slice(0, 80)
 
     // 2) Naver RelKwdStat 배치 (5개씩, 병렬 5)
     const batches: string[][] = []
