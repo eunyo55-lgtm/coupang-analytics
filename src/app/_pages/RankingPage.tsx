@@ -111,6 +111,8 @@ export default function RankingPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [editingCat, setEditingCat] = useState<{ id: string; value: string } | null>(null)
   const [editingStrategy, setEditingStrategy] = useState<{ id: string; tag: string; memo: string } | null>(null)
+  // 하위 탭: 키워드 기준 추적 vs 카테고리 기준 추적
+  const [view, setView] = useState<'keyword' | 'category'>('keyword')
 
   /* 차트 모달 */
   const [chartKw, setChartKw] = useState<Keyword | null>(null)
@@ -470,15 +472,43 @@ export default function RankingPage() {
       {/* 봇 트리거 패널 (회사 PC의 runner.js와 연동) */}
       <RankingBotTrigger />
 
+      {/* 하위 탭 네비게이션 */}
+      <div style={{
+        display: 'flex', gap: 0, marginBottom: 12,
+        borderBottom: '2px solid #E4E7EC',
+      }}>
+        {([
+          { k: 'keyword',  label: '🔑 키워드 기준 추적', desc: '검색 키워드로 우리 상품 순위' },
+          { k: 'category', label: '📂 카테고리 기준 추적', desc: '쿠팡 카테고리 1페이지 우리 상품 노출' },
+        ] as const).map(t => {
+          const active = view === t.k
+          return (
+            <button
+              key={t.k}
+              onClick={() => setView(t.k)}
+              style={{
+                padding: '10px 18px', background: 'transparent',
+                border: 'none', borderBottom: active ? '3px solid #1570EF' : '3px solid transparent',
+                marginBottom: -2,
+                fontSize: 13, fontWeight: active ? 800 : 600,
+                color: active ? '#1570EF' : 'var(--t2)',
+                cursor: 'pointer', textAlign: 'left',
+              }}
+              title={t.desc}
+            >{t.label}</button>
+          )
+        })}
+      </div>
+
+      {/* ─── 🔑 키워드 기준 추적 탭 ─── */}
+      {view === 'keyword' && (
+        <>
       {/* 매일 아침 자동 추천 (Vercel Cron 결과) */}
       <DailyKeywordSuggestions
         existingKeywords={keywords.map(k => k.keyword)}
         onRegisterClick={() => { /* 향후 모달 열기 연결 */ }}
         onRegistered={loadAll}
       />
-
-      {/* 카테고리 1페이지 우리 상품 노출 추적 */}
-      <CategoryRankingSection />
 
       {/* 키워드 발굴 제안 (Claude + Naver) */}
       <KeywordSuggestPanel
@@ -1013,6 +1043,13 @@ export default function RankingPage() {
         }
         .btn-del:hover { opacity: 1; }
       `}</style>
+        </>
+      )}
+
+      {/* ─── 📂 카테고리 기준 추적 탭 ─── */}
+      {view === 'category' && (
+        <CategoryRankingSection />
+      )}
 
       {/* 전략 태그 + 메모 편집 모달 */}
       {editingStrategy && (

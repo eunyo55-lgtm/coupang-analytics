@@ -28,7 +28,7 @@ export default function CategoryRankingSection() {
   const [catalogs, setCatalogs] = useState<Catalog[]>([])
   const [rankings, setRankings] = useState<RankingRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)  // 카테고리 탭에서 기본 펼침
   const [showAdd, setShowAdd] = useState(false)
   const [newPath, setNewPath] = useState('')
   const [newUrl, setNewUrl] = useState('')
