@@ -9,9 +9,10 @@ type Suggestion = {
   total: number
   competition: 'high' | 'mid' | 'low' | string
   sourceSeed: string
-  wowDelta?: number | null    // 전주 대비 검색량 변화율(%)
-  isSurging?: boolean         // +30% 이상 급등
+  wowDelta?: number | null
+  isSurging?: boolean
   prevVolume?: number | null
+  hasAgeToken?: boolean       // 연령 토큰 포함 (3~10세 아동 타겟 적합)
 }
 
 const SURGE_THRESHOLD_VOLUME = 10000  // 미등록 + 이 이상이면 노란 강조
@@ -40,11 +41,12 @@ export default function KeywordSuggestPanel({
   const [manualSeeds, setManualSeeds] = useState('')
   const [useClaude, setUseClaude] = useState(true)
   const [kidsOnly, setKidsOnly] = useState(true)
-  const [fashionOnly, setFashionOnly] = useState(true)  // 3~10세 패션 전용
+  const [fashionOnly, setFashionOnly] = useState(true)
+  const [strictAge, setStrictAge] = useState(false)   // false: 연령 토큰 미포함은 별도 섹션 / true: 완전 제외
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<Suggestion[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number; nonFashionFiltered: number; surgingCount: number } | null>(null)
+  const [info, setInfo] = useState<{ seedCount: number; claudeUsed: boolean; adultFiltered: number; nonFashionFiltered: number; workFiltered: number; ageNeutralFiltered: number; ageMatchedCount: number; surgingCount: number } | null>(null)
   const [registered, setRegistered] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
 
@@ -144,6 +146,7 @@ export default function KeywordSuggestPanel({
           useClaude,
           kidsOnly,
           fashionOnly,
+          strictAge,
           maxResults: 80,
         }),
       })
@@ -155,6 +158,9 @@ export default function KeywordSuggestPanel({
         claudeUsed: !!j.claudeUsed,
         adultFiltered: j.adultFiltered || 0,
         nonFashionFiltered: j.nonFashionFiltered || 0,
+        workFiltered: j.workFiltered || 0,
+        ageNeutralFiltered: j.ageNeutralFiltered || 0,
+        ageMatchedCount: j.ageMatchedCount || 0,
         surgingCount: j.surgingCount || 0,
       })
     } catch (e) {
@@ -194,13 +200,16 @@ export default function KeywordSuggestPanel({
     [existingKeywords],
   )
 
-  const filtered = useMemo(() => {
+  const filteredAll = useMemo(() => {
     const base = !search.trim()
       ? results
       : results.filter(r => r.keyword.toLowerCase().includes(search.toLowerCase()))
-    // 월 검색량 내림차순 (서버에서도 정렬되지만 안전하게 한 번 더)
     return [...base].sort((a, b) => b.total - a.total)
   }, [results, search])
+
+  // 타겟 적합 (연령 토큰 포함) vs 연령 미명시 분리
+  const targetHit = useMemo(() => filteredAll.filter(r => r.hasAgeToken), [filteredAll])
+  const ageNeutral = useMemo(() => filteredAll.filter(r => !r.hasAgeToken), [filteredAll])
 
   const surging = useMemo(
     () => results.filter(r => r.isSurging),
@@ -290,6 +299,10 @@ export default function KeywordSuggestPanel({
               <input type="checkbox" checked={fashionOnly} onChange={e => setFashionOnly(e.target.checked)} />
               <span>👗 3~10세 패션 전용 (음식·장난감·책·다이어트 등 제외)</span>
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={strictAge} onChange={e => setStrictAge(e.target.checked)} />
+              <span title="OFF: 연령 토큰 미포함도 별도 섹션에 표시 / ON: 완전 제외">🎯 엄격 모드 (연령 토큰 미포함 완전 제외)</span>
+            </label>
             <button
               onClick={runSuggest}
               disabled={loading || seedPool.length === 0}
@@ -318,9 +331,11 @@ export default function KeywordSuggestPanel({
           {info && (
             <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
               ✓ 시드 {info.seedCount}개에서 {results.length}개 발굴
-              {info.claudeUsed ? ' · Claude 시드 확장 사용' : ''}
-              {info.adultFiltered > 0 ? ` · 성인 ${info.adultFiltered}개 제외` : ''}
-              {info.nonFashionFiltered > 0 ? ` · 비패션 ${info.nonFashionFiltered}개 제외` : ''}
+              {info.ageMatchedCount > 0 ? ` · 🎯 타겟 적합 ${info.ageMatchedCount}개` : ''}
+              {info.claudeUsed ? ' · Claude 확장' : ''}
+              {(info.adultFiltered + info.nonFashionFiltered + info.workFiltered + info.ageNeutralFiltered) > 0
+                ? ` · 제외 [성인 ${info.adultFiltered} · 비패션 ${info.nonFashionFiltered} · 작업 ${info.workFiltered}${info.ageNeutralFiltered > 0 ? ` · 연령미포함 ${info.ageNeutralFiltered}` : ''}]`
+                : ''}
               {info.surgingCount > 0 ? ` · 🔥 급등 ${info.surgingCount}개` : ''}
             </div>
           )}
@@ -371,6 +386,7 @@ export default function KeywordSuggestPanel({
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead style={{ position: 'sticky', top: 0, background: '#F9FAFB', zIndex: 1 }}>
                     <tr>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 60 }}>적합도</th>
                       <th style={{ padding: '8px 10px', textAlign: 'left',  borderBottom: '1px solid #E4E7EC' }}>키워드</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>월 검색량 ▼</th>
                       <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #E4E7EC' }}>전주 대비</th>
@@ -380,10 +396,21 @@ export default function KeywordSuggestPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map(s => {
+                    {/* 1) 타겟 적합 섹션 */}
+                    {targetHit.length > 0 && (
+                      <tr>
+                        <td colSpan={7} style={{
+                          padding: '6px 10px', background: '#ECFDF5',
+                          fontSize: 11, fontWeight: 700, color: '#047857',
+                          borderTop: '1px solid #A7F3D0', borderBottom: '1px solid #A7F3D0',
+                        }}>
+                          🎯 타겟 적합 ({targetHit.length}개) — 연령 토큰 포함 (아동/유아/키즈/여아/남아/N세 등)
+                        </td>
+                      </tr>
+                    )}
+                    {targetHit.map(s => {
                       const isReg  = registered.has(s.keyword)
                       const isExisting = existingSet.has(s.keyword.toLowerCase().trim())
-                      // 미등록 + 검색량 1만 이상 → 우선 검토 대상 강조
                       const isHighlight = !isExisting && !isReg && s.total >= SURGE_THRESHOLD_VOLUME
                       const compColor =
                         s.competition === 'high' ? '#DC2626' :
@@ -404,6 +431,9 @@ export default function KeywordSuggestPanel({
                             background: isHighlight ? '#FEFCE8' : undefined,
                           }}
                         >
+                          <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                            <span style={{ fontSize: 14 }} title="연령 토큰 포함 — 타겟 적합">🎯</span>
+                          </td>
                           <td style={{ padding: '6px 10px', fontWeight: 600 }}>
                             {s.isSurging && (
                               <span style={{ marginRight: 4, fontSize: 13 }} title={`전주 대비 +${s.wowDelta}%`}>🔥</span>
@@ -441,6 +471,86 @@ export default function KeywordSuggestPanel({
                                 style={{
                                   padding: '4px 10px', fontSize: 11, borderRadius: 4,
                                   background: '#1570EF',
+                                  color: '#fff', border: 'none', fontWeight: 700,
+                                  cursor: 'pointer',
+                                }}
+                              >+ 등록</button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+
+                    {/* 2) 연령 미명시 섹션 — strictAge OFF 일 때만 표시 */}
+                    {!strictAge && ageNeutral.length > 0 && (
+                      <tr>
+                        <td colSpan={7} style={{
+                          padding: '6px 10px', background: '#FEF3C7',
+                          fontSize: 11, fontWeight: 700, color: '#92400E',
+                          borderTop: '2px solid #FCD34D', borderBottom: '1px solid #FDE68A',
+                          marginTop: 8,
+                        }}>
+                          ⚠️ 연령 미명시 ({ageNeutral.length}개) — 연령 토큰 누락, 성인 키워드 가능성 있어 검수 필요
+                        </td>
+                      </tr>
+                    )}
+                    {!strictAge && ageNeutral.map(s => {
+                      const isReg  = registered.has(s.keyword)
+                      const isExisting = existingSet.has(s.keyword.toLowerCase().trim())
+                      const isHighlight = !isExisting && !isReg && s.total >= SURGE_THRESHOLD_VOLUME
+                      const compColor =
+                        s.competition === 'high' ? '#DC2626' :
+                        s.competition === 'mid'  ? '#D97706' : '#059669'
+                      const compLabel =
+                        s.competition === 'high' ? '높음' :
+                        s.competition === 'mid'  ? '중간' : '낮음'
+                      const wow = s.wowDelta
+                      const wowColor =
+                        wow === null || wow === undefined ? 'var(--t3)' :
+                        wow >= 30 ? '#C2410C' :
+                        wow >= 0  ? '#059669' : '#DC2626'
+                      return (
+                        <tr
+                          key={s.keyword}
+                          style={{
+                            borderTop: '1px solid #F3F4F6',
+                            background: isHighlight ? '#FEFCE8' : '#FFFBEB',
+                            opacity: 0.85,
+                          }}
+                        >
+                          <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                            <span style={{ fontSize: 13, opacity: 0.5 }} title="연령 토큰 없음 — 검수 권장">⚠️</span>
+                          </td>
+                          <td style={{ padding: '6px 10px', fontWeight: 600 }}>
+                            {s.isSurging && <span style={{ marginRight: 4, fontSize: 13 }} title={`전주 대비 +${s.wowDelta}%`}>🔥</span>}
+                            {s.keyword}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600 }}>
+                            {s.total.toLocaleString('ko-KR')}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: wowColor }}>
+                            {wow === null || wow === undefined
+                              ? <span style={{ color: 'var(--t3)' }}>—</span>
+                              : `${wow >= 0 ? '+' : ''}${wow}%`}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                            <span style={{
+                              fontSize: 10, fontWeight: 700, color: compColor,
+                              padding: '2px 6px', borderRadius: 4, background: compColor + '15',
+                            }}>{compLabel}</span>
+                          </td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t3)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.sourceSeed}>
+                            {s.sourceSeed}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                            {isReg ? (
+                              <span style={{ fontSize: 11, color: '#059669', fontWeight: 700 }}>✓ 등록됨</span>
+                            ) : (
+                              <button
+                                onClick={() => openRegisterModal(s)}
+                                style={{
+                                  padding: '4px 10px', fontSize: 11, borderRadius: 4,
+                                  background: '#94A3B8',
                                   color: '#fff', border: 'none', fontWeight: 700,
                                   cursor: 'pointer',
                                 }}

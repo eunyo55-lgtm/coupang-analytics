@@ -69,19 +69,27 @@ async function expandSeedsWithClaude(seeds: string[]): Promise<string[]> {
   if (!key) return seeds
   if (seeds.length === 0) return seeds
 
-  const sys = `너는 한국 **3~10세 키즈 패션** 전문 쇼핑몰의 SEO 전문가야.
+  const sys = `너는 한국 **3~10세 아동 패션** 전문 쇼핑몰의 SEO 전문가야.
 이 쇼핑몰은 오직 **3세 ~ 10세 아동의 패션(의류·신발·가방·모자·액세서리)만** 판매한다.
 
-너의 임무: 주어진 상품명/키워드/카테고리를 보고 네이버 쇼핑에서 실제로 검색될 만한 **키즈 패션 관련** 한국어 키워드 후보를 만든다.
+너의 임무: 주어진 상품명/키워드/카테고리를 보고 네이버 쇼핑에서 실제로 검색될 만한 **3~10세 아동 패션 관련** 한국어 키워드 후보를 만든다.
 
-[허용 카테고리 — 반드시 이 안에서만 발굴]
+[★ 가장 중요한 규칙: 연령 토큰 필수 ★]
+모든 출력 키워드는 다음 연령 토큰 중 **최소 하나를 반드시 포함**해야 한다:
+- 연령 단어: 아기, 베이비, 유아, 아동, 어린이, 키즈, 여아, 남아, 초등, 유치원, 미취학, 주니어
+- 연령 숫자: 3살, 4살, 5살, 6살, 7살, 8살, 9살, 10살, 3세, 4세 ... 10세
+- 사이즈: 90호, 100호, 110호, 120호, 130호, 140호
+
+좋은 예: '유아샌들', '키즈 아쿠아슈즈', '여아 원피스 여름', '5세 운동화', '110호 잠옷', '초등 백팩'
+나쁜 예 (연령 토큰 누락): '샌들', '아쿠아슈즈', '원피스 여름', '운동화' — 이런 건 절대 출력 금지
+
+[허용 패션 카테고리]
 - 의류: 원피스, 티셔츠, 셔츠, 블라우스, 바지, 청바지, 레깅스, 스커트, 자켓, 코트, 패딩, 점퍼, 가디건, 후드, 맨투맨, 트레이닝복, 운동복, 잠옷, 내복, 실내복, 수영복, 래시가드, 한복, 우비, 우산복, 세트
 - 신발: 운동화, 구두, 샌들, 슬리퍼, 부츠, 장화, 아쿠아슈즈, 슬립온, 단화, 발레슈즈
 - 가방/모자/액세서리: 가방, 백팩, 크로스백, 모자, 캡, 비니, 양말, 스타킹, 타이즈, 머리띠, 헤어밴드, 장갑, 목도리, 스카프, 벨트, 멜빵, 안경
-- 시즌/스타일 변형: 여름, 봄/가을, 사계절, 인기, 베스트, 신상, 추천, 코디, 룩
-- 타겟/연령: 3살, 4살 ~ 10살, 5세, 7세, 100호, 110호, 120호, 130호, 유아, 키즈, 아동, 여아, 남아, 초등, 미취학
+- 시즌/스타일 변형: 여름, 봄/가을, 사계절, 인기, 베스트, 신상, 추천, 코디, 룩 (단독 사용 금지, 연령 토큰과 조합)
 
-[절대 금지 — 패션과 무관한 영역]
+[절대 금지 영역]
 - 음식/간식/분유/이유식/영양제/약/비타민/건강식품
 - 장난감/완구/인형/블록/퍼즐/보드게임/문구/학용품
 - 책/도서/교재/학습지/학원/교육/학습
@@ -89,16 +97,17 @@ async function expandSeedsWithClaude(seeds: string[]): Promise<string[]> {
 - 다이어트/키성장/운동기구
 - 축제/행사/이벤트/공연/체험/캠핑
 - 가구/주방/생활용품
-- **성인/여성/남성/여자/남자/어른** (3~10세 외 연령대)
-- 0~2세 베이비 전용 (예: 신생아 우주복) — 이 쇼핑몰은 3세부터 다룸
+- 작업/안전/공구 (안전화, 가슴장화, 각반, 예초기, 모기장, 갯벌, 방충망 등)
+- 성인/여성/남성/여자/남자/어른 키워드
+- 0~2세 베이비 전용 (예: 신생아 우주복)
 
 [작업 규칙]
 1. 각 시드당 5~8개 후보 생성
-2. 모든 키워드는 **반드시 3~10세 아동 + 패션 카테고리** 이어야 함
-3. 시드가 패션과 무관하면 (예: "축제", "다이어트") 그 시드의 출력은 빈 배열로 (그 시드는 패스)
-4. 너무 일반적이지 않게 (예: "옷" X, "여아 원피스 여름" O)
+2. 모든 키워드는 **연령 토큰 + 패션 카테고리** 조합이어야 함
+3. 시드가 패션과 무관하면 (모기장, 갯벌, 안전화 등) 그 시드의 출력은 빈 배열로
+4. 시드가 연령 토큰 없는 일반어면 (예: "샌들") 연령 토큰을 조합해 변형 ("유아샌들", "키즈샌들", "여아샌들 여름")
 5. 한국어로만, 영문/특수문자 최소화
-6. JSON 배열로만 응답 (다른 설명·주석 없이): ["키워드1", "키워드2", ...]`
+6. JSON 배열로만 응답: ["키워드1", "키워드2", ...]`
 
   const user = `시드: ${seeds.map(s => `"${s}"`).join(', ')}`
 
@@ -139,28 +148,38 @@ export async function POST(req: NextRequest) {
       excludeKeywords?: string[]
       useClaude?: boolean
       maxResults?: number
-      kidsOnly?: boolean      // 키즈/유아/베이비 전용 필터 (성인 키워드 제외)
+      kidsOnly?: boolean      // 키즈/유아/베이비 전용 (성인 키워드 제외)
       fashionOnly?: boolean   // 3~10세 패션 전용 (음식/장난감/책 등 제외)
+      strictAge?: boolean     // 엄격 모드: 연령 토큰 미포함 결과 완전 제외 (기본 false → 별도 섹션 표시)
     }
     const seeds = (body.seeds || []).map(s => String(s || '').trim()).filter(Boolean)
     const exclude = new Set((body.excludeKeywords || []).map(s => String(s).toLowerCase().trim()))
     const useClaude = body.useClaude !== false  // 기본 true
     const maxResults = body.maxResults || 100
-    const kidsOnly = body.kidsOnly !== false    // 기본 true
-    const fashionOnly = body.fashionOnly !== false  // 기본 true — 패션 외 카테고리 제외
-    // 성인 키워드 정규식: 어른/성인/여성/남성/여자/남자
+    const kidsOnly = body.kidsOnly !== false       // 기본 true
+    const fashionOnly = body.fashionOnly !== false // 기본 true
+    const strictAge = body.strictAge === true      // 기본 false (연령 토큰 미포함도 결과에 포함하되 별도 표시)
     const adultPattern = /(성인|어른|여성|남성|여자|남자|female|male|adult|men|women)/i
-    // 비패션 키워드 정규식: 패션과 무관한 영역 (음식/장난감/책/육아용품/다이어트/축제 등)
     const nonFashionPattern = /(분유|이유식|영양제|비타민|간식|음식|식품|음료|건강식품|약품|약\s|영양|보충제|장난감|완구|인형|블록|퍼즐|보드게임|문구|학용품|책|도서|교재|학습지|학원|교육|학습|수업|기저귀|물티슈|카시트|유모차|침대|매트리스|이불|베개|쿠션|욕실|목욕|샴푸|로션|크림|스킨|썬크림|다이어트|키성장|운동기구|러닝머신|축제|행사|이벤트|공연|체험|캠핑|텐트|장보기|가구|책상|의자|식탁|주방|냄비|그릇|컵|숟가락|반찬|디저트)/i
+    // 작업/안전/비패션 시드 차단 패턴 (시드 단계에서 제외)
+    const workSeedPattern = /(모기장|갯벌|안전화|작업화|작업복|공구|예초기|방충망|가슴장화|각반|페인트|용접|보안)/i
+    // 연령 토큰 화이트리스트 (3~10세 아동 타겟)
+    const ageTokenPattern = /(아기|베이비|유아|아동|어린이|키즈|여아|남아|초등|유치원|미취학|주니어|아들|딸|baby|kids|junior|[3-9]\s*[살세]|10\s*[살세]|(?:8|9|10|11|12|13|14)0\s*호)/i
 
     if (seeds.length === 0) {
       return NextResponse.json({ error: '시드 키워드가 필요합니다' }, { status: 400 })
     }
 
     // 1) Claude 시드 확장
-    const expandedSeeds = useClaude ? await expandSeedsWithClaude(seeds) : seeds
+    // 시드 자체에서 작업/안전/비패션 명백한 단어가 들어있으면 제외 (확장 전 차단)
+    const sanitizedSeeds = seeds.filter(s => !workSeedPattern.test(s))
+    const seedsSkippedCount = seeds.length - sanitizedSeeds.length
+
+    const expandedSeeds = useClaude ? await expandSeedsWithClaude(sanitizedSeeds) : sanitizedSeeds
+    // 확장 결과에서도 작업 패턴 한 번 더 제거 (Claude가 실수로 만들었을 경우 대비)
+    const cleanExpanded = expandedSeeds.filter(s => !workSeedPattern.test(s))
     // 중복 제거 + 최대 25개 시드까지 (네이버 5개씩 배치 5번)
-    const finalSeeds = Array.from(new Set(expandedSeeds)).slice(0, 25)
+    const finalSeeds = Array.from(new Set(cleanExpanded)).slice(0, 25)
 
     // 2) Naver RelKwdStat 배치 (5개씩, 병렬 5)
     const batches: string[][] = []
@@ -177,10 +196,12 @@ export async function POST(req: NextRequest) {
       r.forEach(item => allResults.push({ ...item, sourceSeed: seedLabel }))
     }))
 
-    // 3) 중복 제거 (같은 키워드 있으면 검색량 큰 것 우선) + 제외 키워드 필터 + 성인/비패션 필터
+    // 3) 중복 제거 (같은 키워드 있으면 검색량 큰 것 우선) + 제외 키워드 필터 + 성인/비패션/작업 필터
     const byKw = new Map<string, typeof allResults[0]>()
     let adultFiltered = 0
     let nonFashionFiltered = 0
+    let workFiltered = 0
+    let ageNeutralFiltered = 0
     for (const it of allResults) {
       const key = it.keyword.toLowerCase().trim()
       if (!key || exclude.has(key)) continue
@@ -192,14 +213,24 @@ export async function POST(req: NextRequest) {
         nonFashionFiltered++
         continue
       }
+      if (workSeedPattern.test(it.keyword)) {
+        workFiltered++
+        continue
+      }
+      // strictAge=true 일 때: 연령 토큰 미포함 키워드는 결과에서 제외
+      if (strictAge && !ageTokenPattern.test(it.keyword)) {
+        ageNeutralFiltered++
+        continue
+      }
       const prev = byKw.get(key)
       if (!prev || it.total > prev.total) byKw.set(key, it)
     }
 
-    // 4) 검색량 내림차순 + 상한
+    // 4) 검색량 내림차순 + 상한 + 연령 토큰 플래그 부착
     const baseSuggestions = Array.from(byKw.values())
       .sort((a, b) => b.total - a.total)
       .slice(0, maxResults)
+      .map(s => ({ ...s, hasAgeToken: ageTokenPattern.test(s.keyword) }))
 
     // 5) 과거 검색량 조회 (7~14일 전) → WoW delta 계산
     //    keyword_search_volumes 테이블에서 prev week 값을 가져와 surge 판단
@@ -264,10 +295,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       suggestions,
       seedCount: finalSeeds.length,
+      seedsSkippedCount,
       claudeUsed: useClaude && !!process.env.ANTHROPIC_API_KEY,
       naverConfigured: !!getNaverCreds().secretKey,
       adultFiltered,
       nonFashionFiltered,
+      workFiltered,
+      ageNeutralFiltered,
+      ageMatchedCount: suggestions.filter(s => s.hasAgeToken).length,
       surgingCount: suggestions.filter(s => s.isSurging).length,
     })
   } catch (err) {
