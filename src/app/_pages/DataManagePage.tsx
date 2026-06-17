@@ -337,6 +337,18 @@ export default function DataManagePage() {
         const saved = await upsertDailySales(salesRows, dispatch)
         if (saved > 0) {
           dispatch({ type: 'APPEND_LOG', payload: `✅ ${saved.toLocaleString()}행 Supabase 저장 완료` })
+          // 판매 관련 캐시 일괄 무효화 — 다음 진입 시 최신 데이터로
+          try {
+            localStorage.removeItem('swr_historical_v6')
+            // prevYear/광고 캐시는 키에 기간이 들어가 있어 prefix 매칭으로 일괄 삭제
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+              const k = localStorage.key(i)
+              if (k && (k.startsWith('swr_sales_prevyear_') || k.startsWith('swr_sales_ad_'))) {
+                localStorage.removeItem(k)
+              }
+            }
+            dispatch({ type: 'APPEND_LOG', payload: `🧹 판매/전년/광고 캐시 비움 — 새로고침 시 최신 데이터 반영` })
+          } catch { /* ignore */ }
           fetch(`${SUPA_URL}/rest/v1/rpc/refresh_analytics_mv`, {
             method: 'POST',
             headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json' },

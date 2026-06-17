@@ -350,7 +350,7 @@ export default function SalesPage() {
     // SWR 캐시 — 같은 prev 범위면 즉시 표시 + 백그라운드 갱신
     // v2: products 보강 매핑 추가로 캐시 무효화
     const cacheKey = `swr_sales_prevyear_v2_${prevFrom}_${prevTo}`
-    const TTL = 30 * 60 * 1000  // 30분
+    const TTL = 4 * 60 * 60 * 1000  // 4시간 (전년 데이터는 거의 안 변함)
     let cancelled = false
     const cached = readSwrCache<PrevRow[]>(cacheKey, TTL)
     if (cached) {

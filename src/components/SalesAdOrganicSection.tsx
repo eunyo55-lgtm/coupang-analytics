@@ -2,10 +2,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { vatExcluded, VAT_LABEL } from '@/lib/vatUtils'
+import { readSwrCache, writeSwrCache } from '@/lib/swrCache'
 import {
   ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis,
   Tooltip, Legend, ReferenceLine, LabelList,
 } from 'recharts'
+
+const AD_CACHE_TTL = 4 * 60 * 60 * 1000  // 4시간
 
 type DailyTrend = {
   date: string
@@ -38,17 +41,35 @@ const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR')
 export default function SalesAdOrganicSection({
   dailyTrend, chartFrom, chartTo, salesDataLoading,
 }: Props) {
-  const [adAgg, setAdAgg] = useState<Map<string, AdAggRow>>(new Map())
-  const [adLoading, setAdLoading] = useState(true)
-  const [hasAdData, setHasAdData] = useState<boolean | null>(null)
   const [attrWindow, setAttrWindow] = useState<'1d' | '14d'>('14d')
-  const [lastUploadDate, setLastUploadDate] = useState<string | null>(null)
 
-  // 광고 CSV → 일별 집계 (옵션 단위 매핑 불가 → 판매가 그대로 사용)
+  // SWR 캐시 — 같은 기간+윈도우면 즉시 표시 + 백그라운드 갱신
+  const cacheKey = `swr_sales_ad_${attrWindow}_${chartFrom}_${chartTo}`
+  type CachedAd = { rows: Array<[string, AdAggRow]>; lastUploadDate: string | null }
+  const _cached = (typeof window !== 'undefined' && chartFrom && chartTo)
+    ? readSwrCache<CachedAd>(cacheKey, AD_CACHE_TTL)
+    : null
+  const _initialAgg = _cached ? new Map(_cached.data.rows) : new Map<string, AdAggRow>()
+
+  const [adAgg, setAdAgg] = useState<Map<string, AdAggRow>>(_initialAgg)
+  const [adLoading, setAdLoading] = useState(_initialAgg.size === 0)
+  const [hasAdData, setHasAdData] = useState<boolean | null>(_initialAgg.size > 0 ? true : null)
+  const [lastUploadDate, setLastUploadDate] = useState<string | null>(_cached?.data.lastUploadDate ?? null)
+
   useEffect(() => {
     let cancelled = false
     if (!chartFrom || !chartTo) return
-    setAdLoading(true)
+    // 캐시 fresh → fetch 생략
+    const cached = readSwrCache<CachedAd>(cacheKey, AD_CACHE_TTL)
+    if (cached) {
+      setAdAgg(new Map(cached.data.rows))
+      setHasAdData(cached.data.rows.length > 0)
+      setLastUploadDate(cached.data.lastUploadDate)
+      setAdLoading(false)
+      if (!cached.stale) return  // 신선하면 백그라운드 fetch 생략
+    } else {
+      setAdLoading(true)
+    }
     async function load() {
       if (!supabase) return
       try {
@@ -85,16 +106,20 @@ export default function SalesAdOrganicSection({
         if (cancelled) return
         setAdAgg(agg)
         setHasAdData(agg.size > 0)
+        let lastDate: string | null = null
         if (agg.size > 0) {
           const dates = Array.from(agg.keys()).sort()
-          setLastUploadDate(dates[dates.length - 1])
+          lastDate = dates[dates.length - 1]
+          setLastUploadDate(lastDate)
         }
+        // 캐시 저장
+        writeSwrCache(cacheKey, { rows: Array.from(agg.entries()), lastUploadDate: lastDate })
       } catch { if (!cancelled) { setAdAgg(new Map()); setHasAdData(false) } }
       finally { if (!cancelled) setAdLoading(false) }
     }
     load()
     return () => { cancelled = true }
-  }, [chartFrom, chartTo, attrWindow])
+  }, [chartFrom, chartTo, attrWindow, cacheKey])
 
   // 병합 — 광고 매출은 CSV의 판매가 그대로 사용 (수량 비율 추정 X)
   const merged = useMemo(() => {

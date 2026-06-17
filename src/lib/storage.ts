@@ -207,7 +207,7 @@ export interface HistoricalData {
 // ── Historical 캐시
 // v5: 증분 동기화 — 캐시에 lastSyncDate 저장, 이후엔 새 날짜만 fetch
 const HISTORICAL_CACHE_KEY = 'swr_historical_v6'
-const HISTORICAL_TTL_MS = 30 * 60 * 1000  // 30분: stale 표시용 (store.tsx 백그라운드 fetch 트리거)
+const HISTORICAL_TTL_MS = 4 * 60 * 60 * 1000  // 4시간: 판매 데이터 일 1-2회 업로드 주기에 맞춤
 const HISTORICAL_DAYS_BACK = 90           // 캐시에 유지할 최대 기간
 const FULL_REFRESH_AFTER_DAYS = 7         // 마지막 동기화가 7일 이상 지났으면 풀 리로드
 
