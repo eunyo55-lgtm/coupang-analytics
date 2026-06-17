@@ -277,104 +277,144 @@ export default function CategoryRankingSection() {
     return { t1, t2_5, t6_10, t11_27, total: t1 + t2_5 + t6_10 + t11_27 }
   }, [rankings, latestDate])
 
-  // 카테고리 leaf 별 부가 정보:
-  // - 네이버 검색량 (최신, 이전) → 추이
-  // - 키워드 전략 태그/메모 (keywords 테이블에서 leaf 이름과 매칭)
-  // - 매칭된 barcode 들 → daily_sales 주간 합산
-  const [leafExtras, setLeafExtras] = useState<Record<string, {
-    volLatest?: number
-    volPrev?: number
-    strategyTag?: string | null
-    memo?: string | null
-  }>>({})
+  // 카테고리 leaf 별 네이버 검색량 (최신/이전) → 추이
+  const [leafExtras, setLeafExtras] = useState<Record<string, { volLatest?: number; volPrev?: number }>>({})
+  // 노출된 우리 상품 barcode 별 주간 판매 합계
   const [salesByBarcode, setSalesByBarcode] = useState<Record<string, { thisWeek: number; lastWeek: number }>>({})
 
+  // 네이버 검색량 — leaf 이름이 keyword_search_volumes 에 있어야 표시됨
   useEffect(() => {
     if (!supabase || catalogs.length === 0) return
     let cancelled = false
-    async function loadExtras() {
+    async function loadVol() {
       const leaves = Array.from(new Set(
         catalogs.map(c => c.category_path.split(' > ').slice(-1)[0]).filter(Boolean)
       ))
       if (leaves.length === 0) return
-
-      // 1) 네이버 검색량 (최근 14일 — 최신/이전 두 값 구하기 위함)
-      const since = (() => {
-        const d = new Date(); d.setDate(d.getDate() - 14)
-        return d.toISOString().slice(0, 10)
-      })()
-      const { data: volData } = await supabase!
+      const since = (() => { const d = new Date(); d.setDate(d.getDate() - 14); return d.toISOString().slice(0, 10) })()
+      const { data } = await supabase!
         .from('keyword_search_volumes')
         .select('keyword, total_volume, target_date')
         .in('keyword', leaves)
         .gte('target_date', since)
         .order('target_date', { ascending: false })
-      const volByKw: Record<string, Array<{ d: string; v: number }>> = {}
-      for (const r of (volData || []) as any[]) {
-        const k = String(r.keyword)
-        if (!volByKw[k]) volByKw[k] = []
-        volByKw[k].push({ d: String(r.target_date), v: Number(r.total_volume || 0) })
-      }
-
-      // 2) keywords 테이블에서 leaf 이름과 매칭되는 키워드 (전략/메모 + barcode)
-      const { data: kwData } = await supabase!
-        .from('keywords')
-        .select('keyword, barcode, strategy_tag, memo')
-        .in('keyword', leaves)
-      const stratByLeaf: Record<string, { tag: string | null; memo: string | null }> = {}
-      const barcodesByLeaf: Record<string, string[]> = {}
-      for (const k of (kwData || []) as any[]) {
-        const leaf = String(k.keyword)
-        if (!stratByLeaf[leaf]) stratByLeaf[leaf] = { tag: k.strategy_tag || null, memo: k.memo || null }
-        if (k.barcode) {
-          if (!barcodesByLeaf[leaf]) barcodesByLeaf[leaf] = []
-          barcodesByLeaf[leaf].push(k.barcode)
-        }
-      }
-
-      // 3) extras 합치기
-      const extras: Record<string, any> = {}
-      for (const leaf of leaves) {
-        const vols = volByKw[leaf] || []
-        extras[leaf] = {
-          volLatest: vols[0]?.v,
-          volPrev:   vols[1]?.v,
-          strategyTag: stratByLeaf[leaf]?.tag ?? null,
-          memo: stratByLeaf[leaf]?.memo ?? null,
-        }
-      }
       if (cancelled) return
-      setLeafExtras(extras)
+      const byKw: Record<string, number[]> = {}
+      for (const r of (data || []) as any[]) {
+        const k = String(r.keyword)
+        if (!byKw[k]) byKw[k] = []
+        byKw[k].push(Number(r.total_volume || 0))
+      }
+      const out: Record<string, any> = {}
+      for (const k of Object.keys(byKw)) {
+        out[k] = { volLatest: byKw[k][0], volPrev: byKw[k][1] }
+      }
+      setLeafExtras(out)
+    }
+    loadVol()
+    return () => { cancelled = true }
+  }, [catalogs])
 
-      // 4) daily_sales 주간 합계 (이번주 = 최근 7일, 전주 = 그 전 7일)
-      const allBarcodes = Array.from(new Set(Object.values(barcodesByLeaf).flat()))
-      if (allBarcodes.length === 0) return
-      // 같은 상품명의 모든 옵션 barcode 까지 합산하려면 products join 필요 — 일단 매핑된 barcode 만 우선
+  // 주간 판매 — trendRows 의 모든 우리 상품 barcode 들로 직접 조회
+  useEffect(() => {
+    if (!supabase) return
+    let cancelled = false
+    async function loadSales() {
+      // rankings 에서 우리 상품의 matched_barcode 들 수집
+      const allBarcodes = Array.from(new Set(
+        rankings.filter(r => r.is_our_product && r.matched_barcode).map(r => r.matched_barcode!)
+      ))
+      if (allBarcodes.length === 0) { setSalesByBarcode({}); return }
+
+      // 같은 상품의 모든 옵션 barcode 까지 합산 (1 SKU만 매칭되면 매출 일부만 보이는 문제)
+      // → matched_barcode 의 상품명을 조회 → 같은 이름의 모든 barcode 추출
+      const { data: matchedProds } = await supabase!
+        .from('products')
+        .select('barcode, name')
+        .in('barcode', allBarcodes)
+      const namesSet = new Set((matchedProds || []).map((p: any) => p.name).filter(Boolean))
+      const allSiblingBarcodes = new Set(allBarcodes)
+      if (namesSet.size > 0) {
+        const { data: siblings } = await supabase!
+          .from('products')
+          .select('barcode, name')
+          .in('name', Array.from(namesSet))
+        for (const p of (siblings || []) as any[]) {
+          if (p.barcode) allSiblingBarcodes.add(p.barcode)
+        }
+      }
+      // matched_barcode → name → 형제 barcode들 매핑
+      const nameByBarcode: Record<string, string> = {}
+      for (const p of (matchedProds || []) as any[]) nameByBarcode[p.barcode] = p.name
+      const siblingsByName: Record<string, string[]> = {}
+      const allSibs = Array.from(allSiblingBarcodes)
+      if (namesSet.size > 0) {
+        const { data: siblings } = await supabase!
+          .from('products')
+          .select('barcode, name')
+          .in('name', Array.from(namesSet))
+        for (const p of (siblings || []) as any[]) {
+          if (!siblingsByName[p.name]) siblingsByName[p.name] = []
+          siblingsByName[p.name].push(p.barcode)
+        }
+      }
+
+      // daily_sales 조회 — 모든 형제 barcode 까지
       const today = new Date()
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
       const thisFrom = new Date(today); thisFrom.setDate(today.getDate() - 6)
       const lastTo = new Date(today); lastTo.setDate(today.getDate() - 7)
       const lastFrom = new Date(today); lastFrom.setDate(today.getDate() - 13)
-      const fmt = (d: Date) => d.toISOString().slice(0, 10)
-      const { data: salesData } = await supabase!
-        .from('daily_sales')
-        .select('barcode, quantity, date')
-        .in('barcode', allBarcodes)
-        .gte('date', fmt(lastFrom))
-        .lte('date', fmt(today))
-      const byBc: Record<string, { thisWeek: number; lastWeek: number }> = {}
-      for (const r of (salesData || []) as any[]) {
+      // 페이지네이션 (PostgREST 1000 cap)
+      const allSales: any[] = []
+      const PAGE = 1000
+      const CHUNK = 200
+      for (let i = 0; i < allSibs.length; i += CHUNK) {
+        const chunk = allSibs.slice(i, i + CHUNK)
+        let off = 0
+        while (true) {
+          const { data } = await supabase!
+            .from('daily_sales')
+            .select('barcode, quantity, date')
+            .in('barcode', chunk)
+            .gte('date', fmt(lastFrom))
+            .lte('date', fmt(today))
+            .range(off, off + PAGE - 1)
+          if (!data || data.length === 0) break
+          allSales.push(...data)
+          if (data.length < PAGE) break
+          off += PAGE
+        }
+      }
+      if (cancelled) return
+
+      // barcode 별 합계
+      const byBcRaw: Record<string, { thisWeek: number; lastWeek: number }> = {}
+      for (const r of allSales) {
         const bc = String(r.barcode)
         const qty = Number(r.quantity || 0)
         const d = String(r.date)
-        if (!byBc[bc]) byBc[bc] = { thisWeek: 0, lastWeek: 0 }
-        if (d >= fmt(thisFrom)) byBc[bc].thisWeek += qty
-        else if (d >= fmt(lastFrom) && d <= fmt(lastTo)) byBc[bc].lastWeek += qty
+        if (!byBcRaw[bc]) byBcRaw[bc] = { thisWeek: 0, lastWeek: 0 }
+        if (d >= fmt(thisFrom)) byBcRaw[bc].thisWeek += qty
+        else if (d >= fmt(lastFrom) && d <= fmt(lastTo)) byBcRaw[bc].lastWeek += qty
       }
-      if (!cancelled) setSalesByBarcode(byBc)
+
+      // matched_barcode 기준으로 형제 barcode 들 합산
+      const final: Record<string, { thisWeek: number; lastWeek: number }> = {}
+      for (const matchedBc of allBarcodes) {
+        const name = nameByBarcode[matchedBc]
+        const siblings = (name && siblingsByName[name]) ? siblingsByName[name] : [matchedBc]
+        let tw = 0, lw = 0
+        for (const sb of siblings) {
+          if (byBcRaw[sb]) { tw += byBcRaw[sb].thisWeek; lw += byBcRaw[sb].lastWeek }
+        }
+        final[matchedBc] = { thisWeek: tw, lastWeek: lw }
+      }
+      setSalesByBarcode(final)
     }
-    loadExtras()
+    loadSales()
     return () => { cancelled = true }
-  }, [catalogs])
+  }, [rankings])
 
   return (
     <div className="card" style={{ marginBottom: 12 }}>
@@ -582,8 +622,7 @@ export default function CategoryRankingSection() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                   <thead style={{ background: '#F9FAFB', position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr>
-                      <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', minWidth: 80 }}>카테고리</th>
-                      <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', width: 80 }}>전략</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', minWidth: 90 }}>카테고리</th>
                       <th style={{ padding: '8px 4px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 48 }}>이미지</th>
                       <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', minWidth: 160 }}>상품명</th>
                       <th style={{ padding: '8px 4px', textAlign: 'right',  borderBottom: '1px solid #E4E7EC', width: 60, fontSize: 10 }}>검색량 이전</th>
@@ -608,36 +647,13 @@ export default function CategoryRankingSection() {
                       const cat = catalogs.find(c => c.id === row.catalogId)
                       const catLeaf = cat?.category_path.split(' > ').slice(-1)[0] || '?'
                       const ex = leafExtras[catLeaf] || {}
-                      const tag = ex.strategyTag || null
                       const volDelta = (ex.volLatest != null && ex.volPrev != null)
                         ? ex.volLatest - ex.volPrev : null
                       const sales = row.barcode ? salesByBarcode[row.barcode] : null
                       const wow = sales ? (sales.thisWeek - sales.lastWeek) : null
-                      const tagColors: Record<string, { bg: string; fg: string }> = {
-                        '신상':       { bg: '#DBEAFE', fg: '#1E40AF' },
-                        '베스트':     { bg: '#FEF3C7', fg: '#92400E' },
-                        '광고확장':   { bg: '#FCE7F3', fg: '#9F1239' },
-                        '방어':       { bg: '#E0E7FF', fg: '#3730A3' },
-                        '행사제안':   { bg: '#FFEDD5', fg: '#9A3412' },
-                        '리뷰점검':   { bg: '#FEF9C3', fg: '#854D0E' },
-                        '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
-                        '재고부족':   { bg: '#FEE2E2', fg: '#B91C1C' },
-                        '발주불가':   { bg: '#FECACA', fg: '#7F1D1D' },
-                      }
-                      const tagColor = tag ? tagColors[tag] : null
                       return (
                         <tr key={`${row.catalogId}__${row.productId}`} style={{ borderTop: '1px solid #F3F4F6' }}>
                           <td style={{ padding: '6px', fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>{catLeaf}</td>
-                          <td style={{ padding: '6px' }}>
-                            {tagColor && tag ? (
-                              <span style={{
-                                fontSize: 9, fontWeight: 700, color: tagColor.fg, background: tagColor.bg,
-                                padding: '2px 5px', borderRadius: 3,
-                              }}>{tag}</span>
-                            ) : (
-                              <span style={{ fontSize: 9, color: '#CBD5E1' }}>—</span>
-                            )}
-                          </td>
                           <td style={{ padding: '4px', textAlign: 'center' }}>
                             {row.productImage ? (
                               <img src={row.productImage} alt=""
