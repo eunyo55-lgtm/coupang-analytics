@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
     const seeds = (body.seeds || []).map(s => String(s || '').trim()).filter(Boolean)
     const exclude = new Set((body.excludeKeywords || []).map(s => String(s).toLowerCase().trim()))
     const useClaude = body.useClaude !== false  // 기본 true
-    const maxResults = body.maxResults || 100
+    const maxResults = body.maxResults || 150  // 30→100→150 — 더 많은 후보 노출
     const kidsOnly = body.kidsOnly !== false       // 기본 true
     const fashionOnly = body.fashionOnly !== false // 기본 true
     const strictAge = body.strictAge === true      // 기본 false (연령 토큰 미포함도 결과에 포함하되 별도 표시)
@@ -175,11 +175,24 @@ export async function POST(req: NextRequest) {
     const sanitizedSeeds = seeds.filter(s => !workSeedPattern.test(s))
     const seedsSkippedCount = seeds.length - sanitizedSeeds.length
 
-    const expandedSeeds = useClaude ? await expandSeedsWithClaude(sanitizedSeeds) : sanitizedSeeds
-    // 확장 결과에서도 작업 패턴 한 번 더 제거 (Claude가 실수로 만들었을 경우 대비)
-    const cleanExpanded = expandedSeeds.filter(s => !workSeedPattern.test(s))
-    // 중복 제거 + 최대 25개 시드까지 (네이버 5개씩 배치 5번)
-    const finalSeeds = Array.from(new Set(cleanExpanded)).slice(0, 25)
+    // ── 하드코딩 연령 prefix 확장 (Claude 보다 먼저 — 항상 보장) ──
+    // 시드가 이미 연령 토큰을 포함하면 prefix 추가 생략 (중복 방지)
+    const AGE_PREFIXES = ['아기', '베이비', '유아', '아동', '어린이', '키즈', '여아', '남아', '초등', '주니어']
+    const ageExpanded: string[] = []
+    for (const s of sanitizedSeeds) {
+      ageExpanded.push(s)  // 원본 유지
+      if (!ageTokenPattern.test(s)) {
+        // 연령 토큰 없는 시드만 prefix 추가
+        for (const pre of AGE_PREFIXES) ageExpanded.push(pre + s)
+      }
+    }
+
+    // Claude 확장 (선택, age prefix 확장본까지 받아서 더 다양화)
+    const claudeExpanded = useClaude ? await expandSeedsWithClaude(sanitizedSeeds) : []
+    // 합치고 작업 패턴 한 번 더 제거
+    const allExpanded = [...ageExpanded, ...claudeExpanded].filter(s => !workSeedPattern.test(s))
+    // 중복 제거 + 상한 (Naver 호출 비용 제어) — 50개로 확대
+    const finalSeeds = Array.from(new Set(allExpanded)).slice(0, 50)
 
     // 2) Naver RelKwdStat 배치 (5개씩, 병렬 5)
     const batches: string[][] = []
