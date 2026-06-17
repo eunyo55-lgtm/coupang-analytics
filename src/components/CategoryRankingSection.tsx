@@ -183,11 +183,11 @@ export default function CategoryRankingSection() {
                   onClick={triggerCategoryScan}
                   disabled={triggering || catalogs.length === 0}
                   style={{ padding: '4px 10px', fontSize: 11, borderRadius: 4,
-                    background: triggering || catalogs.length === 0 ? '#94A3B8' : '#0F172A',
+                    background: triggering || catalogs.length === 0 ? '#94A3B8' : '#7C3AED',
                     color: '#fff', border: 'none', fontWeight: 700,
                     cursor: triggering || catalogs.length === 0 ? 'not-allowed' : 'pointer' }}
-                  title="회사 PC runner.js 가 카테고리 1페이지 크롤링 작업을 실행합니다"
-                >{triggering ? '⏳ 대기열 등록 중...' : '🤖 카테고리 추적 시작'}</button>
+                  title="상단 🤖 데이터 수집 으로 일괄 실행 가능 · 이 버튼은 카테고리만 단독 재실행"
+                >{triggering ? '⏳ 대기 중' : '📂 카테고리만 단독 실행'}</button>
                 <button
                   onClick={() => setShowAdd(!showAdd)}
                   style={{ padding: '4px 10px', fontSize: 11, borderRadius: 4,

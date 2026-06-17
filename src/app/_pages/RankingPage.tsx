@@ -510,17 +510,16 @@ export default function RankingPage() {
         onRegistered={loadAll}
       />
 
-      {/* 키워드 발굴 제안 (Claude + Naver) */}
+      {/* 네이버 키워드 검색량 추이 + 상승 키워드 분석 */}
+      <KeywordVolumeChart />
+
+      {/* 키워드 발굴 제안 (Claude + Naver) — 검색량 그래프 아래로 이동 */}
       <KeywordSuggestPanel
         existingKeywords={keywords.map(k => k.keyword)}
         categories={Array.from(new Set(keywords.map(k => k.category || '').filter(Boolean)))}
         productNames={Array.from(new Set(keywords.map(k => k.products?.name || '').filter(Boolean)))}
         onRegistered={loadAll}
       />
-
-
-      {/* 네이버 키워드 검색량 추이 + 상승 키워드 분석 */}
-      <KeywordVolumeChart />
 
       {/* 순위 추이 테이블 (가로 스크롤) */}
       <div className="card" style={{ marginTop: 16 }}>

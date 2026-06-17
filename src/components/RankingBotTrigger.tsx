@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 
-type JobType = 'coupang_rank' | 'naver_volume'
+type JobType = 'coupang_rank' | 'naver_volume' | 'coupang_category'
 
 type Job = {
   id: string
@@ -16,8 +16,9 @@ type Job = {
 }
 
 const BOT_META: Record<JobType, { label: string; icon: string; color: string }> = {
-  coupang_rank: { label: '쿠팡 랭킹', icon: '🛒', color: '#2563eb' },
-  naver_volume: { label: '네이버 검색량', icon: '🔍', color: '#10b981' },
+  coupang_rank:     { label: '쿠팡 랭킹',     icon: '🛒', color: '#2563eb' },
+  naver_volume:     { label: '네이버 검색량', icon: '🔍', color: '#10b981' },
+  coupang_category: { label: '카테고리 노출', icon: '📂', color: '#7c3aed' },
 }
 
 const fmtKST = (iso: string | null) => {
@@ -78,7 +79,7 @@ export default function RankingBotTrigger() {
   // 두 봇을 한 번에 트리거 (이미 진행 중인 건 스킵)
   async function triggerAll() {
     setErrorMsg(null)
-    const types: JobType[] = ['coupang_rank', 'naver_volume']
+    const types: JobType[] = ['coupang_rank', 'naver_volume', 'coupang_category']
     for (const t of types) {
       if (activeByType(t)) continue  // 이미 pending/running이면 스킵
       setBusyType(t)
@@ -189,12 +190,13 @@ export default function RankingBotTrigger() {
     )
   }
 
-  // 통합 상태: 둘 중 하나라도 진행 중이면 active
-  const anyActive = activeByType('coupang_rank') || activeByType('naver_volume')
+  // 통합 상태: 세 봇 중 하나라도 진행 중이면 active
+  const anyActive = activeByType('coupang_rank') || activeByType('naver_volume') || activeByType('coupang_category')
   const anyBusy = busyType !== null
   const anyOffline = jobs.some(isLikelyOffline)
-  const latestCoupang = latestByType('coupang_rank')
-  const latestNaver = latestByType('naver_volume')
+  const latestCoupang  = latestByType('coupang_rank')
+  const latestNaver    = latestByType('naver_volume')
+  const latestCategory = latestByType('coupang_category')
 
   return (
     <div
@@ -219,8 +221,8 @@ export default function RankingBotTrigger() {
         >
           🤖 데이터 수집 {anyBusy ? '· 요청 중…' : anyActive ? '· 진행 중…' : ''}
         </button>
-        {(latestCoupang || latestNaver) && (
-          <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#64748b' }}>
+        {(latestCoupang || latestNaver || latestCategory) && (
+          <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#64748b', flexWrap: 'wrap' }}>
             {latestCoupang && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: STATUS_COLOR[latestCoupang.status] }} />
@@ -231,6 +233,12 @@ export default function RankingBotTrigger() {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: STATUS_COLOR[latestNaver.status] }} />
                 🔍 {STATUS_LABEL[latestNaver.status]} {fmtKST(latestNaver.finished_at || latestNaver.started_at || latestNaver.created_at)}
+              </span>
+            )}
+            {latestCategory && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: STATUS_COLOR[latestCategory.status] }} />
+                📂 {STATUS_LABEL[latestCategory.status]} {fmtKST(latestCategory.finished_at || latestCategory.started_at || latestCategory.created_at)}
               </span>
             )}
           </div>

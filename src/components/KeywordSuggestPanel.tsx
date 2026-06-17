@@ -47,7 +47,7 @@ type Props = {
 export default function KeywordSuggestPanel({
   existingKeywords, categories, productNames, onRegistered,
 }: Props) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)  // 기본 펼침
   const [mode, setMode] = useState<'auto' | 'category' | 'manual'>('auto')
   const [selectedCat, setSelectedCat] = useState<string>('')
   const [manualSeeds, setManualSeeds] = useState('')
