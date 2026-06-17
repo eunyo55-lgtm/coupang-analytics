@@ -568,8 +568,25 @@ export default function DashboardPage() {
   ]
 
   // ── 공급 KPI 4개 계산 (입고예정일 기준, 확정수량 + 확정금액) ──
+  // 공급 KPI는 supplyRaw 만 의존 — sales 의 latestDate 와 분리 (캐시 즉시 표시)
   const supplyKpis = useMemo(() => {
     const todayStr = toYMD(new Date())
+    // supplyRaw 안의 '오늘까지 가장 최근 입고예정일' 을 supply 의 latestDate 로 사용
+    let supplyLatest = ''
+    for (const r of supplyRaw) {
+      const d = (r.입고예정일 || '').slice(0,10)
+      if (d && d <= todayStr && d > supplyLatest) supplyLatest = d
+    }
+    if (!supplyLatest) supplyLatest = toYMD(new Date(Date.now() - 86400000))
+    // 주간 범위: supplyLatest 기준 금~목 7일
+    const a = new Date(supplyLatest + 'T00:00:00')
+    const dow = a.getDay()
+    const lastThu = new Date(a); lastThu.setDate(a.getDate() - ((dow + 3) % 7 + 1))
+    const lastFri = new Date(lastThu); lastFri.setDate(lastThu.getDate() - 6)
+    const weekFrom = toYMD(lastFri), weekTo = toYMD(lastThu)
+    // 누적: 올해 1/1 ~ supplyLatest
+    const cumFrom = `${a.getFullYear()}-01-01`, cumTo = supplyLatest
+
     const acc = (filter: (r: SupplyRaw) => boolean) => {
       let qty = 0, amt = 0
       for (const r of supplyRaw) {
@@ -582,10 +599,12 @@ export default function DashboardPage() {
       return { qty, amt }
     }
     return {
-      yest: acc(r => (r.입고예정일 || '').slice(0,10) === latestDate),
-      week: acc(r => { const d = (r.입고예정일 || '').slice(0,10); return d >= weekRange.from && d <= weekRange.to }),
-      cum:  acc(r => { const d = (r.입고예정일 || '').slice(0,10); return d >= cumRange.from && d <= cumRange.to }),
-      // 이동중: 미래 예정 + 미입고
+      latest: supplyLatest,
+      weekFrom, weekTo,
+      cumFrom, cumTo,
+      yest:   acc(r => (r.입고예정일 || '').slice(0,10) === supplyLatest),
+      week:   acc(r => { const d = (r.입고예정일 || '').slice(0,10); return d >= weekFrom && d <= weekTo }),
+      cum:    acc(r => { const d = (r.입고예정일 || '').slice(0,10); return d >= cumFrom && d <= cumTo }),
       moving: (() => {
         let qty = 0, amt = 0
         for (const r of supplyRaw) {
@@ -599,12 +618,12 @@ export default function DashboardPage() {
         return { qty, amt }
       })(),
     }
-  }, [supplyRaw, latestDate, weekRange.from, weekRange.to, cumRange.from, cumRange.to])
+  }, [supplyRaw])
 
   const supplyKpiCards: {label:string;sub:string;qty:number;rev:number;color:string}[] = [
-    {label:'전일 공급량', sub:`확정 (${latestDate})`, qty:supplyKpis.yest.qty, rev:supplyKpis.yest.amt, color:'var(--blue)'},
-    {label:'주간 공급량', sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`, qty:supplyKpis.week.qty, rev:supplyKpis.week.amt, color:'var(--purple)'},
-    {label:'누적 공급량', sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`, qty:supplyKpis.cum.qty, rev:supplyKpis.cum.amt, color:'var(--green)'},
+    {label:'전일 공급량', sub:`확정 (${supplyKpis.latest})`, qty:supplyKpis.yest.qty, rev:supplyKpis.yest.amt, color:'var(--blue)'},
+    {label:'주간 공급량', sub:`${supplyKpis.weekFrom.slice(5)} ~ ${supplyKpis.weekTo.slice(5)} (금~목)`, qty:supplyKpis.week.qty, rev:supplyKpis.week.amt, color:'var(--purple)'},
+    {label:'누적 공급량', sub:`${supplyKpis.cumFrom.slice(5)} ~ ${supplyKpis.cumTo.slice(5)} (26년)`, qty:supplyKpis.cum.qty, rev:supplyKpis.cum.amt, color:'var(--green)'},
     {label:'이동중 공급', sub:`미입고 · 예정일 ${toYMD(new Date()).slice(5)} 이후`, qty:supplyKpis.moving.qty, rev:supplyKpis.moving.amt, color:'var(--amber)'},
   ]
 
