@@ -231,6 +231,7 @@ export default function CategoryRankingSection() {
     productId: string
     productName: string
     productImage: string
+    barcode: string | null
     positionByDate: Record<string, number>   // 날짜 → 그 날의 position
     latestPosition: number                    // 정렬용
   }
@@ -244,9 +245,11 @@ export default function CategoryRankingSection() {
         productId: r.coupang_product_id,
         productName: r.product_name || '',
         productImage: r.product_image || '',
+        barcode: r.matched_barcode || null,
         positionByDate: {},
         latestPosition: 999,
       }
+      if (r.matched_barcode) cur.barcode = r.matched_barcode
       cur.positionByDate[r.measured_date] = r.position
       // 가장 최근 날짜의 product_name/image 로 업데이트
       if (r.measured_date === latestDate) {
@@ -274,38 +277,102 @@ export default function CategoryRankingSection() {
     return { t1, t2_5, t6_10, t11_27, total: t1 + t2_5 + t6_10 + t11_27 }
   }, [rankings, latestDate])
 
-  // 카테고리별 네이버 검색량 (leaf 이름 = 키워드로 사용)
-  const [naverVolByLeaf, setNaverVolByLeaf] = useState<Record<string, number>>({})
+  // 카테고리 leaf 별 부가 정보:
+  // - 네이버 검색량 (최신, 이전) → 추이
+  // - 키워드 전략 태그/메모 (keywords 테이블에서 leaf 이름과 매칭)
+  // - 매칭된 barcode 들 → daily_sales 주간 합산
+  const [leafExtras, setLeafExtras] = useState<Record<string, {
+    volLatest?: number
+    volPrev?: number
+    strategyTag?: string | null
+    memo?: string | null
+  }>>({})
+  const [salesByBarcode, setSalesByBarcode] = useState<Record<string, { thisWeek: number; lastWeek: number }>>({})
+
   useEffect(() => {
     if (!supabase || catalogs.length === 0) return
     let cancelled = false
-    async function loadNaver() {
+    async function loadExtras() {
       const leaves = Array.from(new Set(
         catalogs.map(c => c.category_path.split(' > ').slice(-1)[0]).filter(Boolean)
       ))
       if (leaves.length === 0) return
-      try {
-        // 최근 7일 내 최신값 가져오기
-        const since = (() => {
-          const d = new Date(); d.setDate(d.getDate() - 7)
-          return d.toISOString().slice(0, 10)
-        })()
-        const { data } = await supabase!
-          .from('keyword_search_volumes')
-          .select('keyword, total_volume, target_date')
-          .in('keyword', leaves)
-          .gte('target_date', since)
-          .order('target_date', { ascending: false })
-        if (cancelled) return
-        const m: Record<string, number> = {}
-        // 키워드별 가장 최근 값
-        for (const r of (data || []) as any[]) {
-          if (!m[r.keyword]) m[r.keyword] = Number(r.total_volume || 0)
+
+      // 1) 네이버 검색량 (최근 14일 — 최신/이전 두 값 구하기 위함)
+      const since = (() => {
+        const d = new Date(); d.setDate(d.getDate() - 14)
+        return d.toISOString().slice(0, 10)
+      })()
+      const { data: volData } = await supabase!
+        .from('keyword_search_volumes')
+        .select('keyword, total_volume, target_date')
+        .in('keyword', leaves)
+        .gte('target_date', since)
+        .order('target_date', { ascending: false })
+      const volByKw: Record<string, Array<{ d: string; v: number }>> = {}
+      for (const r of (volData || []) as any[]) {
+        const k = String(r.keyword)
+        if (!volByKw[k]) volByKw[k] = []
+        volByKw[k].push({ d: String(r.target_date), v: Number(r.total_volume || 0) })
+      }
+
+      // 2) keywords 테이블에서 leaf 이름과 매칭되는 키워드 (전략/메모 + barcode)
+      const { data: kwData } = await supabase!
+        .from('keywords')
+        .select('keyword, barcode, strategy_tag, memo')
+        .in('keyword', leaves)
+      const stratByLeaf: Record<string, { tag: string | null; memo: string | null }> = {}
+      const barcodesByLeaf: Record<string, string[]> = {}
+      for (const k of (kwData || []) as any[]) {
+        const leaf = String(k.keyword)
+        if (!stratByLeaf[leaf]) stratByLeaf[leaf] = { tag: k.strategy_tag || null, memo: k.memo || null }
+        if (k.barcode) {
+          if (!barcodesByLeaf[leaf]) barcodesByLeaf[leaf] = []
+          barcodesByLeaf[leaf].push(k.barcode)
         }
-        setNaverVolByLeaf(m)
-      } catch { /* ignore */ }
+      }
+
+      // 3) extras 합치기
+      const extras: Record<string, any> = {}
+      for (const leaf of leaves) {
+        const vols = volByKw[leaf] || []
+        extras[leaf] = {
+          volLatest: vols[0]?.v,
+          volPrev:   vols[1]?.v,
+          strategyTag: stratByLeaf[leaf]?.tag ?? null,
+          memo: stratByLeaf[leaf]?.memo ?? null,
+        }
+      }
+      if (cancelled) return
+      setLeafExtras(extras)
+
+      // 4) daily_sales 주간 합계 (이번주 = 최근 7일, 전주 = 그 전 7일)
+      const allBarcodes = Array.from(new Set(Object.values(barcodesByLeaf).flat()))
+      if (allBarcodes.length === 0) return
+      // 같은 상품명의 모든 옵션 barcode 까지 합산하려면 products join 필요 — 일단 매핑된 barcode 만 우선
+      const today = new Date()
+      const thisFrom = new Date(today); thisFrom.setDate(today.getDate() - 6)
+      const lastTo = new Date(today); lastTo.setDate(today.getDate() - 7)
+      const lastFrom = new Date(today); lastFrom.setDate(today.getDate() - 13)
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
+      const { data: salesData } = await supabase!
+        .from('daily_sales')
+        .select('barcode, quantity, date')
+        .in('barcode', allBarcodes)
+        .gte('date', fmt(lastFrom))
+        .lte('date', fmt(today))
+      const byBc: Record<string, { thisWeek: number; lastWeek: number }> = {}
+      for (const r of (salesData || []) as any[]) {
+        const bc = String(r.barcode)
+        const qty = Number(r.quantity || 0)
+        const d = String(r.date)
+        if (!byBc[bc]) byBc[bc] = { thisWeek: 0, lastWeek: 0 }
+        if (d >= fmt(thisFrom)) byBc[bc].thisWeek += qty
+        else if (d >= fmt(lastFrom) && d <= fmt(lastTo)) byBc[bc].lastWeek += qty
+      }
+      if (!cancelled) setSalesByBarcode(byBc)
     }
-    loadNaver()
+    loadExtras()
     return () => { cancelled = true }
   }, [catalogs])
 
@@ -515,15 +582,22 @@ export default function CategoryRankingSection() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                   <thead style={{ background: '#F9FAFB', position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr>
-                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 120 }}>카테고리 / 검색량</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 56 }}>이미지</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 200 }}>상품명</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', minWidth: 80 }}>카테고리</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', width: 80 }}>전략</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 48 }}>이미지</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'left',   borderBottom: '1px solid #E4E7EC', minWidth: 160 }}>상품명</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'right',  borderBottom: '1px solid #E4E7EC', width: 60, fontSize: 10 }}>검색량 이전</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'right',  borderBottom: '1px solid #E4E7EC', width: 60, fontSize: 10 }}>검색량 최신</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 50, fontSize: 10 }}>추이</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'right',  borderBottom: '1px solid #E4E7EC', width: 50, fontSize: 10 }}>전주 판매</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'right',  borderBottom: '1px solid #E4E7EC', width: 50, fontSize: 10 }}>이번주 판매</th>
+                      <th style={{ padding: '8px 4px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 40, fontSize: 10 }}>차이</th>
                       {dateColumns.map(d => {
                         const [, m, day] = d.split('-')
                         return (
                           <th key={d} style={{
-                            padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #E4E7EC',
-                            minWidth: 50, fontSize: 10,
+                            padding: '8px 4px', textAlign: 'center', borderBottom: '1px solid #E4E7EC',
+                            minWidth: 40, fontSize: 10,
                           }}>{`${parseInt(m)}/${parseInt(day)}`}</th>
                         )
                       })}
@@ -533,55 +607,89 @@ export default function CategoryRankingSection() {
                     {trendRows.map(row => {
                       const cat = catalogs.find(c => c.id === row.catalogId)
                       const catLeaf = cat?.category_path.split(' > ').slice(-1)[0] || '?'
+                      const ex = leafExtras[catLeaf] || {}
+                      const tag = ex.strategyTag || null
+                      const volDelta = (ex.volLatest != null && ex.volPrev != null)
+                        ? ex.volLatest - ex.volPrev : null
+                      const sales = row.barcode ? salesByBarcode[row.barcode] : null
+                      const wow = sales ? (sales.thisWeek - sales.lastWeek) : null
+                      const tagColors: Record<string, { bg: string; fg: string }> = {
+                        '신상':       { bg: '#DBEAFE', fg: '#1E40AF' },
+                        '베스트':     { bg: '#FEF3C7', fg: '#92400E' },
+                        '광고확장':   { bg: '#FCE7F3', fg: '#9F1239' },
+                        '방어':       { bg: '#E0E7FF', fg: '#3730A3' },
+                        '행사제안':   { bg: '#FFEDD5', fg: '#9A3412' },
+                        '리뷰점검':   { bg: '#FEF9C3', fg: '#854D0E' },
+                        '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
+                        '재고부족':   { bg: '#FEE2E2', fg: '#B91C1C' },
+                        '발주불가':   { bg: '#FECACA', fg: '#7F1D1D' },
+                      }
+                      const tagColor = tag ? tagColors[tag] : null
                       return (
                         <tr key={`${row.catalogId}__${row.productId}`} style={{ borderTop: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t2)' }}>
-                            <div style={{ fontWeight: 700 }}>{catLeaf}</div>
-                            {naverVolByLeaf[catLeaf] != null && naverVolByLeaf[catLeaf] > 0 && (
-                              <div style={{
-                                fontSize: 9, color: '#64748B', marginTop: 2,
-                                display: 'inline-flex', alignItems: 'center', gap: 3,
-                              }} title="네이버 월 검색량">
-                                🔍 {naverVolByLeaf[catLeaf].toLocaleString('ko-KR')}
-                              </div>
+                          <td style={{ padding: '6px', fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>{catLeaf}</td>
+                          <td style={{ padding: '6px' }}>
+                            {tagColor && tag ? (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700, color: tagColor.fg, background: tagColor.bg,
+                                padding: '2px 5px', borderRadius: 3,
+                              }}>{tag}</span>
+                            ) : (
+                              <span style={{ fontSize: 9, color: '#CBD5E1' }}>—</span>
                             )}
                           </td>
                           <td style={{ padding: '4px', textAlign: 'center' }}>
                             {row.productImage ? (
-                              <img
-                                src={row.productImage}
-                                alt=""
-                                style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, background: '#F8FAFC' }}
-                              />
+                              <img src={row.productImage} alt=""
+                                style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4, background: '#F8FAFC' }} />
                             ) : (
-                              <div style={{ width: 40, height: 40, background: '#F1F5F9', borderRadius: 4, display: 'inline-block' }} />
+                              <div style={{ width: 36, height: 36, background: '#F1F5F9', borderRadius: 4, display: 'inline-block' }} />
                             )}
                           </td>
-                          <td style={{ padding: '6px 10px', fontSize: 11 }}>
-                            <a
-                              href={`https://www.coupang.com/vp/products/${row.productId}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ color: '#1570EF', textDecoration: 'none' }}
-                            >{row.productName || '(상품명 없음)'}</a>
+                          <td style={{ padding: '6px', fontSize: 11 }}>
+                            <a href={`https://www.coupang.com/vp/products/${row.productId}`} target="_blank" rel="noreferrer"
+                              style={{ color: '#1570EF', textDecoration: 'none' }}>
+                              {row.productName || '(상품명 없음)'}
+                            </a>
                             <div style={{ fontSize: 9, color: 'var(--t3)' }}>ID {row.productId}</div>
                           </td>
+                          {/* 검색량 이전 */}
+                          <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 10, color: '#64748B' }}>
+                            {ex.volPrev != null ? ex.volPrev.toLocaleString('ko-KR') : '—'}
+                          </td>
+                          {/* 검색량 최신 */}
+                          <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>
+                            {ex.volLatest != null ? ex.volLatest.toLocaleString('ko-KR') : '—'}
+                          </td>
+                          {/* 추이 (검색량) */}
+                          <td style={{ padding: '6px 4px', textAlign: 'center', fontSize: 10, fontWeight: 700,
+                            color: volDelta == null ? 'var(--t3)' : volDelta >= 0 ? '#059669' : '#DC2626' }}>
+                            {volDelta == null ? '—' : `${volDelta >= 0 ? '▲' : '▼'}${Math.abs(volDelta).toLocaleString('ko-KR')}`}
+                          </td>
+                          {/* 전주 판매 */}
+                          <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 10, color: '#64748B' }}>
+                            {sales ? sales.lastWeek.toLocaleString('ko-KR') : '—'}
+                          </td>
+                          {/* 이번주 판매 */}
+                          <td style={{ padding: '6px 4px', textAlign: 'right', fontSize: 11, fontWeight: 700 }}>
+                            {sales ? sales.thisWeek.toLocaleString('ko-KR') : '—'}
+                          </td>
+                          {/* 차이 (WoW) */}
+                          <td style={{ padding: '6px 4px', textAlign: 'center', fontSize: 10, fontWeight: 700,
+                            color: wow == null ? 'var(--t3)' : wow >= 0 ? '#059669' : '#DC2626' }}>
+                            {wow == null ? '—' : `${wow >= 0 ? '▲' : '▼'}${Math.abs(wow)}`}
+                          </td>
+                          {/* 일별 랭킹 */}
                           {dateColumns.map(d => {
                             const pos = row.positionByDate[d]
-                            if (!pos) {
-                              return (
-                                <td key={d} style={{ padding: '6px 4px', textAlign: 'center', color: '#CBD5E1' }}>
-                                  —
-                                </td>
-                              )
-                            }
+                            if (!pos) return (
+                              <td key={d} style={{ padding: '6px 4px', textAlign: 'center', color: '#CBD5E1' }}>—</td>
+                            )
                             const color = pos <= 5 ? '#059669' : pos <= 15 ? '#0891B2' : pos <= 30 ? '#D97706' : '#94A3B8'
                             const bold  = pos <= 15
                             return (
                               <td key={d} style={{ padding: '6px 4px', textAlign: 'center' }}>
-                                <span style={{
-                                  fontSize: 13, fontWeight: bold ? 800 : 600, color,
-                                }}>{pos}</span>
+                                <span style={{ fontSize: 12, fontWeight: bold ? 800 : 600, color }}>{pos}</span>
                               </td>
                             )
                           })}
