@@ -97,6 +97,24 @@ export default function CategoryRankingSection() {
     load()
   }
 
+  const [triggering, setTriggering] = useState(false)
+  async function triggerCategoryScan() {
+    if (!supabase) return
+    if (catalogs.length === 0) { alert('추적 카테고리가 없습니다. 먼저 등록해주세요.'); return }
+    setTriggering(true)
+    try {
+      const { error } = await supabase.from('ranking_jobs').insert([{
+        job_type: 'coupang_category',
+        triggered_by: 'dashboard',
+        status: 'pending',
+      }])
+      if (error) { alert('트리거 실패: ' + error.message); return }
+      alert(`✅ 카테고리 추적 작업이 대기열에 등록됐어요.\n회사 PC의 runner.js 가 15초 안에 가져갑니다.\n완료 후 새로고침하면 결과 표시됨.`)
+    } finally {
+      setTriggering(false)
+    }
+  }
+
   function openEdit(c: Catalog) {
     setEditing(c)
     setEditPath(c.category_path)
@@ -160,11 +178,22 @@ export default function CategoryRankingSection() {
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📋 추적 카테고리</span>
-              <button
-                onClick={() => setShowAdd(!showAdd)}
-                style={{ padding: '4px 10px', fontSize: 11, borderRadius: 4,
-                  background: '#1570EF', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}
-              >{showAdd ? '취소' : '+ 카테고리 추가'}</button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={triggerCategoryScan}
+                  disabled={triggering || catalogs.length === 0}
+                  style={{ padding: '4px 10px', fontSize: 11, borderRadius: 4,
+                    background: triggering || catalogs.length === 0 ? '#94A3B8' : '#0F172A',
+                    color: '#fff', border: 'none', fontWeight: 700,
+                    cursor: triggering || catalogs.length === 0 ? 'not-allowed' : 'pointer' }}
+                  title="회사 PC runner.js 가 카테고리 1페이지 크롤링 작업을 실행합니다"
+                >{triggering ? '⏳ 대기열 등록 중...' : '🤖 카테고리 추적 시작'}</button>
+                <button
+                  onClick={() => setShowAdd(!showAdd)}
+                  style={{ padding: '4px 10px', fontSize: 11, borderRadius: 4,
+                    background: '#1570EF', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                >{showAdd ? '취소' : '+ 카테고리 추가'}</button>
+              </div>
             </div>
 
             {showAdd && (
