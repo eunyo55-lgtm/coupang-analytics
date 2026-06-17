@@ -259,6 +259,56 @@ export default function CategoryRankingSection() {
     return Array.from(m.values()).sort((a, b) => a.latestPosition - b.latestPosition)
   }, [rankings, latestDate])
 
+  // 순위 등급별 노출 아이템 수 (최신일 기준, 우리 상품만)
+  const tierStats = useMemo(() => {
+    let t1 = 0, t2_5 = 0, t6_10 = 0, t11_27 = 0
+    for (const r of rankings) {
+      if (r.measured_date !== latestDate) continue
+      if (!r.is_our_product) continue
+      const p = r.position
+      if (p === 1) t1++
+      else if (p >= 2 && p <= 5) t2_5++
+      else if (p >= 6 && p <= 10) t6_10++
+      else if (p >= 11 && p <= 27) t11_27++
+    }
+    return { t1, t2_5, t6_10, t11_27, total: t1 + t2_5 + t6_10 + t11_27 }
+  }, [rankings, latestDate])
+
+  // 카테고리별 네이버 검색량 (leaf 이름 = 키워드로 사용)
+  const [naverVolByLeaf, setNaverVolByLeaf] = useState<Record<string, number>>({})
+  useEffect(() => {
+    if (!supabase || catalogs.length === 0) return
+    let cancelled = false
+    async function loadNaver() {
+      const leaves = Array.from(new Set(
+        catalogs.map(c => c.category_path.split(' > ').slice(-1)[0]).filter(Boolean)
+      ))
+      if (leaves.length === 0) return
+      try {
+        // 최근 7일 내 최신값 가져오기
+        const since = (() => {
+          const d = new Date(); d.setDate(d.getDate() - 7)
+          return d.toISOString().slice(0, 10)
+        })()
+        const { data } = await supabase!
+          .from('keyword_search_volumes')
+          .select('keyword, total_volume, target_date')
+          .in('keyword', leaves)
+          .gte('target_date', since)
+          .order('target_date', { ascending: false })
+        if (cancelled) return
+        const m: Record<string, number> = {}
+        // 키워드별 가장 최근 값
+        for (const r of (data || []) as any[]) {
+          if (!m[r.keyword]) m[r.keyword] = Number(r.total_volume || 0)
+        }
+        setNaverVolByLeaf(m)
+      } catch { /* ignore */ }
+    }
+    loadNaver()
+    return () => { cancelled = true }
+  }, [catalogs])
+
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="ch" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
@@ -379,73 +429,81 @@ export default function CategoryRankingSection() {
                 추적 중인 카테고리가 없습니다. 위 "+ 카테고리 추가" 로 등록해주세요.
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 8 }}>
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                gap: 4, fontSize: 10,
+              }}>
                 {catalogs.map(c => {
                   const st = statsByCatalog.get(c.id)
+                  const leaf = c.category_path.split(' > ').slice(-1)[0]
+                  const cnt = st?.ourCount || 0
+                  const dot = cnt > 0 ? '#059669' : '#CBD5E1'
                   return (
                     <div key={c.id} style={{
-                      padding: 10, border: '1px solid #E4E7EC', borderRadius: 6, background: '#fff',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      padding: '2px 6px', borderRadius: 4,
+                      background: cnt > 0 ? '#F0FDF4' : '#F8FAFC',
+                      border: '1px solid ' + (cnt > 0 ? '#BBF7D0' : '#E4E7EC'),
                     }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
-                        <a
-                          href={c.category_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontSize: 11, fontWeight: 600, color: '#1570EF', textDecoration: 'none', flex: 1 }}
-                        >{c.category_path}</a>
-                        <button
-                          onClick={() => openEdit(c)}
-                          title="카테고리 정보 수정"
-                          style={{
-                            background: 'transparent', border: 'none', cursor: 'pointer',
-                            color: '#94A3B8', fontSize: 12, padding: 0, lineHeight: 1,
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = '#1570EF'}
-                          onMouseLeave={e => e.currentTarget.style.color = '#94A3B8'}
-                        >✏️</button>
-                        <button
-                          onClick={() => removeCatalog(c.id)}
-                          title="추적 중지"
-                          style={{
-                            background: 'transparent', border: 'none', cursor: 'pointer',
-                            color: '#94A3B8', fontSize: 14, padding: 0, lineHeight: 1,
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = '#DC2626'}
-                          onMouseLeave={e => e.currentTarget.style.color = '#94A3B8'}
-                        >×</button>
-                      </div>
-                      {st ? (
-                        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--t3)' }}>
-                          {st.latestDate && (
-                            <div>측정일: <b>{st.latestDate}</b></div>
-                          )}
-                          <div style={{ marginTop: 2 }}>
-                            우리 상품 노출: <b style={{
-                              color: st.ourCount > 0 ? '#059669' : '#DC2626',
-                              fontSize: 14,
-                            }}>{st.ourCount}개</b>
-                            {st.ourCount > 0 && (
-                              <span style={{ marginLeft: 4 }}>
-                                — 위치 {st.ourPositions.slice(0, 5).join(', ')}
-                                {st.ourPositions.length > 5 ? '...' : ''}
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 10, marginTop: 2, color: 'var(--t3)' }}>
-                            1페이지 {st.totalSeen}개 중
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ marginTop: 6, fontSize: 10, color: '#94A3B8', fontStyle: 'italic' }}>
-                          📭 데이터 대기 — 봇 크롤링 후 표시
-                        </div>
-                      )}
+                      <span style={{
+                        width: 5, height: 5, borderRadius: '50%', background: dot, flexShrink: 0,
+                      }} />
+                      <a
+                        href={c.category_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          color: 'var(--t2)', textDecoration: 'none', fontWeight: 600,
+                          flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}
+                        title={c.category_path}
+                      >{leaf}</a>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700,
+                        color: cnt > 0 ? '#047857' : '#94A3B8',
+                      }}>{cnt}</span>
+                      <button
+                        onClick={() => openEdit(c)}
+                        title="수정"
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: '#CBD5E1', fontSize: 9, padding: 0, lineHeight: 1,
+                        }}
+                      >✏️</button>
+                      <button
+                        onClick={() => removeCatalog(c.id)}
+                        title="중지"
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: '#CBD5E1', fontSize: 11, padding: 0, lineHeight: 1,
+                        }}
+                      >×</button>
                     </div>
                   )
                 })}
               </div>
             )}
           </div>
+
+          {/* 순위 등급별 KPI 카드 */}
+          {tierStats.total > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 14 }}>
+              {([
+                { label: '🥇 1위',     val: tierStats.t1,    color: '#047857', bg: '#ECFDF5' },
+                { label: '🥈 2~5위',   val: tierStats.t2_5,  color: '#0E7490', bg: '#ECFEFF' },
+                { label: '🥉 6~10위',  val: tierStats.t6_10, color: '#1E40AF', bg: '#EFF6FF' },
+                { label: '📋 11~27위', val: tierStats.t11_27, color: '#92400E', bg: '#FFFBEB' },
+              ] as const).map(t => (
+                <div key={t.label} style={{
+                  padding: '10px 12px', borderRadius: 8,
+                  background: t.bg, border: '1px solid ' + t.color + '33',
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: t.color, marginBottom: 4 }}>{t.label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: t.color, lineHeight: 1 }}>{t.val}<span style={{ fontSize: 11, marginLeft: 3 }}>개</span></div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* 우리 상품 일별 랭킹 추이 — (카테고리 × 상품) 단위 */}
           {trendRows.length > 0 && (
@@ -457,7 +515,7 @@ export default function CategoryRankingSection() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                   <thead style={{ background: '#F9FAFB', position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr>
-                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 100 }}>카테고리</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 120 }}>카테고리 / 검색량</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 56 }}>이미지</th>
                       <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 200 }}>상품명</th>
                       {dateColumns.map(d => {
@@ -477,8 +535,16 @@ export default function CategoryRankingSection() {
                       const catLeaf = cat?.category_path.split(' > ').slice(-1)[0] || '?'
                       return (
                         <tr key={`${row.catalogId}__${row.productId}`} style={{ borderTop: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>
-                            {catLeaf}
+                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t2)' }}>
+                            <div style={{ fontWeight: 700 }}>{catLeaf}</div>
+                            {naverVolByLeaf[catLeaf] != null && naverVolByLeaf[catLeaf] > 0 && (
+                              <div style={{
+                                fontSize: 9, color: '#64748B', marginTop: 2,
+                                display: 'inline-flex', alignItems: 'center', gap: 3,
+                              }} title="네이버 월 검색량">
+                                🔍 {naverVolByLeaf[catLeaf].toLocaleString('ko-KR')}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '4px', textAlign: 'center' }}>
                             {row.productImage ? (
