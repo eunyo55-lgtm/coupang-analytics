@@ -1,0 +1,277 @@
+'use client'
+import { useEffect, useMemo, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+
+type Catalog = {
+  id: number
+  category_path: string
+  category_id: string | null
+  category_url: string
+  active: boolean
+  display_order: number
+}
+
+type RankingRow = {
+  id: string
+  catalog_id: number
+  measured_date: string
+  position: number
+  coupang_product_id: string
+  product_name: string | null
+  product_image: string | null
+  vendor_name: string | null
+  is_our_product: boolean
+  matched_barcode: string | null
+}
+
+export default function CategoryRankingSection() {
+  const [catalogs, setCatalogs] = useState<Catalog[]>([])
+  const [rankings, setRankings] = useState<RankingRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [newPath, setNewPath] = useState('')
+  const [newUrl, setNewUrl] = useState('')
+
+  async function load() {
+    if (!supabase) return
+    setLoading(true)
+    try {
+      const { data: cats } = await supabase
+        .from('coupang_category_catalog')
+        .select('*')
+        .eq('active', true)
+        .order('display_order')
+        .order('category_path')
+      setCatalogs((cats || []) as Catalog[])
+
+      // 가장 최근 측정일의 랭킹 가져옴
+      const { data: latest } = await supabase
+        .from('coupang_category_rankings')
+        .select('measured_date')
+        .order('measured_date', { ascending: false })
+        .limit(1)
+      const latestDate = (latest?.[0] as any)?.measured_date
+      if (latestDate) {
+        const { data: ranks } = await supabase
+          .from('coupang_category_rankings')
+          .select('*')
+          .eq('measured_date', latestDate)
+          .order('position', { ascending: true })
+        setRankings((ranks || []) as RankingRow[])
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function addCatalog() {
+    if (!supabase) return
+    const path = newPath.trim()
+    const url = newUrl.trim()
+    if (!path || !url) { alert('카테고리 경로와 URL을 모두 입력해주세요'); return }
+    // URL 에서 category_id 추출 (https://...categories/12345)
+    const m = url.match(/\/categories\/(\d+)/)
+    const categoryId = m?.[1] || null
+    const { error } = await supabase.from('coupang_category_catalog').insert([{
+      category_path: path,
+      category_url: url,
+      category_id: categoryId,
+      active: true,
+    }])
+    if (error) { alert('등록 실패: ' + error.message); return }
+    setNewPath(''); setNewUrl(''); setShowAdd(false)
+    load()
+  }
+
+  async function removeCatalog(id: number) {
+    if (!supabase) return
+    if (!confirm('이 카테고리를 추적 목록에서 제거하시겠어요?')) return
+    await supabase.from('coupang_category_catalog').update({ active: false }).eq('id', id)
+    load()
+  }
+
+  // 각 카탈로그별 우리 상품 노출 통계
+  const statsByCatalog = useMemo(() => {
+    const m = new Map<number, { ourCount: number; ourPositions: number[]; totalSeen: number; latestDate?: string }>()
+    for (const r of rankings) {
+      const cur = m.get(r.catalog_id) || { ourCount: 0, ourPositions: [], totalSeen: 0 }
+      cur.totalSeen++
+      if (r.is_our_product) {
+        cur.ourCount++
+        cur.ourPositions.push(r.position)
+      }
+      if (!cur.latestDate || r.measured_date > cur.latestDate) cur.latestDate = r.measured_date
+      m.set(r.catalog_id, cur)
+    }
+    return m
+  }, [rankings])
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="ch" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
+        <div className="ch-l">
+          <div className="ch-ico">📂</div>
+          <div>
+            <div className="ch-title">카테고리 1페이지 우리 상품 노출 추적 {open ? '▼' : '▶'}</div>
+            <div className="ch-sub">
+              {catalogs.length}개 카테고리 추적 중 ·
+              {rankings.length > 0 ? ` 우리 상품 ${rankings.filter(r => r.is_our_product).length}개 노출 중` : ' 데이터 대기'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {open && (
+        <div className="cb">
+          {/* 추적 카테고리 목록 */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>📋 추적 카테고리</span>
+              <button
+                onClick={() => setShowAdd(!showAdd)}
+                style={{ padding: '4px 10px', fontSize: 11, borderRadius: 4,
+                  background: '#1570EF', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+              >{showAdd ? '취소' : '+ 카테고리 추가'}</button>
+            </div>
+
+            {showAdd && (
+              <div style={{ padding: 12, background: '#F8FAFC', borderRadius: 6, marginBottom: 8 }}>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>카테고리 경로 (표시용)</label>
+                  <input
+                    value={newPath}
+                    onChange={e => setNewPath(e.target.value)}
+                    placeholder="패션의류 > 키즈의류 > 상의류 > 티셔츠"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12, border: '1px solid #E4E7EC', borderRadius: 4 }}
+                  />
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--t2)', marginBottom: 4 }}>쿠팡 카테고리 URL</label>
+                  <input
+                    value={newUrl}
+                    onChange={e => setNewUrl(e.target.value)}
+                    placeholder="https://www.coupang.com/np/categories/195530"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 12, border: '1px solid #E4E7EC', borderRadius: 4 }}
+                  />
+                  <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
+                    💡 쿠팡에서 카테고리 진입 후 주소창의 URL 을 복사
+                  </div>
+                </div>
+                <button
+                  onClick={addCatalog}
+                  style={{ padding: '6px 16px', fontSize: 12, borderRadius: 4,
+                    background: '#0F172A', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                >등록</button>
+              </div>
+            )}
+
+            {loading ? (
+              <div style={{ fontSize: 12, color: 'var(--t3)', padding: 10 }}>로딩 중...</div>
+            ) : catalogs.length === 0 ? (
+              <div style={{
+                padding: 16, background: '#F8FAFC', borderRadius: 6, textAlign: 'center',
+                fontSize: 12, color: 'var(--t3)',
+              }}>
+                추적 중인 카테고리가 없습니다. 위 "+ 카테고리 추가" 로 등록해주세요.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 8 }}>
+                {catalogs.map(c => {
+                  const st = statsByCatalog.get(c.id)
+                  return (
+                    <div key={c.id} style={{
+                      padding: 10, border: '1px solid #E4E7EC', borderRadius: 6, background: '#fff',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                        <a
+                          href={c.category_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 11, fontWeight: 600, color: '#1570EF', textDecoration: 'none', flex: 1 }}
+                        >{c.category_path}</a>
+                        <button
+                          onClick={() => removeCatalog(c.id)}
+                          title="추적 중지"
+                          style={{
+                            background: 'transparent', border: 'none', cursor: 'pointer',
+                            color: '#94A3B8', fontSize: 14, padding: 0,
+                          }}
+                        >×</button>
+                      </div>
+                      {st ? (
+                        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--t3)' }}>
+                          {st.latestDate && (
+                            <div>측정일: <b>{st.latestDate}</b></div>
+                          )}
+                          <div style={{ marginTop: 2 }}>
+                            우리 상품 노출: <b style={{
+                              color: st.ourCount > 0 ? '#059669' : '#DC2626',
+                              fontSize: 14,
+                            }}>{st.ourCount}개</b>
+                            {st.ourCount > 0 && (
+                              <span style={{ marginLeft: 4 }}>
+                                — 위치 {st.ourPositions.slice(0, 5).join(', ')}
+                                {st.ourPositions.length > 5 ? '...' : ''}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 10, marginTop: 2, color: 'var(--t3)' }}>
+                            1페이지 {st.totalSeen}개 중
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 6, fontSize: 10, color: '#94A3B8', fontStyle: 'italic' }}>
+                          📭 데이터 대기 — 봇 크롤링 후 표시
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 우리 상품 노출 상세 (모든 카탈로그 합산) */}
+          {rankings.filter(r => r.is_our_product).length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)', marginBottom: 6 }}>
+                🎯 우리 상품 1페이지 노출 상세
+              </div>
+              <div style={{ border: '1px solid #E4E7EC', borderRadius: 6, overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                  <thead style={{ background: '#F9FAFB' }}>
+                    <tr>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC' }}>카테고리</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 60 }}>위치</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC' }}>상품명</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rankings.filter(r => r.is_our_product).map(r => {
+                      const cat = catalogs.find(c => c.id === r.catalog_id)
+                      const posColor = r.position <= 10 ? '#059669' : r.position <= 30 ? '#D97706' : '#64748B'
+                      return (
+                        <tr key={r.id} style={{ borderTop: '1px solid #F3F4F6' }}>
+                          <td style={{ padding: '6px 10px', fontSize: 10, color: 'var(--t3)' }}>
+                            {cat?.category_path.split(' > ').slice(-1)[0] || '?'}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                            <span style={{ fontSize: 13, fontWeight: 800, color: posColor }}>{r.position}</span>
+                          </td>
+                          <td style={{ padding: '6px 10px' }}>{r.product_name || '(상품명 없음)'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

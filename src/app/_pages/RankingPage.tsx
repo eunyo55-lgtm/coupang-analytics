@@ -6,6 +6,7 @@ import RankingBotTrigger from '@/components/RankingBotTrigger'
 import KeywordVolumeChart from '@/components/KeywordVolumeChart'
 import KeywordSuggestPanel from '@/components/KeywordSuggestPanel'
 import DailyKeywordSuggestions from '@/components/DailyKeywordSuggestions'
+import CategoryRankingSection from '@/components/CategoryRankingSection'
 
 /* ────────────────────────────────────────────────────────────
    Types (기존 앱 스키마 기반 - keywords + keyword_rankings)
@@ -475,6 +476,9 @@ export default function RankingPage() {
         onRegisterClick={() => { /* 향후 모달 열기 연결 */ }}
         onRegistered={loadAll}
       />
+
+      {/* 카테고리 1페이지 우리 상품 노출 추적 */}
+      <CategoryRankingSection />
 
       {/* 키워드 발굴 제안 (Claude + Naver) */}
       <KeywordSuggestPanel
