@@ -429,7 +429,7 @@ export default function RankingPage() {
   const stickyLeft = {
     category: 0,
     keyword: 90,
-    product: 90 + 140,
+    product: 90 + 170,  // 키워드 컬럼 width: 170 (태그/메모 노출)
   }
   const productRight = stickyLeft.product + productColWidth
 
@@ -542,9 +542,9 @@ export default function RankingPage() {
                       분류 <SortArrow k="category" />
                     </button>
                   </th>
-                  <th className="rk-sticky" style={{ left: 90, width: 140, zIndex: 31 }}>
+                  <th className="rk-sticky" style={{ left: 90, width: 170, zIndex: 31 }}>
                     <button className="th-sort" onClick={() => toggleSort('keyword')}>
-                      키워드 <SortArrow k="keyword" />
+                      키워드 / 전략 / 메모 <SortArrow k="keyword" />
                     </button>
                   </th>
                   <th className="rk-sticky" style={{ left: stickyLeft.product, width: productColWidth, zIndex: 31 }}>
@@ -649,53 +649,100 @@ export default function RankingPage() {
                             <span className="cat-tag">{kw.category || '-'}</span>
                           )}
                         </td>
-                        {/* 키워드 + 전략 태그 + 메모 */}
+                        {/* 키워드 + 전략 태그 + 메모 (항상 노출 + ✏️ 편집) */}
                         <td
                           className="rk-sticky"
-                          style={{ left: 90, width: 140, cursor: 'pointer' }}
-                          onDoubleClick={() => setEditingStrategy({ id: kw.id, tag: kw.strategy_tag || '', memo: kw.memo || '' })}
-                          title={`더블클릭 → 전략 태그/메모 편집${kw.memo ? '\n메모: ' + kw.memo : ''}`}
+                          style={{ left: 90, width: 170, padding: '6px 8px' }}
                         >
                           {(() => {
                             const isNew = kw.created_at &&
                               (Date.now() - new Date(kw.created_at).getTime()) < 7 * 86400000
+                            const tagColors: Record<string, { bg: string; fg: string }> = {
+                              '신상':       { bg: '#DBEAFE', fg: '#1E40AF' },
+                              '베스트':     { bg: '#FEF3C7', fg: '#92400E' },
+                              '광고집중':   { bg: '#FCE7F3', fg: '#9F1239' },
+                              '방어':       { bg: '#E0E7FF', fg: '#3730A3' },
+                              '정리예정':   { bg: '#F1F5F9', fg: '#475569' },
+                              '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
+                            }
+                            const c = kw.strategy_tag ? tagColors[kw.strategy_tag] : null
+                            const openEdit = () => setEditingStrategy({
+                              id: kw.id, tag: kw.strategy_tag || '', memo: kw.memo || ''
+                            })
                             return (
                               <>
-                                {isNew && (
-                                  <span style={{
-                                    fontSize: 9, fontWeight: 700, color: '#C2410C',
-                                    background: '#FFEDD5', padding: '2px 4px', borderRadius: 3,
-                                    marginRight: 4,
-                                  }} title="최근 7일 이내 신규 등록">🆕</span>
-                                )}
-                                <span className="kw-tag">{kw.keyword}</span>
-                                {kw.strategy_tag && (() => {
-                                  const tagColors: Record<string, { bg: string; fg: string }> = {
-                                    '신상':       { bg: '#DBEAFE', fg: '#1E40AF' },
-                                    '베스트':     { bg: '#FEF3C7', fg: '#92400E' },
-                                    '광고집중':   { bg: '#FCE7F3', fg: '#9F1239' },
-                                    '방어':       { bg: '#E0E7FF', fg: '#3730A3' },
-                                    '정리예정':   { bg: '#F1F5F9', fg: '#475569' },
-                                    '테스트중':   { bg: '#F3E8FF', fg: '#6B21A8' },
-                                  }
-                                  const c = tagColors[kw.strategy_tag] || { bg: '#E5E7EB', fg: '#374151' }
-                                  return (
+                                {/* 1행: 키워드 + 편집 아이콘 */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  {isNew && (
                                     <span style={{
-                                      display: 'block', marginTop: 2,
-                                      fontSize: 9, fontWeight: 700, color: c.fg, background: c.bg,
-                                      padding: '1px 6px', borderRadius: 3,
-                                    }}>{kw.strategy_tag}</span>
-                                  )
-                                })()}
-                                {kw.memo && (
-                                  <span style={{
-                                    display: 'block', marginTop: 2,
-                                    fontSize: 9, color: '#64748B', fontStyle: 'italic',
-                                    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                  }} title={kw.memo}>
-                                    📝 {kw.memo.length > 18 ? kw.memo.slice(0, 16) + '…' : kw.memo}
-                                  </span>
-                                )}
+                                      fontSize: 9, fontWeight: 700, color: '#C2410C',
+                                      background: '#FFEDD5', padding: '1px 4px', borderRadius: 3,
+                                    }} title="최근 7일 이내 신규 등록">🆕</span>
+                                  )}
+                                  <span className="kw-tag" style={{ flex: 1 }}>{kw.keyword}</span>
+                                  <button
+                                    onClick={openEdit}
+                                    title="전략/메모 편집"
+                                    style={{
+                                      padding: '2px 4px', fontSize: 11, lineHeight: 1,
+                                      background: 'transparent', border: 'none', cursor: 'pointer',
+                                      opacity: 0.4, color: 'var(--t3)',
+                                    }}
+                                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                                    onMouseLeave={e => e.currentTarget.style.opacity = '0.4'}
+                                  >✏️</button>
+                                </div>
+
+                                {/* 2행: 전략 태그 (있으면 chip, 없으면 + 태그 placeholder) */}
+                                <div style={{ marginTop: 3 }}>
+                                  {c && kw.strategy_tag ? (
+                                    <span
+                                      onClick={openEdit}
+                                      style={{
+                                        fontSize: 9, fontWeight: 700, color: c.fg, background: c.bg,
+                                        padding: '1px 6px', borderRadius: 3, cursor: 'pointer',
+                                      }}
+                                      title="클릭 → 전략 편집"
+                                    >{kw.strategy_tag}</span>
+                                  ) : (
+                                    <span
+                                      onClick={openEdit}
+                                      style={{
+                                        fontSize: 9, color: '#94A3B8', cursor: 'pointer',
+                                        border: '1px dashed #CBD5E1', borderRadius: 3,
+                                        padding: '1px 6px',
+                                      }}
+                                      title="클릭 → 전략 태그 추가"
+                                    >+ 태그</span>
+                                  )}
+                                </div>
+
+                                {/* 3행: 메모 (있으면 표시, 없으면 + 메모 placeholder) */}
+                                <div style={{ marginTop: 3 }}>
+                                  {kw.memo ? (
+                                    <span
+                                      onClick={openEdit}
+                                      style={{
+                                        fontSize: 9, color: '#475569',
+                                        cursor: 'pointer', lineHeight: 1.3,
+                                        background: '#FFFBEB', padding: '2px 6px', borderRadius: 3,
+                                        borderLeft: '2px solid #FCD34D',
+                                        overflow: 'hidden', textOverflow: 'ellipsis',
+                                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                                      }}
+                                      title={kw.memo}
+                                    >📝 {kw.memo}</span>
+                                  ) : (
+                                    <span
+                                      onClick={openEdit}
+                                      style={{
+                                        fontSize: 9, color: '#94A3B8', cursor: 'pointer',
+                                        fontStyle: 'italic',
+                                      }}
+                                      title="클릭 → 메모 추가"
+                                    >+ 메모</span>
+                                  )}
+                                </div>
                               </>
                             )
                           })()}
