@@ -614,14 +614,14 @@ export default function SalesPage() {
                   <YAxis tick={{ fontSize: 10, fill: '#56606E' }} tickFormatter={(v)=>Number(v).toLocaleString('ko-KR')}/>
                   <Tooltip formatter={(v:number, n:string)=>[Number(v).toLocaleString('ko-KR') + (mode==='qty'?'개':'원'), n]}/>
                   {hasPrev && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }}/>}
-                  <Bar dataKey={mode==='qty'?'qty':'revR'} name={`${yearNow}년`} fill="#1570EF" radius={[6,6,0,0]}>
-                    <LabelList dataKey={mode==='qty'?'qty':'revR'} position="top" fontSize={10} formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
-                  </Bar>
                   {hasPrev && (
                     <Bar dataKey={mode==='qty'?'prevQty':'prevRevR'} name={`${yearPrev}년`} fill="#cbd5e1" radius={[6,6,0,0]}>
                       <LabelList dataKey={mode==='qty'?'prevQty':'prevRevR'} position="top" fontSize={9} fill="#64748b" formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
                     </Bar>
                   )}
+                  <Bar dataKey={mode==='qty'?'qty':'revR'} name={`${yearNow}년`} fill="#1570EF" radius={[6,6,0,0]}>
+                    <LabelList dataKey={mode==='qty'?'qty':'revR'} position="top" fontSize={10} formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             ) : (
@@ -650,14 +650,14 @@ export default function SalesPage() {
                   <YAxis tick={{ fontSize: 10, fill: '#56606E' }} tickFormatter={(v)=>Number(v).toLocaleString('ko-KR')}/>
                   <Tooltip formatter={(v:number, n:string)=>[Number(v).toLocaleString('ko-KR') + (mode==='qty'?'개':'원'), n]}/>
                   {hasPrev && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }}/>}
-                  <Bar dataKey={mode==='qty'?'qty':'revR'} name={`${yearNow}년`} fill="#1570EF" radius={[6,6,0,0]}>
-                    <LabelList dataKey={mode==='qty'?'qty':'revR'} position="top" fontSize={10} formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
-                  </Bar>
                   {hasPrev && (
                     <Bar dataKey={mode==='qty'?'prevQty':'prevRevR'} name={`${yearPrev}년`} fill="#cbd5e1" radius={[6,6,0,0]}>
                       <LabelList dataKey={mode==='qty'?'prevQty':'prevRevR'} position="top" fontSize={9} fill="#64748b" formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
                     </Bar>
                   )}
+                  <Bar dataKey={mode==='qty'?'qty':'revR'} name={`${yearNow}년`} fill="#1570EF" radius={[6,6,0,0]}>
+                    <LabelList dataKey={mode==='qty'?'qty':'revR'} position="top" fontSize={10} formatter={(v:number)=>v?Number(v).toLocaleString('ko-KR'):''}/>
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             ) : (
