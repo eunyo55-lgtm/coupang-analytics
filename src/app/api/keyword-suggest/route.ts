@@ -226,11 +226,22 @@ export async function POST(req: NextRequest) {
       if (!prev || it.total > prev.total) byKw.set(key, it)
     }
 
-    // 4) 검색량 내림차순 + 상한 + 연령 토큰 플래그 부착
-    const baseSuggestions = Array.from(byKw.values())
-      .sort((a, b) => b.total - a.total)
+    // 4) 연령 토큰 플래그 → 정렬: 타겟 적합 우선, 그 안에서 검색량 내림차순
+    //    이렇게 해야 Naver 가 반환한 broad 키워드(샌들/원피스 등 검색량 큰 일반어)에
+    //    age-tokened 키워드(유아샌들/키즈원피스)가 묻히지 않음
+    const withAge = Array.from(byKw.values()).map(s => ({
+      ...s,
+      hasAgeToken: ageTokenPattern.test(s.keyword),
+    }))
+    const baseSuggestions = withAge
+      .sort((a, b) => {
+        // 1순위: hasAgeToken=true 가 앞으로
+        if (a.hasAgeToken && !b.hasAgeToken) return -1
+        if (!a.hasAgeToken && b.hasAgeToken) return 1
+        // 2순위: 검색량 내림차순
+        return b.total - a.total
+      })
       .slice(0, maxResults)
-      .map(s => ({ ...s, hasAgeToken: ageTokenPattern.test(s.keyword) }))
 
     // 5) 과거 검색량 조회 (7~14일 전) → WoW delta 계산
     //    keyword_search_volumes 테이블에서 prev week 값을 가져와 surge 판단
