@@ -49,21 +49,29 @@ export default function CategoryRankingSection() {
         .order('category_path')
       setCatalogs((cats || []) as Catalog[])
 
-      // 가장 최근 측정일의 랭킹 가져옴
-      const { data: latest } = await supabase
-        .from('coupang_category_rankings')
-        .select('measured_date')
-        .order('measured_date', { ascending: false })
-        .limit(1)
-      const latestDate = (latest?.[0] as any)?.measured_date
-      if (latestDate) {
-        const { data: ranks } = await supabase
+      // 최근 N일(기본 14일) 의 우리 상품 노출 데이터를 모두 가져옴 (일별 추이용)
+      // PostgREST max-rows 1000 → 페이지네이션
+      const since = (() => {
+        const d = new Date(); d.setDate(d.getDate() - 13)
+        return d.toISOString().slice(0, 10)
+      })()
+      const all: RankingRow[] = []
+      let off = 0
+      while (true) {
+        const { data, error } = await supabase
           .from('coupang_category_rankings')
           .select('*')
-          .eq('measured_date', latestDate)
-          .order('position', { ascending: true })
-        setRankings((ranks || []) as RankingRow[])
+          .gte('measured_date', since)
+          .order('measured_date', { ascending: true })
+          .range(off, off + 999)
+        if (error) break
+        const rows = (data || []) as RankingRow[]
+        all.push(...rows)
+        if (rows.length < 1000) break
+        off += 1000
+        if (off > 30000) break
       }
+      setRankings(all)
     } finally {
       setLoading(false)
     }
@@ -185,21 +193,71 @@ export default function CategoryRankingSection() {
     load()
   }
 
-  // 각 카탈로그별 우리 상품 노출 통계
+  // 가장 최근 측정일
+  const latestDate = useMemo(() => {
+    let max = ''
+    for (const r of rankings) if (r.measured_date > max) max = r.measured_date
+    return max
+  }, [rankings])
+
+  // 표시할 날짜 컬럼 (최근 7일, 측정 데이터 있는 것만)
+  const dateColumns = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of rankings) set.add(r.measured_date)
+    return Array.from(set).sort().slice(-7)  // 최근 7일까지
+  }, [rankings])
+
+  // 각 카탈로그별 우리 상품 노출 통계 (최신일 기준)
   const statsByCatalog = useMemo(() => {
     const m = new Map<number, { ourCount: number; ourPositions: number[]; totalSeen: number; latestDate?: string }>()
     for (const r of rankings) {
+      if (r.measured_date !== latestDate) continue  // 최신일 기준
       const cur = m.get(r.catalog_id) || { ourCount: 0, ourPositions: [], totalSeen: 0 }
       cur.totalSeen++
       if (r.is_our_product) {
         cur.ourCount++
         cur.ourPositions.push(r.position)
       }
-      if (!cur.latestDate || r.measured_date > cur.latestDate) cur.latestDate = r.measured_date
+      cur.latestDate = r.measured_date
       m.set(r.catalog_id, cur)
     }
     return m
-  }, [rankings])
+  }, [rankings, latestDate])
+
+  // 일별 추이 — (카탈로그 × 상품) 단위로 묶기
+  // 한 카테고리에 여러 우리 상품이 있어도 각각 별도 행
+  type TrendRow = {
+    catalogId: number
+    productId: string
+    productName: string
+    productImage: string
+    positionByDate: Record<string, number>   // 날짜 → 그 날의 position
+    latestPosition: number                    // 정렬용
+  }
+  const trendRows = useMemo<TrendRow[]>(() => {
+    const m = new Map<string, TrendRow>()
+    for (const r of rankings) {
+      if (!r.is_our_product) continue
+      const key = `${r.catalog_id}__${r.coupang_product_id}`
+      const cur = m.get(key) || {
+        catalogId: r.catalog_id,
+        productId: r.coupang_product_id,
+        productName: r.product_name || '',
+        productImage: r.product_image || '',
+        positionByDate: {},
+        latestPosition: 999,
+      }
+      cur.positionByDate[r.measured_date] = r.position
+      // 가장 최근 날짜의 product_name/image 로 업데이트
+      if (r.measured_date === latestDate) {
+        if (r.product_name) cur.productName = r.product_name
+        if (r.product_image) cur.productImage = r.product_image
+        cur.latestPosition = r.position
+      }
+      m.set(key, cur)
+    }
+    return Array.from(m.values()).sort((a, b) => a.latestPosition - b.latestPosition)
+  }, [rankings, latestDate])
 
   return (
     <div className="card" style={{ marginBottom: 12 }}>
@@ -389,39 +447,86 @@ export default function CategoryRankingSection() {
             )}
           </div>
 
-          {/* 우리 상품 노출 상세 (모든 카탈로그 합산) */}
-          {rankings.filter(r => r.is_our_product).length > 0 && (
+          {/* 우리 상품 일별 랭킹 추이 — (카테고리 × 상품) 단위 */}
+          {trendRows.length > 0 && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)', marginBottom: 6 }}>
-                🎯 우리 상품 1페이지 노출 상세
+                🎯 우리 상품 일별 랭킹 추이 ({trendRows.length}개 — 최근 {dateColumns.length}일)
               </div>
-              <div style={{ border: '1px solid #E4E7EC', borderRadius: 6, overflow: 'hidden' }}>
+              <div style={{ border: '1px solid #E4E7EC', borderRadius: 6, overflow: 'auto', maxHeight: 600 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                  <thead style={{ background: '#F9FAFB' }}>
+                  <thead style={{ background: '#F9FAFB', position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr>
-                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC' }}>카테고리</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 60 }}>위치</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC' }}>상품명</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 100 }}>카테고리</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #E4E7EC', width: 56 }}>이미지</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #E4E7EC', minWidth: 200 }}>상품명</th>
+                      {dateColumns.map(d => {
+                        const [, m, day] = d.split('-')
+                        return (
+                          <th key={d} style={{
+                            padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #E4E7EC',
+                            minWidth: 50, fontSize: 10,
+                          }}>{`${parseInt(m)}/${parseInt(day)}`}</th>
+                        )
+                      })}
                     </tr>
                   </thead>
                   <tbody>
-                    {rankings.filter(r => r.is_our_product).map(r => {
-                      const cat = catalogs.find(c => c.id === r.catalog_id)
-                      const posColor = r.position <= 10 ? '#059669' : r.position <= 30 ? '#D97706' : '#64748B'
+                    {trendRows.map(row => {
+                      const cat = catalogs.find(c => c.id === row.catalogId)
+                      const catLeaf = cat?.category_path.split(' > ').slice(-1)[0] || '?'
                       return (
-                        <tr key={r.id} style={{ borderTop: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '6px 10px', fontSize: 10, color: 'var(--t3)' }}>
-                            {cat?.category_path.split(' > ').slice(-1)[0] || '?'}
+                        <tr key={`${row.catalogId}__${row.productId}`} style={{ borderTop: '1px solid #F3F4F6' }}>
+                          <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>
+                            {catLeaf}
                           </td>
-                          <td style={{ padding: '6px 10px', textAlign: 'center' }}>
-                            <span style={{ fontSize: 13, fontWeight: 800, color: posColor }}>{r.position}</span>
+                          <td style={{ padding: '4px', textAlign: 'center' }}>
+                            {row.productImage ? (
+                              <img
+                                src={row.productImage}
+                                alt=""
+                                style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, background: '#F8FAFC' }}
+                              />
+                            ) : (
+                              <div style={{ width: 40, height: 40, background: '#F1F5F9', borderRadius: 4, display: 'inline-block' }} />
+                            )}
                           </td>
-                          <td style={{ padding: '6px 10px' }}>{r.product_name || '(상품명 없음)'}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11 }}>
+                            <a
+                              href={`https://www.coupang.com/vp/products/${row.productId}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: '#1570EF', textDecoration: 'none' }}
+                            >{row.productName || '(상품명 없음)'}</a>
+                            <div style={{ fontSize: 9, color: 'var(--t3)' }}>ID {row.productId}</div>
+                          </td>
+                          {dateColumns.map(d => {
+                            const pos = row.positionByDate[d]
+                            if (!pos) {
+                              return (
+                                <td key={d} style={{ padding: '6px 4px', textAlign: 'center', color: '#CBD5E1' }}>
+                                  —
+                                </td>
+                              )
+                            }
+                            const color = pos <= 5 ? '#059669' : pos <= 15 ? '#0891B2' : pos <= 30 ? '#D97706' : '#94A3B8'
+                            const bold  = pos <= 15
+                            return (
+                              <td key={d} style={{ padding: '6px 4px', textAlign: 'center' }}>
+                                <span style={{
+                                  fontSize: 13, fontWeight: bold ? 800 : 600, color,
+                                }}>{pos}</span>
+                              </td>
+                            )
+                          })}
                         </tr>
                       )
                     })}
                   </tbody>
                 </table>
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 6 }}>
+                💡 색상: 🟢 1~5위 · 🔵 6~15위 · 🟠 16~30위 · ⚪ 31위 이하 · — 노출 안 됨
               </div>
             </div>
           )}
