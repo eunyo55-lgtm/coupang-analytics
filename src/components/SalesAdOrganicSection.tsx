@@ -44,7 +44,8 @@ export default function SalesAdOrganicSection({
   const [attrWindow, setAttrWindow] = useState<'1d' | '14d'>('14d')
 
   // SWR 캐시 — 같은 기간+윈도우면 즉시 표시 + 백그라운드 갱신
-  const cacheKey = `swr_sales_ad_${attrWindow}_${chartFrom}_${chartTo}`
+  // v2: 옛 stale 캐시 무효화 (정확한 raw 합계 보장)
+  const cacheKey = `swr_sales_ad_v2_${attrWindow}_${chartFrom}_${chartTo}`
   type CachedAd = { rows: Array<[string, AdAggRow]>; lastUploadDate: string | null }
   const _cached = (typeof window !== 'undefined' && chartFrom && chartTo)
     ? readSwrCache<CachedAd>(cacheKey, AD_CACHE_TTL)
@@ -207,11 +208,10 @@ export default function SalesAdOrganicSection({
         )}
       </div>
       <div className="cb">
-        {/* 4 카드 × 2줄 — 통합 로딩 (스켈레톤) */}
-        {/* Row 1: 매출 금액 */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 10 }}>
+        {/* 4 카드 1줄 — 각 매출 카드 아래에 비중 함께 표시 */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
           {allLoading ? (
-            Array.from({ length: 4 }).map((_, i) => <KpiSkeleton key={`r1-${i}`} />)
+            Array.from({ length: 4 }).map((_, i) => <KpiSkeleton key={i} />)
           ) : (
             <>
               <KpiCard
@@ -223,65 +223,29 @@ export default function SalesAdOrganicSection({
               <KpiCard
                 label="광고 전환 매출"
                 value={fmt(totals.adRev) + '원'}
+                pct={hasAdData ? totals.ratio : null}
+                pctLabel="광고 매출 비중"
+                pctColor={COLOR_AD}
                 sub={hasAdData ? `${totals.adUnits.toLocaleString()}개 판매` : '광고 데이터 없음'}
                 color={COLOR_AD}
               />
               <KpiCard
                 label="오가닉 매출"
                 value={fmt(totals.organic) + '원'}
+                pct={hasAdData ? (100 - totals.ratio) : null}
+                pctLabel="오가닉 매출 비중"
+                pctColor={COLOR_ORGANIC}
                 sub={hasAdData ? `${(totals.qty - totals.adUnits).toLocaleString()}개 판매` : '전체 매출'}
                 color={COLOR_ORGANIC}
               />
               <KpiCard
                 label="광고비"
                 value={hasAdData ? fmt(totals.adCost) + '원' : '—'}
-                sub={hasAdData ? VAT_LABEL : ''}
+                pct={hasAdData ? totals.adCostRatio : null}
+                pctLabel="광고비 비중"
+                pctColor="#7C3AED"
+                sub={hasAdData ? `ROAS ${totals.roas.toFixed(0)}%` : ''}
                 color="#DC2626"
-              />
-            </>
-          )}
-        </div>
-        {/* Row 2: 비중/효율 (모두 %) */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
-          {allLoading ? (
-            Array.from({ length: 4 }).map((_, i) => <KpiSkeleton key={`r2-${i}`} />)
-          ) : (
-            <>
-              <KpiCard
-                label="광고 매출 비중"
-                value={hasAdData ? totals.ratio.toFixed(2) + '%' : '—'}
-                sub={hasAdData ? '광고 / 총 매출' : ''}
-                color={COLOR_AD}
-              />
-              <KpiCard
-                label="오가닉 매출 비중"
-                value={hasAdData ? (100 - totals.ratio).toFixed(2) + '%' : '100%'}
-                sub={hasAdData ? '오가닉 / 총 매출' : ''}
-                color={COLOR_ORGANIC}
-              />
-              <KpiCard
-                label="광고비 비중"
-                value={hasAdData ? totals.adCostRatio.toFixed(2) + '%' : '—'}
-                sub={
-                  !hasAdData ? '' :
-                  totals.adCostRatio < 5  ? '🏆 매우 효율적' :
-                  totals.adCostRatio < 10 ? '👍 효율적' :
-                  totals.adCostRatio < 15 ? '⚖️ 보통' :
-                                            '⚠️ 부담스러움'
-                }
-                color="#7C3AED"
-              />
-              <KpiCard
-                label="ROAS"
-                value={hasAdData ? totals.roas.toFixed(0) + '%' : '—'}
-                sub={
-                  !hasAdData ? '' :
-                  totals.roas >= 500 ? '🏆 우수 (5배↑)' :
-                  totals.roas >= 300 ? '👍 양호 (3배↑)' :
-                  totals.roas >= 100 ? '⚖️ 보통' :
-                                       '⚠️ 점검 필요'
-                }
-                color="#0891B2"
               />
             </>
           )}
@@ -358,7 +322,13 @@ export default function SalesAdOrganicSection({
   )
 }
 
-function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
+function KpiCard({
+  label, value, sub, color,
+  pct, pctLabel, pctColor,
+}: {
+  label: string; value: string; sub?: string; color: string;
+  pct?: number | null; pctLabel?: string; pctColor?: string;
+}) {
   return (
     <div style={{
       padding: '12px 14px', borderRadius: 8,
@@ -366,6 +336,17 @@ function KpiCard({ label, value, sub, color }: { label: string; value: string; s
     }}>
       <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4, fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800, color, lineHeight: 1.1 }}>{value}</div>
+      {pct !== undefined && pct !== null && (
+        <div style={{
+          marginTop: 6, paddingTop: 6, borderTop: '1px dashed #E4E7EC',
+          display: 'flex', alignItems: 'baseline', gap: 6,
+        }}>
+          <span style={{ fontSize: 10, color: 'var(--t3)', fontWeight: 600 }}>{pctLabel}</span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: pctColor || color }}>
+            {pct.toFixed(2)}%
+          </span>
+        </div>
+      )}
       {sub && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>{sub}</div>}
     </div>
   )
