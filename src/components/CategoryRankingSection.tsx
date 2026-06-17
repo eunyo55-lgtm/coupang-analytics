@@ -165,7 +165,7 @@ export default function CategoryRankingSection() {
           <div>
             <div className="ch-title">카테고리 1페이지 우리 상품 노출 추적 {open ? '▼' : '▶'}</div>
             <div className="ch-sub">
-              {catalogs.length}개 카테고리 추적 중 ·
+              {catalogs.length}개 카테고리 · 판매량순 정렬 (PC/모바일 디바이스 차이 제거) ·
               {rankings.length > 0 ? ` 우리 상품 ${rankings.filter(r => r.is_our_product).length}개 노출 중` : ' 데이터 대기'}
             </div>
           </div>
