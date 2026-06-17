@@ -158,7 +158,9 @@ export default function SalesAdOrganicSection({
     })
     const ratio = t.total > 0 ? (t.adRev / t.total) * 100 : 0
     const roas = t.adCost > 0 ? (t.adRev / t.adCost) * 100 : 0
-    return { ...t, ratio, roas }
+    // 광고비 비중 = 광고비 / 총 매출 (작을수록 효율적)
+    const adCostRatio = t.total > 0 ? (t.adCost / t.total) * 100 : 0
+    return { ...t, ratio, roas, adCostRatio }
   }, [merged])
 
   const todayMD = (() => {
@@ -205,11 +207,10 @@ export default function SalesAdOrganicSection({
         )}
       </div>
       <div className="cb">
-        {/* 5 카드 1행 — 통합 로딩 (스켈레톤) */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
+        {/* 6 카드 1행 — 통합 로딩 (스켈레톤) */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 14 }}>
           {allLoading ? (
-            // 스켈레톤 5개
-            Array.from({ length: 5 }).map((_, i) => <KpiSkeleton key={i} />)
+            Array.from({ length: 6 }).map((_, i) => <KpiSkeleton key={i} />)
           ) : (
             <>
               <KpiCard
@@ -235,6 +236,18 @@ export default function SalesAdOrganicSection({
                 value={hasAdData ? fmt(totals.adCost) + '원' : '—'}
                 sub={`광고 의존도 ${totals.ratio.toFixed(1)}%`}
                 color="#DC2626"
+              />
+              <KpiCard
+                label="광고비 비중"
+                value={hasAdData ? totals.adCostRatio.toFixed(2) + '%' : '—'}
+                sub={
+                  !hasAdData ? '' :
+                  totals.adCostRatio < 5  ? '🏆 매우 효율적' :
+                  totals.adCostRatio < 10 ? '👍 효율적' :
+                  totals.adCostRatio < 15 ? '⚖️ 보통' :
+                                            '⚠️ 부담스러움'
+                }
+                color="#7C3AED"
               />
               <KpiCard
                 label="ROAS"
