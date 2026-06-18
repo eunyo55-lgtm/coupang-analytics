@@ -17,7 +17,7 @@ function getSupa() {
   return createClient(url, key, { db: { schema: 'public' } })
 }
 
-const VALID_JOB_TYPES = ['coupang_rank', 'naver_volume'] as const
+const VALID_JOB_TYPES = ['coupang_rank', 'naver_volume', 'coupang_category'] as const
 type JobType = typeof VALID_JOB_TYPES[number]
 
 export async function POST(req: Request) {
