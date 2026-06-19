@@ -589,7 +589,7 @@ export default function DashboardPage() {
     {label:'판매량',sub:`전일 (${latestDate})`,qty:yestQtyEff,rev:yestRevEff,yoy:yestYoyEff,color:'var(--blue)',isStock:false,revMissing:kpiYest===null},
     {label:'주간 판매량',sub:`${weekRange.from.slice(5)} ~ ${weekRange.to.slice(5)} (금~목)`,qty:weekQtyEff,rev:weekRevEff,yoy:kpiWeek&&kpiWeek25?pct(kpiWeek.qty,kpiWeek25.qty):null,color:'var(--purple)',isStock:false,revMissing:kpiWeek===null},
     {label:'누적 판매량',sub:`${cumRange.from.slice(5)} ~ ${latestDate.slice(5)} (26년)`,qty:cumQtyEff,rev:cumRevEff,yoy:kpiCum&&kpiCum25?pct(kpiCum.qty,kpiCum25.qty):null,color:'var(--green)',isStock:false,revMissing:kpiCum===null},
-    {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:displayedStockValue||null,yoy:stockWoWPct,yoyLabel:'전주비',color:'var(--amber)',isStock:true},
+    {label:'전일 재고',sub:`쿠팡 재고 (${latestDate})`,qty:s.total_stock||null,rev:displayedStockValue||null,yoy:stockWoWPct,yoyLabel:'전주대비',color:'var(--amber)',isStock:true},
   ]
 
   // ── 공급 KPI 4개 계산 (입고예정일 기준, 확정수량 + 확정금액) ──
