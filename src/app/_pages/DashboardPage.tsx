@@ -229,8 +229,8 @@ export default function DashboardPage() {
   type TopProduct={product_name:string;image_url:string;total_qty:number;total_revenue:number;qty_24?:number;qty_25?:number;qty_26?:number}
   const [topProducts,setTopProducts]=useState<TopProduct[]>([])
   const [topStock,setTopStock]=useState<{product_name:string;image_url:string;total_stock:number;stock_value:number;prev_week_stock?:number}[]>([])
-  // 전체 재고 WoW 계산용 — 표시용 TOP10과 분리 (TOP10은 입고 큰 신상에 편향)
-  const [stockWoWRaw,setStockWoWRaw]=useState<{total_stock:number;prev_week_stock?:number}[]>([])
+  // 전체 재고 WoW% — get_stock_wow_summary RPC 가 모든 SKU 서버 합산 후 단일 row 반환
+  const [stockWoWPctValue,setStockWoWPctValue]=useState<number|null>(null)
   const [loadingTop,setLoadingTop]=useState(false)
   const [salesModal,setSalesModal]=useState<string|null>(null)
   const [stockModal,setStockModal]=useState<{name:string;history:{week:string;qty:number}[]}|null>(null)
@@ -444,16 +444,17 @@ export default function DashboardPage() {
       ['get_top_products', { date_from: from25, date_to: to25, top_n: 30 }],
       ['get_top_products', { date_from: from24, date_to: to24, top_n: 30 }],
       ['get_top_stock',    { top_n: 10 }],
-      ['get_top_stock',    { top_n: 500 }],   // 전체 재고 WoW 계산용 (TOP10 편향 회피)
+      ['get_stock_wow_summary', {}],   // 전체 SKU 서버 합산 WoW (PostgREST 1000 제한 우회)
     ]
-    const applyAll = (p26: TopProduct[], p25: TopProduct[], p24: TopProduct[], stocks: Stock[], stocksFull: Stock[]) => {
+    type StockWoW = { cur_total: number; prev_total: number; wow_pct: number | null }
+    const applyAll = (p26: TopProduct[], p25: TopProduct[], p24: TopProduct[], stocks: Stock[], wow: StockWoW | null) => {
       const map25=new Map<string,number>(); p25.forEach(r=>map25.set(r.product_name,r.total_qty))
       const map24=new Map<string,number>(); p24.forEach(r=>map24.set(r.product_name,r.total_qty))
       // 매출/재고액 모든 금액에 VAT 별도 적용
       const xp = (r: TopProduct) => ({ ...r, total_revenue: vatExcluded(r.total_revenue) })
       setTopProducts(p26.map(r=>({...xp(r),qty_26:r.total_qty,qty_25:map25.get(r.product_name)||0,qty_24:map24.get(r.product_name)||0})))
       setTopStock(stocks.map(s=>({ ...s, stock_value: vatExcluded(s.stock_value) })))
-      setStockWoWRaw(stocksFull.map(s => ({ total_stock: s.total_stock, prev_week_stock: s.prev_week_stock })))
+      setStockWoWPctValue(wow && typeof wow.wow_pct === 'number' ? Math.round(wow.wow_pct) : null)
     }
 
     // 1) 캐시가 있으면 즉시 표시
@@ -461,9 +462,9 @@ export default function DashboardPage() {
     const c25 = arrFromCache<TopProduct>(readRpcCache(calls[1][0], calls[1][1]))
     const c24 = arrFromCache<TopProduct>(readRpcCache(calls[2][0], calls[2][1]))
     const cStk = arrFromCache<Stock>(readRpcCache(calls[3][0], calls[3][1]))
-    const cStkFull = arrFromCache<Stock>(readRpcCache(calls[4][0], calls[4][1]))
+    const cWow = arrFromCache<StockWoW>(readRpcCache(calls[4][0], calls[4][1]))
     if (c26.length > 0 || cStk.length > 0) {
-      applyAll(c26, c25, c24, cStk, cStkFull)
+      applyAll(c26, c25, c24, cStk, cWow[0] || null)
       setLoadingTop(false)  // 캐시 즉시 표시되었으니 스피너 끔 (백그라운드 새 fetch는 진행)
     }
 
@@ -475,13 +476,13 @@ export default function DashboardPage() {
           writeRpcCache(calls[i][0], calls[i][1], r.value)
         }
       })
-      const [r26,r25,r24,rs,rsFull] = results
+      const [r26,r25,r24,rs,rWow] = results
       const p26 = arrFromSettled<TopProduct>(r26)
       const p25 = arrFromSettled<TopProduct>(r25)
       const p24 = arrFromSettled<TopProduct>(r24)
       const stocks = arrFromSettled<Stock>(rs)
-      const stocksFull = arrFromSettled<Stock>(rsFull)
-      applyAll(p26, p25, p24, stocks, stocksFull)
+      const wowArr = arrFromSettled<StockWoW>(rWow)
+      applyAll(p26, p25, p24, stocks, wowArr[0] || null)
       setLoadingTop(false)
     })
     return () => { cancelled = true }
@@ -513,13 +514,8 @@ export default function DashboardPage() {
 
   const totalSales26=useMemo(()=>topProducts.reduce((s,r)=>s+(r.qty_26||0),0),[topProducts])
   const totalStock=useMemo(()=>topStock.reduce((s,r)=>s+r.total_stock,0),[topStock])
-  // 전체 재고 WoW% — TOP500 기준 (전체의 ~85% 커버. TOP10 한정 시 신상 입고 편향이 큼)
-  const stockWoWPct = useMemo(() => {
-    if (stockWoWRaw.length === 0) return null
-    const cur = stockWoWRaw.reduce((s, r) => s + (r.total_stock || 0), 0)
-    const prev = stockWoWRaw.reduce((s, r) => s + (r.prev_week_stock || 0), 0)
-    return prev > 0 ? Math.round((cur - prev) / prev * 100) : null
-  }, [stockWoWRaw])
+  // 전체 재고 WoW% — get_stock_wow_summary 가 모든 SKU 서버 합산 → 정확값
+  const stockWoWPct = stockWoWPctValue
   const pct=(now:number,prev:number)=>prev?Math.round((now-prev)/prev*100):0
   const s=state.stockSummary
   const stockValueMaster  = vatExcluded((s as {stock_value_master?:number}).stock_value_master  ?? s.stock_value)
@@ -717,7 +713,7 @@ export default function DashboardPage() {
                 <>매출 <span style={{color:'#f59e0b'}}>— 집계중</span></>
               )}
             </div>
-            {c.yoy!==null&&<div className={c.yoy>=0?'diff-up':'diff-dn'} style={{fontSize:10}} title={c.isStock?'TOP10 보유 상품 기준 (근사치)':undefined}>{c.yoyLabel || '전년비'} {c.yoy>=0?'▲':'▼'}{Math.abs(c.yoy)}%</div>}
+            {c.yoy!==null&&<div className={c.yoy>=0?'diff-up':'diff-dn'} style={{fontSize:10}} title={c.isStock?'전체 SKU 합산 기준':undefined}>{c.yoyLabel || '전년비'} {c.yoy>=0?'▲':'▼'}{Math.abs(c.yoy)}%</div>}
           </div>
         ))}
       </div>
