@@ -393,6 +393,38 @@ export default function SupplyPage() {
     return Object.entries(byDate).sort(([a],[b]) => b.localeCompare(a))
   }, [filtered, tableFrom, tableTo])
 
+  // 기회손실 TOP — 상품(이름)별 (발주 > 확정)로 인한 잠재 매출 손실 합산
+  // 손실 = (발주수량 - 확정수량) × 매입가  (입고예정일 기준 tableFrom~tableTo)
+  // sibling barcode 합산: 같은 product name 인 옵션들을 묶음
+  const opportunityLoss = useMemo(() => {
+    const byName: Record<string, {
+      name: string; image_url: string;
+      ord: number; qty: number; rec: number;
+      shortAmt: number;   // (발주-확정) × 매입가 → 공급 부족 손실
+      missedAmt: number;  // (확정-입고) × 매입가 → 입고 누락 손실
+    }> = {}
+    filtered.filter(r => { const d = toD(r.입고예정일); return d >= tableFrom && d <= tableTo }).forEach(r => {
+      const ord = toN(r.발주수량), qty = toN(r.확정수량), rec = toN(r.입고수량), mp = toN(r.매입가)
+      const pName = prodMap[r['SKU Barcode']]?.name || r['SKU 이름']
+      const img   = prodMap[r['SKU Barcode']]?.image_url || ''
+      if (!byName[pName]) byName[pName] = { name: pName, image_url: img, ord:0, qty:0, rec:0, shortAmt:0, missedAmt:0 }
+      byName[pName].ord += ord
+      byName[pName].qty += qty
+      byName[pName].rec += rec
+      const shortQ  = Math.max(0, ord - qty)
+      const missedQ = Math.max(0, qty - rec)
+      byName[pName].shortAmt  += shortQ * mp
+      byName[pName].missedAmt += missedQ * mp
+    })
+    return Object.values(byName)
+      .map(r => ({ ...r, totalLoss: r.shortAmt + r.missedAmt }))
+      .filter(r => r.totalLoss > 0)
+      .sort((a,b) => b.totalLoss - a.totalLoss)
+      .slice(0, 10)
+  }, [filtered, tableFrom, tableTo, prodMap])
+
+  const opportunityLossTotal = useMemo(() => opportunityLoss.reduce((s,r) => s + r.totalLoss, 0), [opportunityLoss])
+
   // 이동중 파이프라인 — filteredAll 기준 (검색 반영), products.name SUM
   const movingByDate = useMemo(() => {
     const mv = filteredAll.filter(r => toD(r.입고예정일) >= today && toN(r.입고수량) === 0)
@@ -463,6 +495,68 @@ export default function SupplyPage() {
           </div>
         ))}
       </div>
+
+      {/* 🚨 기회손실 TOP 상품 — 발주<확정 또는 확정<입고 로 인한 잠재 매출 손실 */}
+      {opportunityLoss.length > 0 && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="ch">
+            <div className="ch-l">
+              <div className="ch-ico">🚨</div>
+              <div>
+                <div className="ch-title">기회손실 TOP 상품</div>
+                <div className="ch-sub">
+                  {tableFrom.slice(5)} ~ {tableTo.slice(5)} · 공급 부족(발주−확정) + 입고 누락(확정−입고) × 매입가 · VAT 별도
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#ef4444' }}>
+              합계 {fmt(opportunityLossTotal)}원
+            </div>
+          </div>
+          <div className="cb" style={{ padding:0 }}>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', minWidth:680, borderCollapse:'collapse', fontSize:12 }}>
+                <thead>
+                  <tr style={{ background:'var(--bg)', borderBottom:'1px solid var(--border)' }}>
+                    <th style={{ padding:'8px 6px', textAlign:'left', width:32, color:'var(--t3)', fontWeight:600 }}>#</th>
+                    <th style={{ padding:'8px 6px', textAlign:'left', width:40 }}></th>
+                    <th style={{ padding:'8px 6px', textAlign:'left', color:'var(--t2)', fontWeight:600 }}>상품명</th>
+                    <th style={{ padding:'8px 6px', textAlign:'right', color:'var(--t2)', fontWeight:600 }}>발주</th>
+                    <th style={{ padding:'8px 6px', textAlign:'right', color:'var(--t2)', fontWeight:600 }}>확정</th>
+                    <th style={{ padding:'8px 6px', textAlign:'right', color:'var(--t2)', fontWeight:600 }}>입고</th>
+                    <th style={{ padding:'8px 6px', textAlign:'right', color:'#f59e0b', fontWeight:700 }}>공급부족액</th>
+                    <th style={{ padding:'8px 6px', textAlign:'right', color:'#a855f7', fontWeight:700 }}>입고누락액</th>
+                    <th style={{ padding:'8px 6px', textAlign:'right', color:'#ef4444', fontWeight:700 }}>총 손실</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {opportunityLoss.map((r, i) => (
+                    <tr key={r.name} style={{ borderBottom:'1px solid var(--border)' }}>
+                      <td style={{ padding:'6px', color:'var(--t3)' }}>{i+1}</td>
+                      <td style={{ padding:'6px' }}>
+                        {r.image_url
+                          ? <img src={r.image_url} alt="" style={{ width:32, height:32, borderRadius:4, objectFit:'cover' }} onError={e=>{(e.target as HTMLImageElement).style.display='none'}}/>
+                          : <div style={{ width:32, height:32, borderRadius:4, background:'var(--bg)', border:'1px solid var(--border)' }}/>}
+                      </td>
+                      <td style={{ padding:'6px', fontWeight:600, maxWidth:240, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.name}>{r.name}</td>
+                      <td style={{ padding:'6px', textAlign:'right', color:'var(--t2)' }}>{fmt(r.ord)}</td>
+                      <td style={{ padding:'6px', textAlign:'right', color:'var(--t2)' }}>{fmt(r.qty)}</td>
+                      <td style={{ padding:'6px', textAlign:'right', color:'var(--t2)' }}>{fmt(r.rec)}</td>
+                      <td style={{ padding:'6px', textAlign:'right', fontWeight:700, color: r.shortAmt > 0 ? '#f59e0b' : 'var(--t3)' }}>
+                        {r.shortAmt > 0 ? fmt(r.shortAmt) : '—'}
+                      </td>
+                      <td style={{ padding:'6px', textAlign:'right', fontWeight:700, color: r.missedAmt > 0 ? '#a855f7' : 'var(--t3)' }}>
+                        {r.missedAmt > 0 ? fmt(r.missedAmt) : '—'}
+                      </td>
+                      <td style={{ padding:'6px', textAlign:'right', fontWeight:800, color:'#ef4444' }}>{fmt(r.totalLoss)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 발주·공급·입고 비교 꺾은선 차트 */}
       <div className="card" style={{ marginBottom: 12 }}>
