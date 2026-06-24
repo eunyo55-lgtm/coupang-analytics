@@ -28,6 +28,13 @@ type Keyword = {
   products: ProductLite | null
   strategy_tag?: string | null
   memo?: string | null
+  catalog_id?: number | null
+}
+
+type CategoryCatalog = {
+  id: number
+  category_path: string
+  active: boolean
 }
 
 type Ranking = {
@@ -99,6 +106,8 @@ export default function RankingPage() {
 
   /* state */
   const [keywords, setKeywords] = useState<Keyword[]>([])
+  const [catalogs, setCatalogs] = useState<CategoryCatalog[]>([])
+  const [bulkCatalogModal, setBulkCatalogModal] = useState(false)
   const [rankings, setRankings] = useState<Ranking[]>([])
   const [searchVolumes, setSearchVolumes] = useState<SearchVolume[]>([])
   const [dailySales, setDailySales] = useState<DailySale[]>([])
@@ -130,6 +139,14 @@ export default function RankingPage() {
     }
     setLoading(true)
     try {
+      /* 0. 카테고리 카탈로그 로드 (키워드 ↔ 카테고리 매핑용) */
+      const { data: catData } = await supabase
+        .from('coupang_category_catalog')
+        .select('id, category_path, active')
+        .eq('active', true)
+        .order('category_path')
+      setCatalogs((catData || []) as CategoryCatalog[])
+
       /* 1. keywords 단독 조회 (products join 없이) */
       const { data: kwData, error: kwErr } = await supabase
         .from('keywords')
@@ -562,6 +579,14 @@ export default function RankingPage() {
               }}
             >
               최근 7일
+            </button>
+            <button
+              className="btn-s"
+              style={{ padding: '6px 10px', fontSize: 11, marginLeft: 4, background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 700 }}
+              onClick={() => setBulkCatalogModal(true)}
+              title="키워드별 카테고리 매핑 — 카테고리 봇 데이터로 랭킹 자동 추정"
+            >
+              📋 카테고리 매핑
             </button>
           </div>
         </div>
@@ -1119,6 +1144,174 @@ export default function RankingPage() {
           </div>
         </div>
       )}
+
+      {/* 일괄 카테고리 매핑 모달 */}
+      {bulkCatalogModal && (
+        <BulkCatalogMappingModal
+          keywords={keywords}
+          catalogs={catalogs}
+          supabase={supabase}
+          onClose={() => setBulkCatalogModal(false)}
+          onSaved={() => { setBulkCatalogModal(false); loadAll() }}
+        />
+      )}
+    </div>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────
+   일괄 카테고리 매핑 모달
+   ──────────────────────────────────────────────────────────── */
+function BulkCatalogMappingModal({
+  keywords, catalogs, supabase, onClose, onSaved,
+}: {
+  keywords: Keyword[]
+  catalogs: CategoryCatalog[]
+  supabase: any
+  onClose: () => void
+  onSaved: () => void
+}) {
+  // 키워드별 선택된 catalog_id 추적 — 내부 state 는 string (HTML select.value 호환)
+  // DB 저장 시 Number() 변환
+  const [mappings, setMappings] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {}
+    keywords.forEach(k => { if (k.catalog_id != null) init[k.id] = String(k.catalog_id) })
+    return init
+  })
+  const [search, setSearch] = useState('')
+  const [filterUnmapped, setFilterUnmapped] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  // 자동 추천 — 키워드 텍스트에 가장 어울리는 카탈로그 leaf 찾기
+  function suggestCatalogId(keyword: string): string | null {
+    const kwLower = keyword.toLowerCase()
+    let best: { id: number; score: number } | null = null
+    for (const c of catalogs) {
+      const leaf = c.category_path.split(' > ').slice(-1)[0].toLowerCase().replace(/[\/\?\s]/g, '')
+      const kwClean = kwLower.replace(/[\/\?\s]/g, '')
+      if (kwClean === leaf) return String(c.id)
+      let score = 0
+      if (kwClean.includes(leaf)) score = leaf.length
+      else if (leaf.includes(kwClean)) score = kwClean.length * 0.7
+      if (score > 0 && (!best || score > best.score)) best = { id: c.id, score }
+    }
+    return best ? String(best.id) : null
+  }
+
+  function autoSuggestAll() {
+    const newMap = { ...mappings }
+    let n = 0
+    for (const k of keywords) {
+      if (newMap[k.id]) continue  // 이미 매핑된 건 skip
+      const sug = suggestCatalogId(k.keyword)
+      if (sug) { newMap[k.id] = sug; n++ }
+    }
+    setMappings(newMap)
+    alert(`자동 추천 — ${n}개 키워드 매핑 완료. 결과 검토 후 저장 눌러주세요.`)
+  }
+
+  async function saveAll() {
+    setSaving(true)
+    // 변경된 것만 추출 — string ↔ number 정규화 후 비교
+    const updates = keywords
+      .filter(k => {
+        const current = mappings[k.id] ? Number(mappings[k.id]) : null
+        return current !== (k.catalog_id ?? null)
+      })
+      .map(k => ({
+        id: k.id,
+        catalog_id: mappings[k.id] ? Number(mappings[k.id]) : null,
+      }))
+    if (updates.length === 0) { alert('변경 사항 없음'); setSaving(false); return }
+    let ok = 0, fail = 0
+    for (const u of updates) {
+      const { error } = await supabase.from('keywords').update({ catalog_id: u.catalog_id }).eq('id', u.id)
+      if (error) { fail++; console.error('[bulk-mapping]', u.id, error.message) }
+      else ok++
+    }
+    setSaving(false)
+    alert(`저장 완료 — 성공 ${ok}, 실패 ${fail}`)
+    onSaved()
+  }
+
+  const filtered = keywords.filter(k => {
+    if (search && !k.keyword.toLowerCase().includes(search.toLowerCase())) return false
+    if (filterUnmapped && mappings[k.id]) return false
+    return true
+  })
+  const mappedCount = keywords.filter(k => mappings[k.id]).length
+
+  return (
+    <div onClick={onClose}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background:'#fff', borderRadius:10, padding:20, width:'95%', maxWidth:920, maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+          <div>
+            <div style={{ fontSize:16, fontWeight:700 }}>📋 키워드 카테고리 매핑</div>
+            <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>
+              카테고리 봇이 매일 추적하는 데이터에서 우리 상품 위치를 키워드 랭킹으로 활용 — {mappedCount}/{keywords.length} 매핑됨
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'#64748b' }}>×</button>
+        </div>
+
+        <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center' }}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 키워드 검색"
+            style={{ flex:1, padding:'6px 10px', fontSize:12, border:'1px solid #E4E7EC', borderRadius:6 }}/>
+          <label style={{ fontSize:11, display:'flex', alignItems:'center', gap:4, color:'#475569' }}>
+            <input type="checkbox" checked={filterUnmapped} onChange={e=>setFilterUnmapped(e.target.checked)}/>
+            매핑 안 된 것만
+          </label>
+          <button onClick={autoSuggestAll}
+            style={{ padding:'6px 12px', fontSize:11, background:'#10b981', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontWeight:700 }}>
+            🪄 자동 추천 (빈 칸만)
+          </button>
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', border:'1px solid #E4E7EC', borderRadius:6 }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+            <thead style={{ position:'sticky', top:0, background:'#F9FAFB', zIndex:1 }}>
+              <tr>
+                <th style={{ padding:'8px 10px', textAlign:'left', borderBottom:'1px solid #E4E7EC', width:140 }}>키워드</th>
+                <th style={{ padding:'8px 10px', textAlign:'left', borderBottom:'1px solid #E4E7EC', width:120 }}>category 컬럼</th>
+                <th style={{ padding:'8px 10px', textAlign:'left', borderBottom:'1px solid #E4E7EC' }}>매핑 카테고리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(k => (
+                <tr key={k.id} style={{ borderBottom:'1px solid #F1F5F9' }}>
+                  <td style={{ padding:'6px 10px', fontWeight:600 }}>{k.keyword}</td>
+                  <td style={{ padding:'6px 10px', color:'#64748b', fontSize:11 }}>{k.category || '-'}</td>
+                  <td style={{ padding:'6px 10px' }}>
+                    <select
+                      value={mappings[k.id] || ''}
+                      onChange={e => setMappings({ ...mappings, [k.id]: e.target.value })}
+                      style={{ width:'100%', padding:'4px 6px', fontSize:11, border:'1px solid #E4E7EC', borderRadius:4 }}
+                    >
+                      <option value="">— 매핑 없음 —</option>
+                      {catalogs.map(c => (
+                        <option key={c.id} value={String(c.id)}>{c.category_path}</option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:14 }}>
+          <button onClick={onClose} disabled={saving}
+            style={{ padding:'8px 16px', borderRadius:6, background:'#fff', color:'#475569', border:'1px solid #E4E7EC', fontWeight:600, fontSize:13, cursor:'pointer' }}>
+            취소
+          </button>
+          <button onClick={saveAll} disabled={saving}
+            style={{ padding:'8px 18px', borderRadius:6, background:'#1570EF', color:'#fff', border:'none', fontWeight:700, fontSize:13, cursor:'pointer' }}>
+            {saving ? '저장 중...' : '저장'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
