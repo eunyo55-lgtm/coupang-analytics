@@ -12,6 +12,7 @@ import AdBreakdownTables from '@/components/AdBreakdownTables'
 import AdKpiSparkCards from '@/components/AdKpiSparkCards'
 import AdBudgetPacing from '@/components/AdBudgetPacing'
 import AdSnapshotCards from '@/components/AdSnapshotCards'
+import AdDailyCostList from '@/components/AdDailyCostList'
 
 /**
  * 광고 현황 페이지 — 쿠팡 광고 콘솔 CSV 업로드 기반.
@@ -144,6 +145,9 @@ export default function AdPage() {
 
       {/* 일별 추이 + 주간 집계 */}
       <AdPerformanceCharts dateFrom={dateFromY} dateTo={dateToY} />
+
+      {/* 일별 광고비 리스트 (자체 날짜 필터) */}
+      <AdDailyCostList csvDailyAll={csvDailyAll} />
 
       {/* 차원별 성과 (자체 날짜 필터) */}
       <AdBreakdownTables defaultDateFrom={dateFromY} defaultDateTo={dateToY} />
