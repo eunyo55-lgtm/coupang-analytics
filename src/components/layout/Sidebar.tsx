@@ -5,6 +5,7 @@ import { formatKorean } from '@/lib/dateUtils'
 
 // 섹션 없이 flat 하게 순서대로 표시
 const NAV_ITEMS: Array<{ path: string; key: string; icon: string; label: string; badge?: string }> = [
+  { path: '/',           key: 'dashboard',  icon: '🏠', label: '대시보드' },
   { path: '/sales',      key: 'sales',      icon: '📊', label: '판매 현황' },
   { path: '/inventory',  key: 'inventory',  icon: '📦', label: '재고 현황' },
   { path: '/supply',     key: 'supply',     icon: '🚚', label: '공급 현황' },
@@ -32,7 +33,7 @@ export default function Sidebar({ currentTab }: { currentTab?: string }) {
     <aside className="sb">
       <div className="sb-top">
         <div className="sb-logo">
-          <div className="sb-mark" onClick={() => navigateTo('/sales')} style={{ cursor: 'pointer' }}>🚀</div>
+          <div className="sb-mark" onClick={() => navigateTo('/')} style={{ cursor: 'pointer' }}>🚀</div>
           <div>
             <div className="sb-name">Coupang<br />Analytics</div>
           </div>
